@@ -1,0 +1,6 @@
+{
+  "name": "JD to Resume Customizer",
+  "description": "Tailor resumes to job descriptions, simplify complex job postings, apply ATS improvement suggestions, and download customized resume versions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

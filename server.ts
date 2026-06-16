@@ -4,8 +4,12 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import mammoth from "mammoth";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const pdf = require("pdf-parse");
 
 dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });
 
 const app = express();
 const PORT = 3000;
@@ -35,24 +39,41 @@ function getAI(): GoogleGenAI {
 // 1. Simplify Job Description API
 app.post("/api/simplify-jd", async (req, res) => {
   try {
-    const { jdText } = req.body;
-    if (!jdText || typeof jdText !== 'string' || jdText.trim().length === 0) {
-      res.status(400).json({ error: "Job description text is required" });
+    const { jdText, jdImageBase64, jdImagesBase64 } = req.body;
+    const hasImages = (jdImagesBase64 && jdImagesBase64.length > 0) || jdImageBase64;
+    if (!jdText && !hasImages) {
+      res.status(400).json({ error: "Either job description text or screenshot images are required" });
       return;
     }
 
     const ai = getAI();
-    const prompt = `You are an expert recruiter and career mentor specializing in fresh graduates and entry-level professionals.
-Analyze the following Job Description (JD) and simplify it to help candidates understand companies actual search requirements.
-Strip away corporate jargon and explain clearly what they are looking for in plain language, key high-priority skills, core responsibilities, and target automated keyword search words.
+    let contents: any[] = [];
 
-Job Description:
-"""
-${jdText}
-"""
+    if (hasImages) {
+      const imagesList = jdImagesBase64 && Array.isArray(jdImagesBase64) 
+        ? jdImagesBase64 
+        : [jdImageBase64];
+
+      for (const imgBase64 of imagesList) {
+        if (!imgBase64) continue;
+        const mimeType = imgBase64.match(/data:(.*?);base64/)?.[1] || "image/png";
+        const base64Data = imgBase64.replace(/^data:.*?;base64,/, "");
+        contents.push({
+          inlineData: {
+            mimeType,
+            data: base64Data
+          }
+        });
+      }
+
+      contents.push({
+        text: `You are an expert recruiter and career mentor specializing in fresh graduates and entry-level professionals.
+Analyze the attached Job Description (JD) screenshot(s) and simplify it to help candidates understand companies actual search requirements.
+Strip away corporate jargon and explain clearly what they are looking for in plain language, key high-priority skills, core responsibilities, and target automated keyword search words.
 
 Format your response strictly as JSON with this schema:
 {
+  "jobTitle": "A concise and professional job title/role extracted from the JD.",
   "companyPitch": "A ultra-clear, jargon-free summary (2-3 sentences) of what the company actually does and the real, practical problem the candidate is hired to solve.",
   "requiredSkills": [
     { "name": "Skill/Technology", "priority": "high" or "medium" }
@@ -67,16 +88,51 @@ Format your response strictly as JSON with this schema:
     "Recommended exact keywords to include in their resume to pass filters (5-8 items)"
   ]
 }
-`;
+`
+      });
+    } else {
+      contents = [
+        {
+          text: `You are an expert recruiter and career mentor specializing in fresh graduates and entry-level professionals.
+Analyze the following Job Description (JD) and simplify it to help candidates understand companies actual search requirements.
+Strip away corporate jargon and explain clearly what they are looking for in plain language, key high-priority skills, core responsibilities, and target automated keyword search words.
+
+Job Description:
+"""
+${jdText}
+"""
+
+Format your response strictly as JSON with this schema:
+{
+  "jobTitle": "A concise and professional job title/role extracted from the JD.",
+  "companyPitch": "A ultra-clear, jargon-free summary (2-3 sentences) of what the company actually does and the real, practical problem the candidate is hired to solve.",
+  "requiredSkills": [
+    { "name": "Skill/Technology", "priority": "high" or "medium" }
+  ],
+  "keyResponsibilities": [
+    "Action-focused plain language explanation of a key responsibility"
+  ],
+  "candidateExpectations": [
+    "Expectations regarding attitude, problem solving, code-hygiene or basic projects rather than decades of experience"
+  ],
+  "keywordsToTarget": [
+    "Recommended exact keywords to include in their resume to pass filters (5-8 items)"
+  ]
+}
+`
+        }
+      ];
+    }
 
     const response = await ai.models.generateContent({
       model: "gemini-3.5-flash",
-      contents: prompt,
+      contents: contents,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
+            jobTitle: { type: Type.STRING },
             companyPitch: { type: Type.STRING },
             requiredSkills: {
               type: Type.ARRAY,
@@ -102,7 +158,7 @@ Format your response strictly as JSON with this schema:
               items: { type: Type.STRING }
             }
           },
-          required: ["companyPitch", "requiredSkills", "keyResponsibilities", "candidateExpectations", "keywordsToTarget"]
+          required: ["jobTitle", "companyPitch", "requiredSkills", "keyResponsibilities", "candidateExpectations", "keywordsToTarget"]
         }
       }
     });
@@ -141,19 +197,22 @@ ${jdText}
 
 Instructions:
 1. Examine each bullet point in Resume.workExperience. Rewrite them to emphasize accomplishments using the STAR method, injecting high-priority skills and keywords from the Job Description. Keep the exact same company name, job duration, title, etc. Do not invent new jobs.
-2. Update the Professional Summary (Resume.summary) so it directly presents the candidate as a highly relevant fit for this specific job context.
-3. Keep the education section factual but clarify or format it perfectly.
-4. Suggest adding missing candidate skills to Resume.skills that directly map to the JD's requirements, provided they make sense for a graduate.
-5. Provide a list of "suggestions" with clear reasons why they were made and how they improve the resume.
+2. Examine each project in Resume.projects (if any). Rewrite project descriptions/bullets to emphasize achievements and target keywords. Keep the exact same project name. Do not invent new projects.
+3. Update the Professional Summary (Resume.summary) so it directly presents the candidate as a highly relevant fit for this specific job context.
+4. Keep the education section factual but clarify or format it perfectly.
+5. Keep the certifications section (if any) factual and intact. Do not remove or alter actual certifications.
+6. Suggest adding missing candidate skills to Resume.skills that directly map to the JD's requirements, provided they make sense for a graduate.
+7. Provide a list of "suggestions" with clear reasons why they were made and how they improve the resume.
+8. IMPORTANT: You MUST process and include ALL work experiences, projects, education history, certifications, and skills from the original resume in the output tailoredResume. Do not truncate, omit, or ignore any jobs, projects, certifications, or education entries from any page. If there are 3 work experiences, you must return all 3. If there are projects, return them all. If certifications are present, return them all. If the original resume has no projects or certifications, return an empty array [] for these fields.
 
 Format your response strictly as JSON matching this schema:
 {
   "suggestions": [
     {
       "id": "A unique slug or ID (e.g., s-1, s-2)",
-      "type": "rewrite" or "missing" or "ats" or "general",
-      "section": "summary" or "experience" or "skills" or "education",
-      "targetId": "Identify target id if it's experience, e.g., the exact experience ID",
+      "type": "rewrite" | "missing" | "ats" | "general",
+      "section": "summary" | "experience" | "skills" | "education" | "projects" | "general",
+      "targetId": "Identify target id if it's experience or project (e.g. the exact experience ID or project ID)",
       "originalText": "The original bullet point or line being replaced",
       "suggestedText": "The replacement bullet point, rewritten section, or skills suggestions",
       "reason": "Recruiter-minded justification explaining why this change gets results",
@@ -184,6 +243,14 @@ Format your response strictly as JSON matching this schema:
         "duration": "Duration"
       }
     ],
+    "projects": [
+      {
+        "id": "match existing project ID",
+        "name": "Project name",
+        "description": ["Action-oriented bullet points rewritten for this project"]
+      }
+    ],
+    "certifications": ["List of certification names"],
     "skills": ["Updated list of skills containing original skills + high-impact JD matches"]
   }
 }
@@ -204,7 +271,7 @@ Format your response strictly as JSON matching this schema:
                 properties: {
                   id: { type: Type.STRING },
                   type: { type: Type.STRING, enum: ["rewrite", "missing", "ats", "general"] },
-                  section: { type: Type.STRING, enum: ["summary", "experience", "skills", "education", "general"] },
+                  section: { type: Type.STRING, enum: ["summary", "experience", "skills", "education", "projects", "general"] },
                   targetId: { type: Type.STRING },
                   originalText: { type: Type.STRING },
                   suggestedText: { type: Type.STRING },
@@ -253,12 +320,31 @@ Format your response strictly as JSON matching this schema:
                     required: ["id", "degree", "school", "duration"]
                   }
                 },
+                projects: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      id: { type: Type.STRING },
+                      name: { type: Type.STRING },
+                      description: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING }
+                      }
+                    },
+                    required: ["id", "name", "description"]
+                  }
+                },
+                certifications: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+                },
                 skills: {
                   type: Type.ARRAY,
                   items: { type: Type.STRING }
                 }
               },
-              required: ["fullName", "email", "phone", "summary", "workExperience", "education", "skills"]
+              required: ["fullName", "email", "phone", "summary", "workExperience", "education", "skills", "projects", "certifications"]
             }
           },
           required: ["suggestions", "tailoredResume"]
@@ -382,22 +468,31 @@ app.post("/api/analyze-uploaded-resume", async (req, res) => {
     let parsedResponseText = "";
 
     if (isPdf) {
-      const pdfPart = {
-        inlineData: {
-          mimeType: "application/pdf",
-          data: base64Data
-        }
-      };
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: [
-          pdfPart,
-          {
-            text: `You are an expert recruiter and applicant tracking system (ATS) scanner.
-Analyze the attached resume and deliver an evaluation strictly in JSON.
-First, verify if this document is actually a professional resume. (A cover letter, template with placeholder names, food recipe, empty text, or random non-resume file counts as isResume: false).
+      let pdfText = "";
+      try {
+        const buffer = Buffer.from(base64Data, "base64");
+        const pdfData = await pdf(buffer);
+        pdfText = pdfData.text || "";
+      } catch (err: any) {
+        console.error("PDF text extraction failed, falling back to multimodal upload:", err);
+      }
+
+      if (pdfText.trim().length > 0) {
+        // High-speed text-based scanning path (takes less than 2 seconds)
+        const response = await ai.models.generateContent({
+          model: "gemini-3.5-flash",
+          contents: `You are an expert recruiter and applicant tracking system (ATS) scanner.
+Analyze the following resume text extracted from a PDF document and deliver an evaluation strictly in JSON.
+IMPORTANT: This is a multi-page resume document. You MUST process the entire text from all pages. Do not truncate, omit, or ignore any work experiences, projects, education entries, or skills from any page. If the resume has 2 pages, extract 2 pages of info. If it has 3 pages, extract 3 pages of info. Every single work experience and education history entry must be extracted and returned in the detectedProfile.
+
+First, verify if this text is actually from a professional resume. (A cover letter, template with placeholder names, food recipe, empty text, or random non-resume text counts as isResume: false).
 Identify if any critical standard resume sections or standard contact info are missing.
-Extract key candidate profile information if available. Ensure detectedProfile includes any found experiences and skills.
+Extract key candidate profile information if available. Ensure detectedProfile includes all found experiences, skills, education, and languages.
+
+Resume Text:
+"""
+${pdfText}
+"""
 
 Return a JSON payload with exactly this schema:
 {
@@ -410,39 +505,235 @@ Return a JSON payload with exactly this schema:
     "email": string,
     "phone": string,
     "summary": string,
-    "skills": string[]
+    "skills": string[],
+    "languages": string[], // array of languages (e.g. ["English", "Hindi"])
+    "workExperience": [
+      {
+        "role": string,
+        "company": string,
+        "duration": string,
+        "description": string[] // list of bullet points
+      }
+    ],
+    "education": [
+      {
+        "degree": string,
+        "school": string,
+        "duration": string,
+        "gpa": string // e.g. "3.8/4.0" or "9.0 CGPA" or leave blank if not specified
+      }
+    ],
+    "projects": [
+      {
+        "name": string,
+        "description": string[] // list of project details or bullet points
+      }
+    ],
+    "certifications": string[] // list of certification names
+  },
+  "explanation": string
+}`,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                isResume: { type: Type.BOOLEAN },
+                confidenceScore: { type: Type.INTEGER },
+                missingItems: { type: Type.ARRAY, items: { type: Type.STRING } },
+                actionableImprovements: { type: Type.ARRAY, items: { type: Type.STRING } },
+                detectedProfile: {
+                  type: Type.OBJECT,
+                  properties: {
+                    fullName: { type: Type.STRING },
+                    email: { type: Type.STRING },
+                    phone: { type: Type.STRING },
+                    summary: { type: Type.STRING },
+                    skills: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    languages: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    workExperience: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          role: { type: Type.STRING },
+                          company: { type: Type.STRING },
+                          duration: { type: Type.STRING },
+                          description: { type: Type.ARRAY, items: { type: Type.STRING } }
+                        },
+                        required: ["role", "company", "duration", "description"]
+                      }
+                    },
+                    education: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          degree: { type: Type.STRING },
+                          school: { type: Type.STRING },
+                          duration: { type: Type.STRING },
+                          gpa: { type: Type.STRING }
+                        },
+                        required: ["degree", "school", "duration"]
+                      }
+                    },
+                    projects: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          name: { type: Type.STRING },
+                          description: { type: Type.ARRAY, items: { type: Type.STRING } }
+                        },
+                        required: ["name", "description"]
+                      }
+                    },
+                    certifications: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING }
+                    }
+                  },
+                  required: ["fullName", "email", "phone", "summary", "skills", "languages", "workExperience", "education", "projects", "certifications"]
+                },
+                explanation: { type: Type.STRING }
+              },
+              required: ["isResume", "confidenceScore", "missingItems", "actionableImprovements", "detectedProfile", "explanation"]
+            }
+          }
+        });
+        parsedResponseText = response.text || "";
+      } else {
+        // Fallback: Multimodal parsing path if PDF is image-only/scanned
+        const pdfPart = {
+          inlineData: {
+            mimeType: "application/pdf",
+            data: base64Data
+          }
+        };
+        const response = await ai.models.generateContent({
+          model: "gemini-3.5-flash",
+          contents: [
+            pdfPart,
+            {
+              text: `You are an expert recruiter and applicant tracking system (ATS) scanner.
+Analyze the attached resume and deliver an evaluation strictly in JSON.
+IMPORTANT: This is a multi-page resume document. You MUST process the entire document from all pages. Do not truncate, omit, or ignore any work experiences, projects, education entries, or skills from any page. If the resume has 2 pages, extract 2 pages of info. If it has 3 pages, extract 3 pages of info. Every single work experience and education history entry must be extracted and returned in the detectedProfile.
+
+First, verify if this document is actually a professional resume. (A cover letter, template with placeholder names, food recipe, empty text, or random non-resume file counts as isResume: false).
+Identify if any critical standard resume sections or standard contact info are missing.
+Extract key candidate profile information if available. Ensure detectedProfile includes all found experiences, skills, education, and languages.
+
+Return a JSON payload with exactly this schema:
+{
+  "isResume": boolean,
+  "confidenceScore": number, // 0 to 100 on how complete and professional the resume is
+  "missingItems": string[], // e.g. ["Professional Summary", "LinkedIn profile link", "Dates for work experiences", "Education details"]
+  "actionableImprovements": string[], // List of 3-5 specific bullet points for the candidate to improve their resume
+  "detectedProfile": {
+    "fullName": string,
+    "email": string,
+    "phone": string,
+    "summary": string,
+    "skills": string[],
+    "languages": string[], // array of languages (e.g. ["English", "Hindi"])
+    "workExperience": [
+      {
+        "role": string,
+        "company": string,
+        "duration": string,
+        "description": string[] // list of bullet points
+      }
+    ],
+    "education": [
+      {
+        "degree": string,
+        "school": string,
+        "duration": string,
+        "gpa": string // e.g. "3.8/4.0" or "9.0 CGPA" or leave blank if not specified
+      }
+    ],
+    "projects": [
+      {
+        "name": string,
+        "description": string[] // list of project details or bullet points
+      }
+    ],
+    "certifications": string[] // list of certification names
   },
   "explanation": string
 }`
-          }
-        ],
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              isResume: { type: Type.BOOLEAN },
-              confidenceScore: { type: Type.INTEGER },
-              missingItems: { type: Type.ARRAY, items: { type: Type.STRING } },
-              actionableImprovements: { type: Type.ARRAY, items: { type: Type.STRING } },
-              detectedProfile: {
-                type: Type.OBJECT,
-                properties: {
-                  fullName: { type: Type.STRING },
-                  email: { type: Type.STRING },
-                  phone: { type: Type.STRING },
-                  summary: { type: Type.STRING },
-                  skills: { type: Type.ARRAY, items: { type: Type.STRING } }
+            }
+          ],
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                isResume: { type: Type.BOOLEAN },
+                confidenceScore: { type: Type.INTEGER },
+                missingItems: { type: Type.ARRAY, items: { type: Type.STRING } },
+                actionableImprovements: { type: Type.ARRAY, items: { type: Type.STRING } },
+                detectedProfile: {
+                  type: Type.OBJECT,
+                  properties: {
+                    fullName: { type: Type.STRING },
+                    email: { type: Type.STRING },
+                    phone: { type: Type.STRING },
+                    summary: { type: Type.STRING },
+                    skills: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    languages: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    workExperience: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          role: { type: Type.STRING },
+                          company: { type: Type.STRING },
+                          duration: { type: Type.STRING },
+                          description: { type: Type.ARRAY, items: { type: Type.STRING } }
+                        },
+                        required: ["role", "company", "duration", "description"]
+                      }
+                    },
+                    education: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          degree: { type: Type.STRING },
+                          school: { type: Type.STRING },
+                          duration: { type: Type.STRING },
+                          gpa: { type: Type.STRING }
+                        },
+                        required: ["degree", "school", "duration"]
+                      }
+                    },
+                    projects: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          name: { type: Type.STRING },
+                          description: { type: Type.ARRAY, items: { type: Type.STRING } }
+                        },
+                        required: ["name", "description"]
+                      }
+                    },
+                    certifications: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING }
+                    }
+                  },
+                  required: ["fullName", "email", "phone", "summary", "skills", "languages", "workExperience", "education", "projects", "certifications"]
                 },
-                required: ["fullName", "email", "phone", "summary", "skills"]
+                explanation: { type: Type.STRING }
               },
-              explanation: { type: Type.STRING }
-            },
-            required: ["isResume", "confidenceScore", "missingItems", "actionableImprovements", "detectedProfile", "explanation"]
+              required: ["isResume", "confidenceScore", "missingItems", "actionableImprovements", "detectedProfile", "explanation"]
+            }
           }
-        }
-      });
-      parsedResponseText = response.text || "";
+        });
+        parsedResponseText = response.text || "";
+      }
     } else {
       // It's a DOCX/Word document or other file
       // Extract text using mammoth
@@ -460,9 +751,11 @@ Return a JSON payload with exactly this schema:
         model: "gemini-3.5-flash",
         contents: `You are an expert recruiter and applicant tracking system (ATS) scanner.
 Analyze the following resume text extracted from a Word document and deliver an evaluation strictly in JSON.
+IMPORTANT: This is a multi-page resume document. You MUST process the entire text from all pages. Do not truncate, omit, or ignore any work experiences, projects, education entries, or skills from any page. If the resume has 2 pages, extract 2 pages of info. If it has 3 pages, extract 3 pages of info. Every single work experience and education history entry must be extracted and returned in the detectedProfile.
+
 First, verify if this text is actually from a professional resume. (A cover letter, template with placeholder names, food recipe, empty text, or random non-resume text counts as isResume: false).
 Identify if any critical standard resume sections or standard contact info are missing.
-Extract key candidate profile information if available.
+Extract key candidate profile information if available. Ensure detectedProfile includes all found experiences, skills, education, and languages.
 
 Resume Text:
 """
@@ -480,7 +773,31 @@ Return a JSON payload with exactly this schema:
     "email": string,
     "phone": string,
     "summary": string,
-    "skills": string[]
+    "skills": string[],
+    "languages": string[], // array of languages (e.g. ["English", "Hindi"])
+    "workExperience": [
+      {
+        "role": string,
+        "company": string,
+        "duration": string,
+        "description": string[] // list of bullet points
+      }
+    ],
+    "education": [
+      {
+        "degree": string,
+        "school": string,
+        "duration": string,
+        "gpa": string // e.g. "3.8/4.0" or "9.0 CGPA" or leave blank if not specified
+      }
+    ],
+    "projects": [
+      {
+        "name": string,
+        "description": string[] // list of project details or bullet points
+      }
+    ],
+    "certifications": string[] // list of certification names
   },
   "explanation": string
 }`,
@@ -500,9 +817,51 @@ Return a JSON payload with exactly this schema:
                   email: { type: Type.STRING },
                   phone: { type: Type.STRING },
                   summary: { type: Type.STRING },
-                  skills: { type: Type.ARRAY, items: { type: Type.STRING } }
+                  skills: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  languages: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  workExperience: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        role: { type: Type.STRING },
+                        company: { type: Type.STRING },
+                        duration: { type: Type.STRING },
+                        description: { type: Type.ARRAY, items: { type: Type.STRING } }
+                      },
+                      required: ["role", "company", "duration", "description"]
+                    }
+                  },
+                  education: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        degree: { type: Type.STRING },
+                        school: { type: Type.STRING },
+                        duration: { type: Type.STRING },
+                        gpa: { type: Type.STRING }
+                      },
+                      required: ["degree", "school", "duration"]
+                    }
+                  },
+                  projects: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        name: { type: Type.STRING },
+                        description: { type: Type.ARRAY, items: { type: Type.STRING } }
+                      },
+                      required: ["name", "description"]
+                    }
+                  },
+                  certifications: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING }
+                  }
                 },
-                required: ["fullName", "email", "phone", "summary", "skills"]
+                required: ["fullName", "email", "phone", "summary", "skills", "languages", "workExperience", "education", "projects", "certifications"]
               },
               explanation: { type: Type.STRING }
             },
@@ -517,7 +876,16 @@ Return a JSON payload with exactly this schema:
       throw new Error("No response from AI analyzer.");
     }
 
-    res.json(JSON.parse(parsedResponseText.trim()));
+    const result = JSON.parse(parsedResponseText.trim());
+    if (result.isResume) {
+      const dp = result.detectedProfile;
+      if (!dp || !dp.fullName || ((!dp.workExperience || dp.workExperience.length === 0) && (!dp.education || dp.education.length === 0))) {
+        res.status(422).json({ error: "The uploaded resume could not be fully processed. Please make sure it is not corrupted and contains extractable work experiences/education details." });
+        return;
+      }
+    }
+
+    res.json(result);
   } catch (error: any) {
     console.error("Error in analyze-uploaded-resume:", error);
     res.status(500).json({ error: error.message || "An error occurred while analyzing the resume file." });

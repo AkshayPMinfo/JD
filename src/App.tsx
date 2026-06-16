@@ -40,7 +40,8 @@ import {
   Bell,
   Facebook,
   Twitter,
-  Linkedin
+  Linkedin,
+  Image
 } from "lucide-react";
 import {
   ResumeStructure,
@@ -80,7 +81,50 @@ export default function App() {
 
   const [activeResume, setActiveResume] = useState<ResumeStructure>(() => {
     const saved = localStorage.getItem("jd_resume_customizer_active_resume");
-    return saved ? JSON.parse(saved) : DEMO_RESUMES.software_grad.data;
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (
+        parsed.fullName === "Akshay Anand" &&
+        (parsed.workExperience?.length === 0 ||
+          parsed.workExperience?.some((w: any) => w.company === "Nexus Digital Agency"))
+      ) {
+        return DEMO_RESUMES.akshay_anand.data;
+      }
+      return parsed;
+    }
+    return DEMO_RESUMES.akshay_anand.data;
+  });
+
+  const [originalResume, setOriginalResume] = useState<ResumeStructure>(() => {
+    const saved = localStorage.getItem("jd_resume_customizer_original_resume");
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (
+        parsed.fullName === "Akshay Anand" &&
+        (parsed.workExperience?.length === 0 ||
+          parsed.workExperience?.some((w: any) => w.company === "Nexus Digital Agency"))
+      ) {
+        return DEMO_RESUMES.akshay_anand.data;
+      }
+      return parsed;
+    }
+    const savedActive = localStorage.getItem("jd_resume_customizer_active_resume");
+    if (savedActive) {
+      const parsed = JSON.parse(savedActive);
+      if (
+        parsed.fullName === "Akshay Anand" &&
+        (parsed.workExperience?.length === 0 ||
+          parsed.workExperience?.some((w: any) => w.company === "Nexus Digital Agency"))
+      ) {
+        return DEMO_RESUMES.akshay_anand.data;
+      }
+      return parsed;
+    }
+    return DEMO_RESUMES.akshay_anand.data;
+  });
+
+  const [uploadedPdfBase64, setUploadedPdfBase64] = useState<string | null>(() => {
+    return localStorage.getItem("jd_resume_customizer_uploaded_pdf_base64");
   });
 
   // Current Job Description
@@ -108,7 +152,7 @@ export default function App() {
   const [atsResult, setAtsResult] = useState<ATSCheckResult | null>(null);
 
   // UI Customizations
-  const [selectedStyle, setSelectedStyle] = useState<"classic" | "tech" | "executive">("tech");
+  const [selectedStyle, setSelectedStyle] = useState<"classic" | "tech" | "executive" | "two-column">("tech");
   const [savedVersions, setSavedVersions] = useState<SavedResumeVersion[]>(() => {
     const saved = localStorage.getItem("jd_resume_customizer_versions");
     return saved ? JSON.parse(saved) : [];
@@ -124,29 +168,25 @@ export default function App() {
 
   // Mandatory Prerequisite Check for resume creation/uploading to unlock Auralis
   const [isUnlocked, setIsUnlocked] = useState<boolean>(() => {
-    return sessionStorage.getItem("auralis_platform_unlocked") === "true";
+    const sessionUnlocked = sessionStorage.getItem("auralis_platform_unlocked") === "true";
+    const localUnlocked = localStorage.getItem("jd_resume_customizer_has_resume") === "true";
+    return sessionUnlocked || localUnlocked;
   });
 
   // Onboarding choice: null = select pathway, 'yes' = upload path, 'no' = build form path, 'done' = workflow complete
-  const [onboardingChoice, setOnboardingChoice] = useState<"yes" | "no" | "done" | null>(() => {
-    const unlocked = sessionStorage.getItem("auralis_platform_unlocked") === "true";
-    if (unlocked) return "done";
-
-    const dismissedThisSession = sessionStorage.getItem("auralis_onboarding_dismissed") === "true";
-    if (dismissedThisSession) return "done";
-
-    return null;
-  });
+  const [onboardingChoice, setOnboardingChoice] = useState<"yes" | "no" | "done" | null>("done");
 
   const handleLockedInteraction = (e?: React.MouseEvent | React.FormEvent) => {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
     }
-    // Reopen the onboarding popup
-    setOnboardingChoice(null);
-    localStorage.removeItem("jd_resume_customizer_onboarding_done");
-    showNotification("To unlock Auralis features, please upload an existing resume or create one first.", "info");
+    if (hasResume) {
+      setIsUnlocked(true);
+      sessionStorage.setItem("auralis_platform_unlocked", "true");
+      return;
+    }
+    setShowNoResumeAlert(true);
   };
 
   // Notification Banner
@@ -155,8 +195,40 @@ export default function App() {
   // Warning when trying to tailor without having a resume setup
   const [showNoResumeAlert, setShowNoResumeAlert] = useState(false);
 
+  // Tailoring Wizard States
+  const [isTailorWizardOpen, setIsTailorWizardOpen] = useState(false);
+  const [tailorWizardStep, setTailorWizardStep] = useState<1 | 2 | 3 | 4>(1);
+  const [tailorCompany, setTailorCompany] = useState("");
+  const [tailorRole, setTailorRole] = useState("");
+  const [tailorJdText, setTailorJdText] = useState("");
+  const [tailorSelectedResumeKey, setTailorSelectedResumeKey] = useState<string>("active");
+  const [tailorJdMode, setTailorJdMode] = useState<"paste" | "upload" | null>(null);
+  const [tailorJdImages, setTailorJdImages] = useState<string[]>([]);
+  const [tailorJdImageNames, setTailorJdImageNames] = useState<string[]>([]);
+  const [tailorIsAnalyzing, setTailorIsAnalyzing] = useState(false);
+  const [tailorAnalysisResult, setTailorAnalysisResult] = useState<{
+    matchedKeywords: string[];
+    missingKeywords: string[];
+    improvements: string[];
+    simplifiedText: string;
+  } | null>(null);
+  const [tailoredResultResume, setTailoredResultResume] = useState<ResumeStructure | null>(null);
+  const [tailoredAtsScore, setTailoredAtsScore] = useState<number | null>(null);
+
+  // Dashboard item preview states
+  const [selectedSavedVersion, setSelectedSavedVersion] = useState<SavedResumeVersion | null>(null);
+  const [showSavedVersionPreviewModal, setShowSavedVersionPreviewModal] = useState(false);
+  const [showDeleteSavedVersionConfirmModal, setShowDeleteSavedVersionConfirmModal] = useState(false);
+  const [versionToDeleteId, setVersionToDeleteId] = useState<string | null>(null);
+
   // User pathway selection inside Resume Setup (Upload or Create)
   const [resumeSelectionMode, setResumeSelectionMode] = useState<"upload" | "create" | null>(null);
+
+  // Resume Quick View & Delete Confirms
+  const [showResumePreviewModal, setShowResumePreviewModal] = useState(false);
+  const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
+  const [isChoiceModalOpen, setIsChoiceModalOpen] = useState(false);
+  const [choiceModalPathway, setChoiceModalPathway] = useState<"upload" | "create">("upload");
 
   // File Upload states for Beginner Resume Setup Modal
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
@@ -220,6 +292,17 @@ export default function App() {
   }, [activeResume]);
 
   useEffect(() => {
+    localStorage.setItem("jd_resume_customizer_original_resume", JSON.stringify(originalResume));
+  }, [originalResume]);
+
+  useEffect(() => {
+    if (hasResume && !isUnlocked) {
+      setIsUnlocked(true);
+      sessionStorage.setItem("auralis_platform_unlocked", "true");
+    }
+  }, [hasResume, isUnlocked]);
+
+  useEffect(() => {
     localStorage.setItem("jd_resume_customizer_jd", jdText);
   }, [jdText]);
 
@@ -231,6 +314,16 @@ export default function App() {
     document.documentElement.classList.remove("dark");
     localStorage.setItem("jd_resume_customizer_theme", "light");
   }, [currentStep]);
+
+  // Resumes that actually exist in Resume Setup
+  const existingResumes = [];
+  if (hasResume) {
+    existingResumes.push({
+      key: "active",
+      label: uploadedResumeMeta ? uploadedResumeMeta.name : (originalResume.fullName ? `${originalResume.fullName}'s Resume` : "My Resume"),
+      data: originalResume
+    });
+  }
 
   // Alert Helper
   const showNotification = (message: string, type: "success" | "error" | "info" = "success") => {
@@ -251,12 +344,9 @@ export default function App() {
     const name = authName || authEmail.split("@")[0];
     const userObj = { email: authEmail, name };
     setCurrentUser(userObj);
-    if (!isUnlocked) {
-      setOnboardingChoice(null);
-      sessionStorage.removeItem("auralis_onboarding_dismissed");
-    }
+    const hasRes = localStorage.getItem("jd_resume_customizer_has_resume") === "true";
+    setCurrentStep(hasRes ? "dashboard" : "resume");
     showNotification(`Welcome, ${name}! Your resume dashboard is ready.`, "success");
-    setCurrentStep("dashboard");
   };
 
   const handleOAuthSimulate = (provider: "google" | "linkedin" | "facebook") => {
@@ -267,18 +357,363 @@ export default function App() {
 
     // Auto load appropriate presets for demonstration to build prompt satisfaction
     if (provider === "google") {
-      loadPresetResume("software_grad");
+      loadPresetResume("akshay_anand");
     } else if (provider === "linkedin") {
       loadPresetResume("marketing_grad");
-    } else {
-      if (!isUnlocked) {
-        setOnboardingChoice(null);
-        sessionStorage.removeItem("auralis_onboarding_dismissed");
-      }
     }
 
     showNotification(`Signed in with ${provider.charAt(0).toUpperCase() + provider.slice(1)} successfully!`, "success");
-    setCurrentStep("dashboard");
+    const hasRes = localStorage.getItem("jd_resume_customizer_has_resume") === "true";
+    setCurrentStep(hasRes ? "dashboard" : "resume");
+  };
+
+  const handleOpenTailorWizard = () => {
+    setTailorCompany("");
+    setTailorRole("");
+    setTailorJdText("");
+    setTailorJdImages([]);
+    setTailorJdImageNames([]);
+    setTailorJdMode(null);
+    if (existingResumes.length > 0) {
+      setTailorSelectedResumeKey(existingResumes[0].key);
+    } else {
+      setTailorSelectedResumeKey("active");
+    }
+    setTailorAnalysisResult(null);
+    setTailoredResultResume(null);
+    setTailoredAtsScore(null);
+    setTailorWizardStep(1);
+    setIsTailorWizardOpen(true);
+  };
+
+  const handleTailorImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      const currentCount = tailorJdImages.length;
+      const selectCount = files.length;
+      if (currentCount + selectCount > 10) {
+        showNotification("You can upload a maximum of 10 screenshot images.", "error");
+        return;
+      }
+
+      const promises = Array.from(files).map((file: File) => {
+        return new Promise<{ base64: string; name: string }>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            resolve({ base64: reader.result as string, name: file.name });
+          };
+          reader.readAsDataURL(file);
+        });
+      });
+
+      Promise.all(promises).then((results) => {
+        const newImages = results.map((r) => r.base64);
+        const newNames = results.map((r) => r.name);
+        setTailorJdImages((prev) => [...prev, ...newImages]);
+        setTailorJdImageNames((prev) => [...prev, ...newNames]);
+        showNotification(`${selectCount} screenshot(s) loaded successfully!`, "success");
+      }).catch((err) => {
+        console.error("Image loading error:", err);
+        showNotification("Failed to load screenshots.", "error");
+      });
+    }
+  };
+
+  const handleRemoveTailorImage = (index: number) => {
+    setTailorJdImages((prev) => prev.filter((_, i) => i !== index));
+    setTailorJdImageNames((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const getResumeToTailor = (): ResumeStructure => {
+    const found = existingResumes.find(r => r.key === tailorSelectedResumeKey);
+    if (found) {
+      return found.data;
+    }
+    if (DEMO_RESUMES[tailorSelectedResumeKey]) {
+      return DEMO_RESUMES[tailorSelectedResumeKey].data;
+    }
+    return originalResume;
+  };
+
+  const handleAnalyzeJD = async () => {
+    if (!tailorCompany.trim()) {
+      showNotification("Please enter the company name.", "error");
+      return;
+    }
+    if (!tailorJdMode) {
+      showNotification("Please select an input method.", "error");
+      return;
+    }
+    if (tailorJdMode === "paste" && !tailorJdText.trim()) {
+      showNotification("Please paste a job description.", "error");
+      return;
+    }
+    if (tailorJdMode === "upload" && tailorJdImages.length === 0) {
+      showNotification("Please upload at least one screenshot.", "error");
+      return;
+    }
+
+    setTailorIsAnalyzing(true);
+    try {
+      // 1. Simplify / Parse JD (handles image OCR + Jargon cleaning)
+      const simplifyRes = await fetch("/api/simplify-jd", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jdText: tailorJdMode === "paste" ? tailorJdText : "",
+          jdImagesBase64: tailorJdMode === "upload" ? tailorJdImages : []
+        })
+      });
+
+      if (!simplifyRes.ok) {
+        const errData = await simplifyRes.json().catch(() => ({}));
+        throw new Error(errData.error || `Simplify failed status: ${simplifyRes.status}`);
+      }
+
+      const simplifiedJd = await simplifyRes.json();
+      
+      // Update tailorRole with the extracted job title from AI
+      const extractedRole = simplifiedJd.jobTitle || "Tailored Position";
+      setTailorRole(extractedRole);
+
+      // 2. Perform initial ATS Audit to get matches, gaps, improvements
+      const simplifiedJdText = `Role: ${extractedRole}
+Company Pitch: ${simplifiedJd.companyPitch}
+Core Skills Required: ${simplifiedJd.requiredSkills.map((s: any) => s.name).join(", ")}
+Core Responsibilities: ${simplifiedJd.keyResponsibilities.join("\n")}
+Candidate Expectations: ${simplifiedJd.candidateExpectations.join("\n")}
+Keywords: ${simplifiedJd.keywordsToTarget.join(", ")}`;
+
+      const selectedResume = getResumeToTailor();
+
+      const auditRes = await fetch("/api/ats-audit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          resume: selectedResume,
+          jdText: simplifiedJdText
+        })
+      });
+
+      if (!auditRes.ok) {
+        const errData = await auditRes.json().catch(() => ({}));
+        throw new Error(errData.error || `Audit failed status: ${auditRes.status}`);
+      }
+
+      const auditResult = await auditRes.json();
+
+      // 3. Extract matches, missing, improvements
+      const matched: string[] = [];
+      const missing: string[] = [];
+      const improvements: string[] = [];
+
+      const originalSkillsLower = selectedResume.skills.map(s => s.toLowerCase());
+      simplifiedJd.keywordsToTarget.forEach((kw: string) => {
+        if (originalSkillsLower.some(sk => sk.includes(kw.toLowerCase()) || kw.toLowerCase().includes(sk))) {
+          matched.push(kw);
+        } else {
+          missing.push(kw);
+        }
+      });
+
+      simplifiedJd.requiredSkills.forEach((skillObj: any) => {
+        const skName = skillObj.name;
+        if (originalSkillsLower.some(sk => sk.includes(skName.toLowerCase()) || skName.toLowerCase().includes(sk))) {
+          if (!matched.includes(skName)) matched.push(skName);
+        } else {
+          if (!missing.includes(skName)) missing.push(skName);
+        }
+      });
+
+      (auditResult.criteria || []).forEach((c: any) => {
+        if (!c.passed) {
+          improvements.push(`${c.name}: ${c.feedback}`);
+        }
+      });
+
+      if (matched.length === 0) matched.push("General profile keywords");
+      if (missing.length === 0) missing.push("No missing critical keywords found");
+      if (improvements.length === 0) improvements.push("Format is clean. Add more context to experience descriptions.");
+
+      setTailorAnalysisResult({
+        matchedKeywords: matched,
+        missingKeywords: missing,
+        improvements: improvements,
+        simplifiedText: simplifiedJdText
+      });
+
+      setTailorWizardStep(3);
+      showNotification("Job description analyzed successfully!", "success");
+    } catch (err: any) {
+      console.error("Analysis error:", err);
+      showNotification(err.message || "Failed to analyze Job Description.", "error");
+    } finally {
+      setTailorIsAnalyzing(false);
+    }
+  };
+
+  const handleGenerateTailoredResume = async () => {
+    if (!tailorAnalysisResult) return;
+
+    setTailorIsAnalyzing(true);
+    try {
+      const selectedResume = getResumeToTailor();
+
+      // 1. Generate tailored resume details
+      const tailorRes = await fetch("/api/tailor-resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          resume: selectedResume,
+          jdText: tailorAnalysisResult.simplifiedText
+        })
+      });
+
+      if (!tailorRes.ok) {
+        const errData = await tailorRes.json().catch(() => ({}));
+        throw new Error(errData.error || `Tailoring failed status: ${tailorRes.status}`);
+      }
+
+      const tailoredData = await tailorRes.json();
+      const { tailoredResume, suggestions } = tailoredData;
+
+      // 2. Perform ATS audit on the tailored resume
+      const auditRes = await fetch("/api/ats-audit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          resume: tailoredResume,
+          jdText: tailorAnalysisResult.simplifiedText
+        })
+      });
+
+      let newScore = 85;
+      if (auditRes.ok) {
+        const auditResult = await auditRes.json();
+        newScore = auditResult.score || 85;
+      }
+
+      // 3. Save tailored resume version
+      const newVersion: SavedResumeVersion = {
+        id: `ver-${Date.now()}`,
+        companyName: tailorCompany,
+        jobTitle: tailorRole,
+        savedAt: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        resumeData: tailoredResume,
+        appliedSuggestionsCount: suggestions?.length || 0
+      };
+
+      const updatedVersions = [newVersion, ...savedVersions];
+      setSavedVersions(updatedVersions);
+      localStorage.setItem("jd_resume_customizer_versions", JSON.stringify(updatedVersions));
+
+      setTailoredResultResume(tailoredResume);
+      setTailoredAtsScore(newScore);
+      setTailorWizardStep(4);
+      showNotification(`Successfully generated resume for ${tailorCompany}!`, "success");
+    } catch (err: any) {
+      console.error("Tailoring error:", err);
+      showNotification(err.message || "Failed to generate tailored resume.", "error");
+    } finally {
+      setTailorIsAnalyzing(false);
+    }
+  };
+
+  const handleDownloadTailoredResume = () => {
+    if (!tailoredResultResume) return;
+    
+    let text = `==================================================
+${tailoredResultResume.fullName.toUpperCase()}
+==================================================
+Email: ${tailoredResultResume.email}
+Phone: ${tailoredResultResume.phone}
+${tailoredResultResume.linkedin ? `LinkedIn: ${tailoredResultResume.linkedin}\n` : ""}${tailoredResultResume.website ? `Website: ${tailoredResultResume.website}\n` : ""}
+
+PROFESSIONAL SUMMARY
+--------------------
+${tailoredResultResume.summary}
+
+WORK EXPERIENCE
+---------------
+`;
+
+    tailoredResultResume.workExperience.forEach((exp) => {
+      text += `\n${exp.company} | ${exp.role} (${exp.duration})\n`;
+      exp.description.forEach((bullet) => {
+        text += `- ${bullet}\n`;
+      });
+    });
+
+    if (tailoredResultResume.education && tailoredResultResume.education.length > 0) {
+      text += `\nEDUCATION\n---------\n`;
+      tailoredResultResume.education.forEach((edu) => {
+        text += `${edu.school} | ${edu.degree} (${edu.duration})${edu.gpa ? ` (GPA: ${edu.gpa})` : ""}\n`;
+      });
+    }
+
+    text += `\nSKILLS\n------\n${tailoredResultResume.skills.join(", ")}\n`;
+    
+    if (tailoredResultResume.languages && tailoredResultResume.languages.length > 0) {
+      text += `\nLANGUAGES\n---------\n${tailoredResultResume.languages.join(", ")}\n`;
+    }
+
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${tailoredResultResume.fullName.replace(/\s+/g, "_")}_${tailorCompany.replace(/\s+/g, "_")}_Resume.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showNotification("Downloaded tailored resume successfully!", "success");
+  };
+
+  const handleDownloadSpecificResume = (version: SavedResumeVersion) => {
+    const tailored = version.resumeData;
+    let text = `==================================================
+${tailored.fullName.toUpperCase()}
+==================================================
+Email: ${tailored.email}
+Phone: ${tailored.phone}
+${tailored.linkedin ? `LinkedIn: ${tailored.linkedin}\n` : ""}${tailored.website ? `Website: ${tailored.website}\n` : ""}
+
+PROFESSIONAL SUMMARY
+--------------------
+${tailored.summary}
+
+WORK EXPERIENCE
+---------------
+`;
+
+    tailored.workExperience.forEach((exp) => {
+      text += `\n${exp.company} | ${exp.role} (${exp.duration})\n`;
+      exp.description.forEach((bullet) => {
+        text += `- ${bullet}\n`;
+      });
+    });
+
+    if (tailored.education && tailored.education.length > 0) {
+      text += `\nEDUCATION\n---------\n`;
+      tailored.education.forEach((edu) => {
+        text += `${edu.school} | ${edu.degree} (${edu.duration})${edu.gpa ? ` (GPA: ${edu.gpa})` : ""}\n`;
+      });
+    }
+
+    text += `\nSKILLS\n------\n${tailored.skills.join(", ")}\n`;
+    
+    if (tailored.languages && tailored.languages.length > 0) {
+      text += `\nLANGUAGES\n---------\n${tailored.languages.join(", ")}\n`;
+    }
+
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${tailored.fullName.replace(/\s+/g, "_")}_${version.companyName.replace(/\s+/g, "_")}_Resume.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showNotification("Downloaded tailored resume successfully!", "success");
   };
 
   const handleGuestAccess = () => {
@@ -286,11 +721,8 @@ export default function App() {
     const email = "guest@fresher.io";
     const userObj = { email, name };
     setCurrentUser(userObj);
-    if (!isUnlocked) {
-      setOnboardingChoice(null);
-      sessionStorage.removeItem("auralis_onboarding_dismissed");
-    }
-    setCurrentStep("dashboard");
+    const hasRes = localStorage.getItem("jd_resume_customizer_has_resume") === "true";
+    setCurrentStep(hasRes ? "dashboard" : "resume");
     showNotification("Welcome! Running in frictionless Guest Mode.", "success");
   };
 
@@ -310,10 +742,17 @@ export default function App() {
   };
 
   // Preset loaders
-  const loadPresetResume = (key: "software_grad" | "marketing_grad") => {
-    setActiveResume(DEMO_RESUMES[key].data);
+  const loadPresetResume = (key: "software_grad" | "marketing_grad" | "akshay_anand") => {
+    const presetData = DEMO_RESUMES[key].data;
+    setActiveResume(presetData);
+    setOriginalResume(presetData);
     setIsUnlocked(true);
     sessionStorage.setItem("auralis_platform_unlocked", "true");
+    setHasResume(true);
+    localStorage.setItem("jd_resume_customizer_has_resume", "true");
+    if (!localStorage.getItem("jd_resume_customizer_resume_created_at")) {
+      localStorage.setItem("jd_resume_customizer_resume_created_at", new Date().toLocaleDateString());
+    }
     showNotification(`Loaded ${DEMO_RESUMES[key].label} Resume Template and unlocked platform!`, "info");
   };
 
@@ -406,9 +845,14 @@ export default function App() {
       const result = await res.json();
       setAnalysisResult(result);
       if (result.isResume) {
+        if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+          (window as any).__lastUploadedPdfBase64 = base64Data;
+        } else {
+          (window as any).__lastUploadedPdfBase64 = null;
+        }
         showNotification("Resume successfully audited and validated!", "success");
       } else {
-        showNotification("Warning: Uploaded document does not seem to be a resume.", "error");
+        showNotification("maybe you uploaded a wrong file. The scanned uploaded document isnt a resume. please check and retry again", "error");
       }
     } catch (err: any) {
       console.error("Resume analysis error:", err);
@@ -477,37 +921,73 @@ export default function App() {
       size: tempFile.size,
       uploadedAt: new Date().toISOString()
     };
-    
     setUploadedResumeMeta(meta);
     localStorage.setItem("jd_resume_customizer_uploaded_resume_meta", JSON.stringify(meta));
+    
+    if ((window as any).__lastUploadedPdfBase64) {
+      setUploadedPdfBase64((window as any).__lastUploadedPdfBase64);
+      localStorage.setItem("jd_resume_customizer_uploaded_pdf_base64", (window as any).__lastUploadedPdfBase64);
+      (window as any).__lastUploadedPdfBase64 = null;
+    } else {
+      setUploadedPdfBase64(null);
+      localStorage.removeItem("jd_resume_customizer_uploaded_pdf_base64");
+    }
     
     setIsUnlocked(true);
     sessionStorage.setItem("auralis_platform_unlocked", "true");
     setOnboardingChoice("done");
     sessionStorage.setItem("auralis_onboarding_dismissed", "true");
     localStorage.setItem("jd_resume_customizer_onboarding_done", "true");
+    
+    setHasResume(true);
+    localStorage.setItem("jd_resume_customizer_has_resume", "true");
+    if (!localStorage.getItem("jd_resume_customizer_resume_created_at")) {
+      localStorage.setItem("jd_resume_customizer_resume_created_at", new Date().toLocaleDateString());
+    }
 
     // Pre-fill fields if we successfully verified they are a resume
     if (analysisResult && analysisResult.isResume) {
       const { detectedProfile } = analysisResult;
       setActiveResume(prev => {
+        const mappedExperience = (detectedProfile.workExperience || []).map((exp: any, idx: number) => ({
+          id: exp.id || `exp-${Date.now()}-${idx}`,
+          role: exp.role || "",
+          company: exp.company || "",
+          duration: exp.duration || "",
+          description: Array.isArray(exp.description) ? exp.description : [exp.description || ""]
+        }));
+
+        const mappedEducation = (detectedProfile.education || []).map((edu: any, idx: number) => ({
+          id: edu.id || `edu-${Date.now()}-${idx}`,
+          degree: edu.degree || "",
+          school: edu.school || "",
+          duration: edu.duration || "",
+          gpa: edu.gpa || ""
+        }));
+
         const updatedResume = {
-          ...prev,
           fullName: detectedProfile.fullName || prev.fullName || "Guest Candidate",
           email: detectedProfile.email || prev.email || "guest@fresher.io",
           phone: detectedProfile.phone || prev.phone || "",
           summary: detectedProfile.summary || prev.summary || "",
           skills: detectedProfile.skills && detectedProfile.skills.length > 0 
             ? detectedProfile.skills 
-            : prev.skills
+            : prev.skills,
+          languages: detectedProfile.languages && detectedProfile.languages.length > 0
+            ? detectedProfile.languages
+            : [],
+          workExperience: mappedExperience,
+          education: mappedEducation
         };
         localStorage.setItem("jd_resume_customizer_active_resume", JSON.stringify(updatedResume));
+        setOriginalResume(updatedResume);
         return updatedResume;
       });
     }
 
     showNotification(`Successfully processed "${tempFile.name}"! Ready to proceed.`, "success");
     setIsUploadModalOpen(false);
+    setIsChoiceModalOpen(false); // Close choice modal too if open
     setTempFile(null);
   };
 
@@ -1136,8 +1616,8 @@ export default function App() {
           {/* Navigation Links inside Collapsible Sidebar */}
           <nav className="p-4 space-y-2">
             {[
-              { step: "dashboard", label: "Dashboard", icon: FolderOpen },
               { step: "resume", label: "Resume Setup", icon: FileText },
+              { step: "dashboard", label: "Tailored Resumes", icon: FolderOpen },
               { step: "jd", label: "Job Analysis", icon: BookOpen },
               { step: "tailor", label: "Tailoring Studio", icon: Sparkles },
               { step: "saves", label: "Saved Copies", icon: Save, badge: savedVersions.length }
@@ -1149,9 +1629,13 @@ export default function App() {
                   key={item.step}
                   id={`sidebar-link-${item.step}`}
                   onClick={() => {
-                    if (item.step !== "dashboard" && item.step !== "resume" && !isUnlocked) {
+                    if (item.step !== "resume" && !isUnlocked && !hasResume) {
                       handleLockedInteraction();
                     } else {
+                      if (hasResume && !isUnlocked) {
+                        setIsUnlocked(true);
+                        sessionStorage.setItem("auralis_platform_unlocked", "true");
+                      }
                       setCurrentStep(item.step as any);
                     }
                   }}
@@ -1314,117 +1798,107 @@ export default function App() {
               className="fixed top-24 right-6 z-50 flex items-center gap-3 p-4 rounded-xl border-2 border-black dark:border-neutral-800 bg-white dark:bg-neutral-950 text-neutral-950 dark:text-white shadow-xl text-xs font-bold animate-slideIn"
             >
               <Check className="w-4 h-4 text-emerald-500" />
-              <span>{notification.message}</span>
             </div>
           )}
 
           {/* -------------------- STEP: DASHBOARD SCREEN -------------------- */}
           {currentStep === "dashboard" && (
-            <div className="space-y-6 max-w-5xl mx-auto min-h-[75vh] flex flex-col justify-between">
-              <div>
-                {/* Clean dashboard landing menu layout matching wireframe */}
-                <div className="flex justify-between items-center border-b-2 border-black pb-4 mb-6 text-left">
-                  <div>
-                    <h2 className="text-2xl font-black tracking-tight text-black">Candidate Dashboard</h2>
-                    <p className="text-xs text-neutral-600 font-medium mt-1">Manage and build highly customized ATS-optimized corporate resumes.</p>
-                  </div>
-                  <span className="hidden sm:inline font-mono text-[10px] tracking-wider text-black bg-neutral-150 px-3 py-1.5 rounded-full border-2 border-black font-bold">
-                    DATE: {new Date().toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
-                  </span>
-                </div>
-
-                {/* Grid layout of created JDs from saved resume versions */}
-                {savedVersions.length === 0 ? (
-                  /* FIRST TIME USER BLANK SCREEN STYLED SIMILAR TO LOGIN CARD WITH THICK BLACK BORDER */
-                  <div className="flex flex-col items-center justify-center py-16 px-8 bg-white border-2 border-black rounded-3xl shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] text-center max-w-xl mx-auto my-12 animate-fadeIn">
-                    <div className="w-16 h-16 rounded-full border-2 border-dashed border-neutral-400 flex items-center justify-center mb-6 text-neutral-400">
-                      <FolderOpen className="w-7 h-7 text-black" />
+            <div className={`space-y-6 ${savedVersions.length === 0 ? 'w-full' : 'max-w-5xl mx-auto'}`}>
+              {savedVersions.length === 0 ? (
+                /* FIRST TIME USER BLANK SCREEN STYLED SIMILAR TO LOGIN CARD WITH THICK BLACK BORDER */
+                <div className="relative min-h-[70vh] w-full flex flex-col items-center justify-center animate-fadeIn">
+                  <div className="flex flex-col items-center justify-center py-16 px-8 bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] text-center max-w-xl w-full mx-auto my-6 transition-all duration-300">
+                    <div className="w-16 h-16 rounded-full border-2 border-dashed border-neutral-400 flex items-center justify-center mb-6">
+                      <FolderOpen className="w-8 h-8 text-black" />
                     </div>
                     {/* Shortened empty state text as requested */}
-                    <h3 className="text-base font-black tracking-tight text-black uppercase font-mono">No resumes tailored</h3>
-                    <p className="text-xs text-neutral-600 mt-2 max-w-sm leading-relaxed font-semibold">
+                    <h3 className="text-xl font-black tracking-tight text-black uppercase font-mono">No Resumes Tailored</h3>
+                    <p className="text-sm text-neutral-600 mt-3 max-w-sm leading-relaxed font-semibold">
                       To create tailored resumes, use the Left Sidebar menu options!
                     </p>
                   </div>
-                ) : (
-                  /* EXQUISITE JD CARD LAYOUT REPRESENTING CREATED JDS AS DEPICTED IN THE WIREFRAME */
-                  <div className="space-y-4 max-w-3xl mx-auto">
-                    {savedVersions.map((version) => (
-                      <div
-                        key={version.id}
-                        id={`jd-item-${version.id}`}
-                        className="bg-white border-2 border-black rounded-2xl p-5 hover:translate-x-[-2px] hover:translate-y-[-2px] shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-all flex items-center justify-between text-left gap-4"
-                      >
-                        <div className="flex items-center gap-4 min-w-0">
-                          {/* Sparkling checkmark circle badge matching Ralph Lauren wireframe item precisely */}
-                          <div className="relative flex-shrink-0 select-none">
-                            <div className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-emerald-500 rounded-full"></div>
-                            <div className="absolute top-1/2 -left-1.5 w-2 h-2 bg-emerald-400 rounded-full"></div>
-                            <div className="absolute -bottom-1 left-3.5 w-1.5 h-1.5 bg-emerald-600 rounded-full"></div>
-                            <div className="absolute bottom-2.5 -right-1 w-1 h-1 bg-emerald-300 rounded-full"></div>
-                            
-                            <div className="w-14 h-14 rounded-full bg-emerald-50 border-2 border-black flex items-center justify-center text-emerald-600 font-black">
-                              <Sparkle className="w-6 h-6 animate-pulse" />
-                            </div>
-                          </div>
-
-                          <div className="min-w-0">
-                            <h4 className="text-base font-black tracking-tight text-black truncate">
-                              {version.companyName} JD
-                            </h4>
-                            <p className="text-xs text-neutral-500 font-mono mt-0.5">
-                              {version.savedAt}
-                            </p>
-                            <p className="text-xs text-neutral-600 font-semibold mt-1">
-                              Role: {version.jobTitle}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-3">
-                          <button
-                            onClick={() => handleLoadVersionClick(version)}
-                            className="px-3.5 py-2 bg-black hover:bg-neutral-800 text-white font-extrabold text-[10px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer"
-                          >
-                            View / Optimize
-                          </button>
-                          
-                          <button
-                            id={`btn-delete-jd-dashboard-${version.id}`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteVersion(version.id, e);
-                            }}
-                            className="p-2 border-2 border-black hover:border-rose-500 hover:text-rose-500 rounded-xl text-neutral-500 transition cursor-pointer"
-                            title="Remove resume copy"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                  
+                  {/* FLOATING ACTION PILL ON BOTTOM RIGHT OF MAIN STAGE: "CREATE NEW" ROYAL BLUE PILLED BUTTON */}
+                  <div className="absolute bottom-2 right-2 sm:bottom-0 sm:right-4">
+                    <button
+                      id="btn-dashboard-float-create-new"
+                      onClick={() => {
+                        if (!hasResume) {
+                          setShowNoResumeAlert(true);
+                        } else {
+                          if (!isUnlocked) {
+                            setIsUnlocked(true);
+                            sessionStorage.setItem("auralis_platform_unlocked", "true");
+                          }
+                          handleOpenTailorWizard();
+                        }
+                      }}
+                      className="px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border border-transparent flex items-center gap-1.5"
+                    >
+                      <Plus className="w-4 h-4 text-white" strokeWidth={3} />
+                      <span>Create New</span>
+                    </button>
                   </div>
-                )}
-              </div>
-
-              {/* FLOATING ACTION PILL ON BOTTOM RIGHT OF MAIN STAGE: "CREATE NEW" ROYAL BLUE PILLED BUTTON */}
-              <div className="flex justify-end pt-12">
-                <button
-                  id="btn-dashboard-float-create-new"
-                  onClick={() => {
-                    if (!isUnlocked) {
-                      setShowNoResumeAlert(true);
-                    } else {
-                      setCurrentStep("resume");
-                      showNotification("Choose template or build resume!", "info");
-                    }
-                  }}
-                  className="px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 hover:shadow-lg dark:hover:bg-blue-700 font-black text-xs text-white uppercase tracking-widest rounded-xl transition-all duration-200 flex items-center gap-1.5 shadow-md cursor-pointer border border-transparent"
-                >
-                  <Plus className="w-4.5 h-4.5 text-white" />
-                  <span>Create new</span>
-                </button>
-              </div>
+                </div>
+              ) : (
+                /* EXQUISITE JD CARD LAYOUT REPRESENTING CREATED JDS AS DEPICTED IN THE WIREFRAME */
+                <div className="space-y-6 max-w-3xl mr-auto text-left mt-2 animate-fadeIn w-full">
+                  {savedVersions.map((version) => (
+                    <div
+                      key={version.id}
+                      id={`jd-item-${version.id}`}
+                      onClick={() => {
+                        setSelectedSavedVersion(version);
+                        setShowSavedVersionPreviewModal(true);
+                      }}
+                      className="w-full bg-white border-4 border-black rounded-3xl p-6 sm:p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] hover:shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] hover:-translate-x-0.5 hover:-translate-y-0.5 transition-all duration-200 cursor-pointer flex justify-between items-center text-left"
+                    >
+                      <div className="space-y-2 min-w-0 flex-1 pr-4">
+                        <h3 className="text-xl font-black text-black tracking-tight font-sans truncate">
+                          {version.companyName} — <span className="italic text-neutral-800 font-medium">{version.jobTitle}</span>
+                        </h3>
+                        <p className="text-xs font-mono font-bold text-neutral-550 uppercase tracking-wider">
+                          Created: {version.savedAt}
+                        </p>
+                      </div>
+                      <div className="flex flex-col items-end gap-2 text-right flex-shrink-0">
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setVersionToDeleteId(version.id);
+                            setShowDeleteSavedVersionConfirmModal(true);
+                          }}
+                          className="text-xs font-black uppercase tracking-widest text-rose-600 hover:text-rose-800 hover:underline transition-all cursor-pointer"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  
+                  {/* Floating Action Pill on dashboard when savedVersions exist */}
+                  <div className="flex justify-end pt-12">
+                    <button
+                      id="btn-dashboard-float-create-new-has-items"
+                      onClick={() => {
+                        if (!hasResume) {
+                          setShowNoResumeAlert(true);
+                        } else {
+                          if (!isUnlocked) {
+                            setIsUnlocked(true);
+                            sessionStorage.setItem("auralis_platform_unlocked", "true");
+                          }
+                          handleOpenTailorWizard();
+                        }
+                      }}
+                      className="px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border border-transparent flex items-center gap-1.5"
+                    >
+                      <Plus className="w-4 h-4 text-white" strokeWidth={3} />
+                      <span>Create New</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1563,11 +2037,17 @@ export default function App() {
                       showNotification("Please provide your full name.", "error");
                       return;
                     }
-                    setOnboardingChoice("done");
+                    setHasResume(true);
+                    localStorage.setItem("jd_resume_customizer_has_resume", "true");
                     setIsUnlocked(true);
                     sessionStorage.setItem("auralis_platform_unlocked", "true");
+                    setOnboardingChoice("done");
                     sessionStorage.setItem("auralis_onboarding_dismissed", "true");
                     localStorage.setItem("jd_resume_customizer_onboarding_done", "true");
+                    if (!localStorage.getItem("jd_resume_customizer_resume_created_at")) {
+                      localStorage.setItem("jd_resume_customizer_resume_created_at", new Date().toLocaleDateString());
+                    }
+                    setOriginalResume(activeResume);
                     showNotification("Custom resume generated and loaded successfully! Platform unlocked.", "success");
                   }}
                   className="space-y-6 text-left"
@@ -1844,128 +2324,107 @@ export default function App() {
           </div>
         </div>
       )}
-
-            {currentStep === "resume" && (
-          <div id="step-resume-panel" className="max-w-5xl mx-auto animate-fadeIn relative font-sans">
-            {!hasResume && !showSetupOptions ? (
-              <div className="relative min-h-[65vh] flex flex-col items-center justify-center">
-                {/* Center empty state box matching the wireframe precisely */}
-                <div className="flex flex-col items-center justify-center py-16 px-8 bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] text-center max-w-xl w-full mx-auto my-6 transition-all duration-300">
-                  <div className="w-16 h-16 rounded-full border-2 border-dashed border-neutral-400 flex items-center justify-center mb-6">
-                    <FolderOpen className="w-8 h-8 text-black" />
-                  </div>
-                  <h3 className="text-xl font-black tracking-tight text-black uppercase font-mono">No Resumes Tailored</h3>
-                  <p className="text-sm text-neutral-600 mt-3 max-w-sm leading-relaxed font-semibold">
-                    To create tailored resumes, use the Left Sidebar menu options!
-                  </p>
-                </div>
-
-                {/* Floating Bottom Right Button styled and positioned precisely as shown in the wireframe */}
-                <div className="absolute bottom-2 right-2 sm:bottom-0 sm:right-4">
-                  <button
-                    id="btn-first-time-create-resume"
-                    onClick={() => {
-                      setShowSetupOptions(true);
-                      setResumeSelectionMode("create"); // Open manual builder directly or allow choosing
-                    }}
-                    className="px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border-2 border-transparent flex items-center gap-2"
-                  >
-                    <Plus className="w-4 h-4 text-white" strokeWidth={3} />
-                    <span>Create New</span>
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-8">
-                {/* Selection Cards and header */}
-                <div className="flex items-center justify-between pb-4 border-b border-neutral-250">
-                  <div>
-                    <h2 className="text-xl font-black text-neutral-900 font-display">Resume Selection & Configuration</h2>
-                    <p className="text-xs text-neutral-500 font-medium">Configure your professional timeline and contact metadata for accurate tailoring.</p>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setShowSetupOptions(false);
-                      setResumeSelectionMode(null);
-                    }}
-                    className="px-4 py-2 bg-neutral-100 hover:bg-neutral-200 text-neutral-700 hover:text-black rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
-                  >
-                    ← Back to setup
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 max-w-3xl">
-                  {/* Upload Resume Option Card */}
-                  <button
-                    id="btn-resume-setup-upload-card"
-                    onClick={() => {
-                      setIsUploadModalOpen(true);
-                      setResumeSelectionMode(null);
-                    }}
-                    className={`p-6 sm:p-8 bg-white border-2 border-black rounded-2xl text-left transition-all duration-300 cursor-pointer flex items-center justify-between shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] ${
-                      uploadedResumeMeta 
-                        ? "ring-2 ring-blue-500 shadow-[6px_6px_0px_0px_rgba(37,99,235,0.15)]" 
-                        : ""
-                    }`}
-                  >
-                    <div>
-                      <span className="text-[17px] font-black text-neutral-800 tracking-tight font-sans">
-                        Upload Resume File
-                      </span>
-                      {uploadedResumeMeta ? (
-                        <p className="text-xs text-emerald-600 font-mono mt-1 flex items-center gap-1 font-bold">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                          {uploadedResumeMeta.name} ({(uploadedResumeMeta.size / 1024).toFixed(0)} KB)
-                        </p>
-                      ) : (
-                        <p className="text-xs text-neutral-500 mt-1 font-sans font-medium">Upload an existing PDF or DOCX resume to analyze and optimize.</p>
-                      )}
+              {currentStep === "resume" && (
+              <div id="step-resume-panel" className="max-w-5xl mx-auto space-y-6">
+                {resumeSelectionMode === "create" ? null : !hasResume ? (
+                  <div className="relative min-h-[65vh] flex flex-col items-center justify-center">
+                    {/* Center empty state box matching the wireframe precisely */}
+                    <div className="flex flex-col items-center justify-center py-16 px-8 bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] text-center max-w-xl w-full mx-auto my-6 transition-all duration-300">
+                      <div className="w-16 h-16 rounded-full border-2 border-dashed border-neutral-400 flex items-center justify-center mb-6">
+                        <FolderOpen className="w-8 h-8 text-black" />
+                      </div>
+                      <h3 className="text-xl font-black tracking-tight text-black uppercase font-mono">No Resumes Tailored</h3>
+                      <p className="text-sm text-neutral-650 mt-3 max-w-sm leading-relaxed font-semibold">
+                        Please click on 'Create New' to upload or create your resume. Once your resume is ready, you'll unlock all Auralis features.
+                      </p>
                     </div>
-                    <div className="flex-shrink-0 ml-4">
-                      <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all duration-200 ${
-                        uploadedResumeMeta ? "border-blue-500 bg-white" : "border-neutral-300"
-                      }`}>
-                        {uploadedResumeMeta && (
-                          <div className="w-3.5 h-3.5 rounded-full bg-blue-500" />
-                        )}
+
+                    {/* Floating Bottom Right Button styled and positioned precisely as shown in the wireframe */}
+                    <div className="absolute bottom-[-32px] right-[-32px] sm:bottom-[-44px] sm:right-[-44px]">
+                      <div className="group relative inline-block">
+                        <button
+                          id="btn-first-time-create-resume"
+                          onClick={() => {
+                            setChoiceModalPathway("upload");
+                            setIsChoiceModalOpen(true);
+                          }}
+                          className="px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border-2 border-transparent flex items-center gap-2"
+                          title="Start here to unlock Auralis."
+                        >
+                          <Plus className="w-4 h-4 text-white" strokeWidth={3} />
+                          <span>Create New</span>
+                        </button>
+                        <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block bg-black text-white text-[10px] font-bold uppercase tracking-wider py-1 px-2.5 rounded border border-white whitespace-nowrap shadow-[2px_2px_0px_0px_rgba(255,255,255,1)] pointer-events-none z-35 font-sans">
+                          Start here to unlock Auralis.
+                        </div>
                       </div>
                     </div>
-                  </button>
-
-                  {/* Create Resume Option Card */}
-                  <button
-                    id="btn-resume-setup-create-card"
-                    onClick={() => setResumeSelectionMode("create")}
-                    className={`p-6 sm:p-8 bg-white border-2 border-black rounded-2xl text-left transition-all duration-300 cursor-pointer flex items-center justify-between shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] ${
-                      resumeSelectionMode === "create" 
-                        ? "ring-2 ring-blue-500 shadow-[6px_6px_0px_0px_rgba(37,99,235,0.15)]" 
-                        : ""
-                    }`}
-                  >
-                    <div>
-                      <span className="text-[17px] font-black text-neutral-800 tracking-tight font-sans">
-                        Build Form Manually
-                      </span>
-                      <p className="text-xs text-neutral-500 mt-1 font-sans font-medium">Fill out necessary CV form fields manually and construct a modern profile.</p>
-                    </div>
-                    <div className="flex-shrink-0 ml-4">
-                      <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all duration-200 ${
-                        resumeSelectionMode === "create" ? "border-blue-500 bg-white" : "border-neutral-300"
-                      }`}>
-                        {resumeSelectionMode === "create" && (
-                          <div className="w-3.5 h-3.5 rounded-full bg-blue-500" />
-                        )}
+                  </div>
+                ) : (
+                  <div className="relative min-h-[65vh] flex flex-col justify-start items-start text-left p-2 animate-fadeIn">
+                    <div className="max-w-3xl mr-auto text-left -mt-2 -ml-2 w-full">
+                      <div 
+                        onClick={() => setShowResumePreviewModal(true)}
+                        className="w-full bg-white border-4 border-black rounded-3xl p-6 sm:p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] hover:shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] hover:-translate-x-0.5 hover:-translate-y-0.5 transition-all duration-200 cursor-pointer flex justify-between items-center"
+                      >
+                        <div className="space-y-2">
+                          <h3 className="text-xl font-black text-black tracking-tight font-sans">
+                            {uploadedResumeMeta ? uploadedResumeMeta.name : (activeResume.fullName ? `${activeResume.fullName}'s Resume` : "My Resume")}
+                          </h3>
+                          <p className="text-xs font-mono font-bold text-neutral-550 uppercase tracking-wider">
+                            Created: {localStorage.getItem("jd_resume_customizer_resume_created_at") || new Date().toLocaleDateString()}
+                          </p>
+                        </div>
+                        <div className="flex flex-col items-end gap-2 text-right">
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setShowDeleteConfirmModal(true);
+                            }}
+                            className="text-xs font-black uppercase tracking-widest text-rose-600 hover:text-rose-800 hover:underline transition-all cursor-pointer"
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </button>
-                </div>
+
+                    {/* Floating Create New button in bottom right */}
+                    <div className="absolute bottom-[-32px] right-[-32px] sm:bottom-[-44px] sm:right-[-44px]">
+                      <button
+                        id="btn-create-resume-setup-floating"
+                        onClick={() => {
+                          setChoiceModalPathway("upload");
+                          setIsChoiceModalOpen(true);
+                        }}
+                        className="px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border-2 border-transparent flex items-center gap-2"
+                      >
+                        <Plus className="w-4 h-4 text-white" strokeWidth={3} />
+                        <span>Create New</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Render Manual Build Form Fields Directly */}
                 {resumeSelectionMode === "create" && (
                   <div className="max-w-3xl bg-white border-2 border-black rounded-3xl p-6 sm:p-8 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] animate-fadeIn">
-                    <div className="mb-6 pb-4 border-b border-neutral-250 text-left">
-                      <h3 className="text-lg font-black text-neutral-900 tracking-tight">Let's create your resume</h3>
-                      <p className="text-xs text-neutral-550 mt-1 font-medium">Fill out the fields below to construct a robust, ATS-compliant professional profile.</p>
+                    <div className="mb-6 pb-4 border-b border-neutral-250 text-left flex justify-between items-center">
+                      <div>
+                        <h3 className="text-lg font-black text-neutral-900 tracking-tight">
+                          {hasResume ? "Edit your resume" : "Let's create your resume"}
+                        </h3>
+                        <p className="text-xs text-neutral-550 mt-1 font-medium font-sans">Fill out the fields below to construct a robust, ATS-compliant professional profile.</p>
+                      </div>
+                      {hasResume && (
+                        <button
+                          type="button"
+                          onClick={() => setResumeSelectionMode(null)}
+                          className="px-4 py-2 bg-neutral-150 hover:bg-neutral-200 text-neutral-700 hover:text-black rounded-lg text-xs font-bold transition cursor-pointer border-2 border-black"
+                        >
+                          Cancel
+                        </button>
+                      )}
                     </div>
 
                     <form
@@ -1975,6 +2434,7 @@ export default function App() {
                           showNotification("Please provide your full name.", "error");
                           return;
                         }
+                        const wasLocked = !isUnlocked;
                         setHasResume(true);
                         localStorage.setItem("jd_resume_customizer_has_resume", "true");
                         setIsUnlocked(true);
@@ -1982,8 +2442,15 @@ export default function App() {
                         setOnboardingChoice("done");
                         sessionStorage.setItem("auralis_onboarding_dismissed", "true");
                         localStorage.setItem("jd_resume_customizer_onboarding_done", "true");
+                        if (!localStorage.getItem("jd_resume_customizer_resume_created_at")) {
+                          localStorage.setItem("jd_resume_customizer_resume_created_at", new Date().toLocaleDateString());
+                        }
+                        setOriginalResume(activeResume);
                         showNotification("Custom resume generated and loaded successfully! Platform unlocked.", "success");
-                        setCurrentStep("dashboard");
+                        setResumeSelectionMode(null);
+                        if (wasLocked) {
+                          setCurrentStep("dashboard");
+                        }
                       }}
                       className="space-y-6 text-left"
                     >
@@ -2256,8 +2723,6 @@ export default function App() {
                     </form>
                   </div>
                 )}
-              </div>
-            )}
 
             {/* Modal Popup Overlay centered in the current workspace */}
             {isUploadModalOpen && (
@@ -2387,7 +2852,7 @@ export default function App() {
                             <div>
                               <p className="text-sm font-black text-rose-950 uppercase font-mono tracking-wide">Document Rejected</p>
                               <p className="text-[11px] text-neutral-700 font-semibold mt-1 font-sans leading-relaxed">
-                                {analysisResult.explanation}
+                                maybe you uploaded a wrong file. The scanned uploaded document isnt a resume. please check and retry again
                               </p>
                             </div>
                           </div>
@@ -3011,6 +3476,12 @@ export default function App() {
                   >
                     Executive Navy
                   </button>
+                  <button
+                    onClick={() => setSelectedStyle("two-column")}
+                    className={`px-3 py-1 rounded-lg transition ${selectedStyle === "two-column" ? "bg-white dark:bg-neutral-800 text-neutral-950 dark:text-white font-bold" : "text-neutral-400 hover:text-neutral-900"}`}
+                  >
+                    Original Two-Column
+                  </button>
                 </div>
               </div>
 
@@ -3127,8 +3598,8 @@ export default function App() {
             
             <div className="space-y-2">
               <h3 className="text-lg font-black tracking-tight text-black uppercase font-mono">Resume Setup Required</h3>
-              <p className="text-xs text-neutral-800 leading-relaxed font-bold">
-                To create a tailored resume please upload or create your resume first, you can do this by going to resume setup
+              <p className="text-xs text-neutral-800 leading-relaxed font-bold font-sans">
+                Please upload or create your resume first.
               </p>
             </div>
 
@@ -3146,6 +3617,1001 @@ export default function App() {
               <button
                 id="btn-alert-dismiss"
                 onClick={() => setShowNoResumeAlert(false)}
+                className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Resume Quick Preview Modal */}
+      {showResumePreviewModal && (
+        <div 
+          id="resume-preview-popup-backdrop"
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto animate-fadeIn"
+          onClick={() => setShowResumePreviewModal(false)}
+        >
+          <div 
+            id="resume-preview-popup-modal"
+            className="bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 sm:p-8 w-full max-w-2xl text-left relative animate-scaleIn flex flex-col max-h-[90vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close button */}
+            <button
+              id="btn-close-preview-popup"
+              onClick={() => setShowResumePreviewModal(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-lg border-2 border-transparent hover:border-black text-neutral-550 hover:text-black transition cursor-pointer"
+              title="Close Preview"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {/* Header */}
+            <div className="mb-4 text-left border-b-2 border-black pb-3">
+              <h3 className="text-lg font-black tracking-tight text-black uppercase font-mono">Original Resume Document</h3>
+              <p className="text-xs text-neutral-550 font-medium font-sans">Preview the original un-tailored resume details.</p>
+            </div>
+
+            {/* Body: scrollable preview */}
+            <div className="flex-1 overflow-y-auto pr-1 border border-neutral-250 rounded-xl mb-6 bg-neutral-50 p-4">
+              {uploadedPdfBase64 ? (
+                <iframe
+                  src={`data:application/pdf;base64,${uploadedPdfBase64}#toolbar=0&navpanes=0`}
+                  className="w-full h-[550px] border border-neutral-300 rounded-lg"
+                  title="Original Resume PDF"
+                />
+              ) : (
+                <ResumePreview resume={originalResume} templateStyle="two-column" />
+              )}
+            </div>
+
+            {/* Footer buttons */}
+            <div className="flex flex-col sm:flex-row gap-3 pt-2 justify-end border-t border-neutral-200 mt-2">
+              <button
+                id="btn-preview-popup-delete"
+                onClick={() => {
+                  setShowResumePreviewModal(false);
+                  setShowDeleteConfirmModal(true);
+                }}
+                className="px-5 py-3 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center gap-1.5"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Delete Resume</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirmModal && (
+        <div 
+          id="delete-resume-confirm-backdrop"
+          className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto animate-fadeIn"
+          onClick={() => setShowDeleteConfirmModal(false)}
+        >
+          <div 
+            id="delete-resume-confirm-modal"
+            className="bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 sm:p-8 w-full max-w-md text-center space-y-6 relative animate-scaleIn animate-fadeIn"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              id="btn-close-delete-confirm"
+              onClick={() => setShowDeleteConfirmModal(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-lg border-2 border-transparent hover:border-black text-neutral-550 hover:text-black transition cursor-pointer"
+              title="Cancel"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="mx-auto w-16 h-16 rounded-full border-2 border-black flex items-center justify-center bg-rose-100 text-rose-600">
+              <Trash2 className="w-8 h-8 animate-pulse" />
+            </div>
+            
+            <div className="space-y-2">
+              <h3 className="text-lg font-black tracking-tight text-black uppercase font-mono">Delete Resume?</h3>
+              <p className="text-xs text-neutral-800 leading-relaxed font-bold font-sans">
+                Are you sure you want to delete this resume? This will clear your profile and lock all tailored features.
+              </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3 pt-2 justify-center">
+              <button
+                id="btn-confirm-delete-yes"
+                onClick={() => {
+                  // Reset states
+                  setHasResume(false);
+                  localStorage.setItem("jd_resume_customizer_has_resume", "false");
+                  setIsUnlocked(false);
+                  sessionStorage.setItem("auralis_platform_unlocked", "false");
+                  
+                  // Clear metadata & files
+                  setUploadedResumeMeta(null);
+                  setUploadedPdfBase64(null);
+                  localStorage.removeItem("jd_resume_customizer_uploaded_resume_meta");
+                  localStorage.removeItem("jd_resume_customizer_uploaded_pdf_base64");
+                  localStorage.removeItem("jd_resume_customizer_resume_created_at");
+                  localStorage.removeItem("jd_resume_customizer_onboarding_done");
+                  sessionStorage.removeItem("auralis_onboarding_dismissed");
+                  
+                  // Reset active & original resume objects
+                  const emptyResume = {
+                    fullName: "",
+                    email: "",
+                    phone: "",
+                    linkedin: "",
+                    website: "",
+                    summary: "",
+                    workExperience: [],
+                    education: [],
+                    skills: []
+                  };
+                  setActiveResume(emptyResume);
+                  setOriginalResume(emptyResume);
+                  localStorage.removeItem("jd_resume_customizer_active_resume");
+                  localStorage.removeItem("jd_resume_customizer_original_resume");
+                  
+                  setShowDeleteConfirmModal(false);
+                  showNotification("Resume deleted successfully. Platform locked.", "info");
+                }}
+                className="px-5 py-3 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+              >
+                Yes, Delete
+              </button>
+              <button
+                id="btn-confirm-delete-cancel"
+                onClick={() => setShowDeleteConfirmModal(false)}
+                className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Choice Selector Modal */}
+      {isChoiceModalOpen && (
+        <div 
+          id="choice-resume-modal-backdrop" 
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto animate-fadeIn"
+          onClick={() => {
+            setIsChoiceModalOpen(false);
+            setTempFile(null);
+            setUploadError(null);
+            setAnalysisResult(null);
+          }}
+        >
+          <div 
+            id="choice-resume-modal" 
+            className="bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] max-w-xl w-full p-6 sm:p-8 animate-scaleUp text-left space-y-6 relative flex flex-col max-h-[90vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close button top right */}
+            <button
+              id="btn-close-choice-modal"
+              onClick={() => {
+                setIsChoiceModalOpen(false);
+                setTempFile(null);
+                setUploadError(null);
+                setAnalysisResult(null);
+              }}
+              className="absolute top-4 right-4 p-1.5 rounded-lg border-2 border-transparent hover:border-black text-neutral-550 hover:text-black transition cursor-pointer"
+              title="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {/* Header */}
+            <div className="space-y-1 text-left">
+              <h3 className="text-xl font-black font-sans tracking-tight text-neutral-900 leading-tight">
+                Setup your resume
+              </h3>
+              <p className="text-xs text-neutral-550 font-sans font-medium">
+                Choose how you want to add your resume to Auralis to unlock tailored features.
+              </p>
+            </div>
+
+            {/* Radio selectors (Only if not analyzing and no analysis result yet) */}
+            {!isAnalyzing && !analysisResult && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Upload Card */}
+                <button
+                  type="button"
+                  onClick={() => setChoiceModalPathway("upload")}
+                  className={`p-4 bg-white border-2 border-black rounded-xl text-left transition-all duration-150 cursor-pointer flex items-center justify-between shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] ${
+                    choiceModalPathway === "upload" ? "ring-2 ring-blue-500 bg-blue-50/5" : ""
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`w-5 h-5 rounded-full border-2 border-black flex items-center justify-center bg-white`}>
+                      {choiceModalPathway === "upload" && (
+                        <div className="w-2.5 h-2.5 rounded-full bg-[#2563eb]" />
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-xs font-black text-neutral-800 font-sans">Upload Resume</p>
+                      <p className="text-[10px] text-neutral-500 font-medium font-sans">PDF or DOCX file</p>
+                    </div>
+                  </div>
+                </button>
+
+                {/* Create Card (Disabled - Coming Soon) */}
+                <button
+                  type="button"
+                  disabled
+                  className="p-4 bg-neutral-50 border-2 border-dashed border-neutral-300 rounded-xl text-left flex items-center justify-between opacity-70 cursor-not-allowed"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-5 h-5 rounded-full border-2 border-neutral-300 flex items-center justify-center bg-neutral-100">
+                      {/* Empty circle since it cannot be selected */}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="text-xs font-black text-neutral-400 font-sans">Create Resume</p>
+                        <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[8px] font-black uppercase tracking-wider font-mono">
+                          Coming Soon
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-neutral-450 font-medium font-sans">Manual form builder will be available in a future release</p>
+                    </div>
+                  </div>
+                </button>
+              </div>
+            )}
+
+            {/* Scrollable Container for sub-views */}
+            <div className="flex-1 overflow-y-auto min-h-0 pr-1 space-y-4">
+              {/* PATHWAY 1: UPLOAD RESUME */}
+              {choiceModalPathway === "upload" && (
+                <div className="space-y-4">
+                  {/* Loader */}
+                  {isAnalyzing && (
+                    <div className="border-2 border-black rounded-2xl p-8 flex flex-col items-center justify-center space-y-4 bg-blue-50/10 min-h-[220px]">
+                      <div className="relative w-14 h-14 flex items-center justify-center">
+                        <Loader2 className="w-10 h-10 text-blue-600 animate-spin absolute" />
+                        <span className="w-4 h-4 rounded-full bg-blue-500 animate-pulse"></span>
+                      </div>
+                      <div className="space-y-1.5 text-center max-w-sm">
+                        <p className="text-sm font-black text-neutral-800 font-mono uppercase tracking-wide">Scanning structure...</p>
+                        <p className="text-[11px] text-neutral-550 font-sans leading-relaxed font-semibold">
+                          We are validating key profile details, scanning contact coordinates, and evaluating ATS keyword readiness.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Drag and Drop Zone */}
+                  {!isAnalyzing && !analysisResult && (
+                    <>
+                      <input
+                        id="choice-file-input"
+                        type="file"
+                        className="hidden"
+                        accept=".pdf,.docx"
+                        onChange={handleFileChange}
+                      />
+                      <label
+                        htmlFor="choice-file-input"
+                        className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all duration-300 cursor-pointer flex flex-col items-center justify-center space-y-4 relative min-h-[180px] ${
+                          dragActive 
+                            ? "border-blue-500 bg-blue-50/20 scale-[101%]" 
+                            : tempFile 
+                              ? "border-emerald-500 bg-emerald-50/10" 
+                              : "border-neutral-300 hover:border-neutral-500 bg-neutral-550/5 font-sans"
+                        }`}
+                        onDragEnter={handleDragOverOrEnter}
+                        onDragOver={handleDragOverOrEnter}
+                        onDragLeave={handleDragOverOrEnter}
+                        onDrop={handleFileDrop}
+                      >
+                        <div className="flex flex-col items-center space-y-3">
+                          <div className="w-12 h-12 rounded-full bg-blue-50 border-2 border-blue-500 flex items-center justify-center text-blue-500">
+                            <Upload className="w-5 h-5" />
+                          </div>
+                          <div className="space-y-1">
+                            <p className="text-sm font-bold text-neutral-800 tracking-tight font-sans">
+                              Drag and drop file here, or browse files
+                            </p>
+                            <p className="text-[10px] text-neutral-455 font-mono uppercase tracking-wider font-bold">
+                              Supported formats: PDF, DOCX
+                            </p>
+                          </div>
+                        </div>
+                      </label>
+                    </>
+                  )}
+
+                  {/* Analysis reports */}
+                  {!isAnalyzing && analysisResult && (
+                    <div className="space-y-5">
+                      {!analysisResult.isResume ? (
+                        <div className="border-2 border-rose-500 bg-rose-50/20 rounded-2xl p-5 space-y-3.5">
+                          <div className="flex items-start gap-3">
+                            <XCircle className="w-5 h-5 text-rose-500 mt-0.5 flex-shrink-0" />
+                            <div>
+                              <p className="text-sm font-black text-rose-950 uppercase font-mono tracking-wide">Document Rejected</p>
+                              <p className="text-[11px] text-neutral-750 font-semibold mt-1 font-sans leading-relaxed">
+                                maybe you uploaded a wrong file. The scanned uploaded document isnt a resume. please check and retry again
+                              </p>
+                            </div>
+                          </div>
+                          <div className="pt-1.5 flex justify-start">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setTempFile(null);
+                                setAnalysisResult(null);
+                              }}
+                              className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition cursor-pointer"
+                            >
+                              Try Another File
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          <div className="border-2 border-emerald-500 bg-emerald-50/20 rounded-2xl p-4 flex items-center justify-between gap-4">
+                            <div className="flex items-center gap-3">
+                              <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
+                              <div className="text-left">
+                                <span className="text-xs uppercase font-mono font-black text-emerald-800 tracking-wide">Verified Format</span>
+                                <p className="text-xs text-neutral-700 font-bold font-sans mt-0.5">
+                                  {tempFile?.name || "Uploaded Resume"}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="text-right flex-shrink-0">
+                              <span className="text-[10px] uppercase font-mono font-black text-neutral-500 font-bold">Completeness</span>
+                              <div className="flex items-baseline gap-0.5 mt-0.5">
+                                <span className="text-2xl font-black text-emerald-700 font-mono">{analysisResult.confidenceScore}</span>
+                                <span className="text-xs font-mono font-black text-neutral-550">/100</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="w-full bg-neutral-100 rounded-full h-2.5 border border-black overflow-hidden relative">
+                            <div 
+                              className="bg-emerald-550 h-full rounded-full transition-all duration-500"
+                              style={{ width: `${analysisResult.confidenceScore}%` }}
+                            />
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div className="border border-neutral-200 rounded-xl p-3.5 space-y-2 bg-neutral-50/50">
+                              <span className="text-[10px] uppercase font-mono font-black text-neutral-500 block">Candidate Profile Found</span>
+                              <div className="space-y-1 text-xs">
+                                <p className="font-bold text-neutral-800 truncate"><span className="text-neutral-500 font-medium font-sans">Name:</span> {analysisResult.detectedProfile.fullName || "Not Specified"}</p>
+                                <p className="font-bold text-neutral-800 truncate"><span className="text-neutral-500 font-medium font-sans">Email:</span> {analysisResult.detectedProfile.email || "Not Specified"}</p>
+                                <p className="font-bold text-neutral-800 truncate"><span className="text-neutral-500 font-medium font-sans">Phone:</span> {analysisResult.detectedProfile.phone || "Not Specified"}</p>
+                                <p className="font-bold text-neutral-800"><span className="text-neutral-500 font-medium font-sans">Skills:</span> <span className="px-1.5 py-0.5 bg-neutral-200 text-neutral-800 rounded font-mono text-[10px] font-black">{analysisResult.detectedProfile.skills?.length || 0} items</span></p>
+                              </div>
+                            </div>
+                            <div className="border border-neutral-200 rounded-xl p-3.5 space-y-2 bg-neutral-50/50">
+                              <span className="text-[10px] uppercase font-mono font-black text-neutral-500 block">Section Checklist</span>
+                              <div className="space-y-1.5 scroll-container max-h-32 overflow-y-auto">
+                                {analysisResult.missingItems.length === 0 ? (
+                                  <div className="flex items-center gap-1.5 text-xs text-emerald-600 font-black">
+                                    <Check className="w-4 h-4" />
+                                    <span>All Standard Sections Found</span>
+                                  </div>
+                                ) : (
+                                  analysisResult.missingItems.map((item, idx) => (
+                                    <div key={idx} className="flex items-center gap-1.5 text-xs text-neutral-600 font-semibold font-sans">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />
+                                      <span>Missing {item}</span>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {uploadError && !isAnalyzing && (
+                    <div className="flex items-center gap-2 p-3.5 rounded-xl border-2 border-rose-500 bg-rose-50 text-rose-950 text-xs font-bold animate-fadeIn font-sans">
+                      <AlertTriangle className="w-4 h-4 text-rose-500 flex-shrink-0" />
+                      <span>{uploadError}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* PATHWAY 2: CREATE RESUME */}
+              {choiceModalPathway === "create" && (
+                <div className="border-2 border-black bg-neutral-50/40 rounded-2xl p-5 space-y-3.5 text-left animate-fadeIn">
+                  <div className="flex items-start gap-3">
+                    <FileText className="w-6 h-6 text-blue-600 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-black text-neutral-900 uppercase font-mono tracking-wide">Manual Form Builder</p>
+                      <p className="text-xs text-neutral-650 font-medium font-sans mt-1 leading-relaxed">
+                        Start with a fresh template and fill out your professional timeline, skills, and contact credentials inside our guided builder stage.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer Buttons */}
+            <div className="flex flex-col sm:flex-row items-center sm:justify-end gap-3.5 pt-4 border-t border-neutral-100 font-sans">
+              <button
+                id="btn-choice-modal-cancel"
+                type="button"
+                disabled={isAnalyzing}
+                onClick={() => {
+                  setIsChoiceModalOpen(false);
+                  setTempFile(null);
+                  setUploadError(null);
+                  setAnalysisResult(null);
+                }}
+                className="w-full sm:w-auto px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition duration-150 cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              {choiceModalPathway === "upload" ? (
+                <button
+                  id="btn-choice-modal-import"
+                  type="button"
+                  disabled={isAnalyzing || !tempFile || (analysisResult !== null && !analysisResult.isResume)}
+                  onClick={handleContinueUpload}
+                  className={`w-full sm:w-auto px-5 py-3 font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition duration-150 border-2 ${
+                    (tempFile && !isAnalyzing && (analysisResult === null || analysisResult.isResume))
+                      ? "bg-[#2563eb] hover:bg-blue-600 text-white cursor-pointer border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                      : "bg-neutral-100 text-neutral-450 border-neutral-200 cursor-not-allowed"
+                  }`}
+                >
+                  {analysisResult ? "Import & Continue 🚀" : "Continue"}
+                </button>
+              ) : (
+                <button
+                  id="btn-choice-modal-builder"
+                  type="button"
+                  onClick={() => {
+                    handleStartFreshResume();
+                    setResumeSelectionMode("create");
+                    setIsChoiceModalOpen(false);
+                    showNotification("Manual builder initialized. Fill fields to build profile.", "info");
+                  }}
+                  className="w-full sm:w-auto px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition duration-150 border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] cursor-pointer"
+                >
+                  Start Fresh Builder 🚀
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* -------------------- TAILOR WIZARD MODAL -------------------- */}
+      {isTailorWizardOpen && (
+        <div 
+          id="tailor-wizard-modal-backdrop" 
+          className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto animate-fadeIn"
+          onClick={() => {
+            if (!tailorIsAnalyzing) {
+              setIsTailorWizardOpen(false);
+            }
+          }}
+        >
+          <div 
+            id="tailor-wizard-modal" 
+            className="bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 sm:p-8 w-full max-w-2xl text-left relative animate-scaleIn flex flex-col max-h-[90vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close button */}
+            {!tailorIsAnalyzing && (
+              <button
+                id="btn-close-tailor-wizard"
+                onClick={() => setIsTailorWizardOpen(false)}
+                className="absolute top-4 right-4 p-1.5 rounded-lg border-2 border-transparent hover:border-black text-neutral-550 hover:text-black transition cursor-pointer"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            )}
+
+            {/* Header */}
+            <div className="mb-4 text-left border-b-2 border-black pb-3">
+              <h3 className="text-lg font-black tracking-tight text-black uppercase font-mono">Tailor Resume for Job</h3>
+              <p className="text-xs text-neutral-555 font-medium font-sans">
+                {tailorWizardStep === 1 && "Step 1 of 4: Target details"}
+                {tailorWizardStep === 2 && "Step 2 of 4: Job Description"}
+                {tailorWizardStep === 3 && "Step 3 of 4: Match & Gap Analysis"}
+                {tailorWizardStep === 4 && "Step 4 of 4: Results & Download"}
+              </p>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto pr-1 space-y-4 min-h-0 py-2">
+              
+              {/* Loader */}
+              {tailorIsAnalyzing && (
+                <div className="flex flex-col items-center justify-center py-12 space-y-4 min-h-[300px]">
+                  <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
+                  <p className="text-sm font-black text-neutral-800 uppercase font-mono tracking-wide">
+                    {tailorWizardStep <= 2 ? "Analyzing job description..." : "Generating tailored resume..."}
+                  </p>
+                  <p className="text-xs text-neutral-555 text-center max-w-md font-semibold">
+                    We are querying the language model, evaluating keywords, and writing highly tailored, ATS-optimized descriptions.
+                  </p>
+                </div>
+              )}
+
+              {/* STEP 1: COMPANY NAME & CHOOSE RESUME */}
+              {!tailorIsAnalyzing && tailorWizardStep === 1 && (
+                <div className="space-y-4 text-left py-2 max-w-md mx-auto w-full">
+                  <div className="space-y-4">
+                    <div className="space-y-1">
+                      <label className="text-xs font-black text-neutral-800 uppercase tracking-wider font-mono">Company Name</label>
+                      <input 
+                        type="text"
+                        placeholder="e.g. Google, Vercel"
+                        value={tailorCompany}
+                        onChange={(e) => setTailorCompany(e.target.value)}
+                        className="w-full bg-white border-2 border-black rounded-xl p-3 text-xs font-semibold focus:outline-none focus:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                      />
+                    </div>
+                    
+                    {/* Choose Resume field */}
+                    {existingResumes.length === 1 ? (
+                      <div className="space-y-1">
+                        <label className="text-xs font-black text-neutral-800 uppercase tracking-wider font-mono">Choose Resume</label>
+                        <div className="w-full bg-neutral-50 border-2 border-dashed border-neutral-350 rounded-xl p-3 text-xs font-semibold text-neutral-600">
+                          {existingResumes[0].label}
+                        </div>
+                      </div>
+                    ) : existingResumes.length >= 2 ? (
+                      <div className="space-y-1">
+                        <label className="text-xs font-black text-neutral-800 uppercase tracking-wider font-mono">Choose Resume</label>
+                        <select
+                          value={tailorSelectedResumeKey}
+                          onChange={(e) => setTailorSelectedResumeKey(e.target.value)}
+                          className="w-full bg-white border-2 border-black rounded-xl p-3 text-xs font-semibold focus:outline-none focus:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] cursor-pointer"
+                        >
+                          {existingResumes.map((r) => (
+                            <option key={r.key} value={r.key}>
+                              {r.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 2: JOB DESCRIPTION INPUT METHOD */}
+              {!tailorIsAnalyzing && tailorWizardStep === 2 && (
+                <div className="space-y-4 text-left animate-fadeIn">
+                  {tailorJdMode === null ? (
+                    /* Phase A: Selection Cards */
+                    <div className="space-y-4 py-2">
+                      <div className="text-center mb-2">
+                        <label className="text-xs font-black text-neutral-800 uppercase tracking-wider font-mono block">
+                          How would you like to provide the Job Description?
+                        </label>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {/* Option 1: Paste JD */}
+                        <button
+                          type="button"
+                          onClick={() => setTailorJdMode("paste")}
+                          className="flex flex-col items-center justify-center p-6 bg-white border-2 border-black rounded-2xl shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all cursor-pointer text-center group"
+                        >
+                          <div className="w-12 h-12 rounded-full border-2 border-black flex items-center justify-center bg-blue-50 mb-3 group-hover:scale-110 transition-transform">
+                            <FileText className="w-6 h-6 text-[#2563eb]" />
+                          </div>
+                          <span className="text-xs font-black uppercase font-mono text-black">Paste Job Description</span>
+                          <span className="text-[10px] text-neutral-500 font-sans font-semibold mt-1">Copy and paste text from the job board</span>
+                        </button>
+
+                        {/* Option 2: Upload Screenshots */}
+                        <button
+                          type="button"
+                          onClick={() => setTailorJdMode("upload")}
+                          className="flex flex-col items-center justify-center p-6 bg-white border-2 border-black rounded-2xl shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all cursor-pointer text-center group"
+                        >
+                          <div className="w-12 h-12 rounded-full border-2 border-black flex items-center justify-center bg-blue-50 mb-3 group-hover:scale-110 transition-transform">
+                            <Image className="w-6 h-6 text-[#2563eb]" />
+                          </div>
+                          <span className="text-xs font-black uppercase font-mono text-black">Upload JD Screenshots</span>
+                          <span className="text-[10px] text-neutral-500 font-sans font-semibold mt-1">Upload 1-10 screenshot images of the post</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Phase B: Active Input Area */
+                    <div className="space-y-3 animate-fadeIn">
+                      {/* Method Header indicator */}
+                      <div className="flex justify-between items-center border-b border-neutral-200 pb-2 mb-1">
+                        <div className="flex items-center gap-1.5 text-xs font-black uppercase text-neutral-800 font-mono">
+                          {tailorJdMode === "paste" ? (
+                            <>
+                              <FileText className="w-4 h-4 text-[#2563eb]" />
+                              <span>Pasting Job Description</span>
+                            </>
+                          ) : (
+                            <>
+                              <Image className="w-4 h-4 text-[#2563eb]" />
+                              <span>Uploading Screenshots</span>
+                            </>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setTailorJdMode(null)}
+                          className="text-xs font-black uppercase tracking-wider text-[#2563eb] hover:underline cursor-pointer font-mono"
+                        >
+                          Change Method
+                        </button>
+                      </div>
+
+                      {/* Input container */}
+                      <div className="border-2 border-black rounded-2xl p-4 bg-neutral-50 space-y-4">
+                        {tailorJdMode === "paste" ? (
+                          <div className="space-y-1 text-left animate-fadeIn">
+                            <textarea
+                              placeholder="Paste the full job description text here..."
+                              value={tailorJdText}
+                              onChange={(e) => setTailorJdText(e.target.value)}
+                              className="w-full bg-white border-2 border-black rounded-xl p-3 text-xs font-semibold focus:outline-none h-40 focus:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                            />
+                          </div>
+                        ) : (
+                          <div className="space-y-3 text-left animate-fadeIn">
+                            <div className="flex items-center gap-3">
+                              <label className="px-4 py-2.5 bg-white border-2 border-black hover:bg-neutral-50 rounded-xl text-xs font-black uppercase tracking-wider transition cursor-pointer shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[1px_1px_0px_0px_rgba(0,0,0,1)]">
+                                Select Screenshots
+                                <input 
+                                  type="file"
+                                  accept="image/*"
+                                  multiple
+                                  className="hidden"
+                                  onChange={handleTailorImageUpload}
+                                />
+                              </label>
+                              <span className="text-xs text-neutral-550 font-bold font-sans">
+                                {tailorJdImages.length === 0 
+                                  ? "No screenshots uploaded yet (supports PNG, JPEG, WebP)" 
+                                  : `${tailorJdImages.length} / 10 image(s) loaded`}
+                              </span>
+                            </div>
+
+                            {tailorJdImages.length > 0 && (
+                              <div className="border border-neutral-250 rounded-xl bg-white p-3 space-y-2 max-h-40 overflow-y-auto animate-fadeIn">
+                                {tailorJdImages.map((img, idx) => (
+                                  <div key={idx} className="flex items-center justify-between p-2 rounded bg-neutral-50 border border-neutral-200">
+                                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                                      <img src={img} alt={`Screenshot ${idx + 1}`} className="w-8 h-8 object-cover rounded border border-black" />
+                                      <span className="text-xs font-semibold text-neutral-700 truncate">
+                                        {tailorJdImageNames[idx] || `Screenshot_${idx + 1}.png`}
+                                      </span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveTailorImage(idx)}
+                                      className="text-xs font-bold text-rose-600 hover:text-rose-800 uppercase tracking-wider hover:underline ml-2"
+                                    >
+                                      Remove
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* STEP 3: DISPLAY ANALYSIS & GAPS */}
+              {!tailorIsAnalyzing && tailorWizardStep === 3 && tailorAnalysisResult && (
+                <div className="space-y-5 text-left animate-fadeIn">
+                  {/* Grid showing Matches and Gaps */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {/* Matches */}
+                    <div className="border-2 border-emerald-500 bg-emerald-50/10 rounded-2xl p-4 space-y-2.5">
+                      <h4 className="text-xs font-black text-emerald-800 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4" /> Matched Skills & Keywords
+                      </h4>
+                      <div className="flex flex-wrap gap-1.5">
+                        {tailorAnalysisResult.matchedKeywords.map((kw, i) => (
+                          <span key={i} className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded text-[10px] font-bold">
+                            {kw}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Missing */}
+                    <div className="border-2 border-rose-500 bg-rose-50/10 rounded-2xl p-4 space-y-2.5">
+                      <h4 className="text-xs font-black text-rose-800 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                        <XCircle className="w-4 h-4" strokeWidth={2.5} /> Missing Keywords (ATS Gaps)
+                      </h4>
+                      <div className="flex flex-wrap gap-1.5">
+                        {tailorAnalysisResult.missingKeywords.map((kw, i) => (
+                          <span key={i} className="px-2 py-0.5 bg-rose-100 text-rose-800 rounded text-[10px] font-bold">
+                            {kw}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Suggested Improvements */}
+                  <div className="border-2 border-amber-500 bg-amber-50/10 rounded-2xl p-4 space-y-2.5">
+                    <h4 className="text-xs font-black text-amber-800 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4" /> Actionable Improvements
+                    </h4>
+                    <ul className="list-disc pl-5 text-xs text-neutral-700 space-y-1 font-semibold leading-relaxed">
+                      {tailorAnalysisResult.improvements.map((imp, i) => (
+                        <li key={i}>{imp}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 4: RESULTS (ATS SCORE & DOWNLOAD) */}
+              {!tailorIsAnalyzing && tailorWizardStep === 4 && (
+                <div className="space-y-6 text-center py-4 animate-fadeIn">
+                  {/* Radial/Card Score Display */}
+                  <div className="max-w-xs mx-auto border-4 border-black rounded-3xl p-6 bg-white shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] space-y-4">
+                    <span className="text-[10px] font-black text-neutral-500 uppercase tracking-widest font-mono">Tailored ATS Score</span>
+                    <div className="flex items-center justify-center">
+                      <div className="w-24 h-24 rounded-full border-4 border-black flex items-center justify-center bg-emerald-50 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
+                        <span className="text-3xl font-black text-emerald-800 font-mono">{tailoredAtsScore}%</span>
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <h4 className="text-xs font-black uppercase text-neutral-800 font-mono">ATS Screen Ready 🚀</h4>
+                      <p className="text-[10px] text-neutral-500 font-sans font-medium">Your resume now includes all required high-priority keywords and fits corporate screening criteria.</p>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-neutral-600 font-sans max-w-md mx-auto leading-relaxed font-semibold">
+                    The tailored copy is fully updated and saved as a new card on your **Tailored Resumes** dashboard. You can download the text-format resume immediately below.
+                  </p>
+                </div>
+              )}
+
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex flex-col sm:flex-row gap-3 pt-3 border-t border-neutral-100 mt-4 justify-end font-sans">
+              {!tailorIsAnalyzing && (
+                <>
+                  {tailorWizardStep === 1 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setIsTailorWizardOpen(false)}
+                        className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!tailorCompany.trim()) {
+                            showNotification("Please enter the company name.", "error");
+                            return;
+                          }
+                          setTailorWizardStep(2);
+                        }}
+                        className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                      >
+                        Continue
+                      </button>
+                    </>
+                  )}
+
+                  {tailorWizardStep === 2 && (
+                    <>
+                      {tailorJdMode === null ? (
+                        <button
+                          type="button"
+                          onClick={() => setTailorWizardStep(1)}
+                          className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                        >
+                          Back
+                        </button>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setTailorJdMode(null)}
+                            className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                          >
+                            Back
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleAnalyzeJD}
+                            className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                          >
+                            Scan & Analyze JD
+                          </button>
+                        </>
+                      )}
+                    </>
+                  )}
+
+                  {tailorWizardStep === 3 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setTailorWizardStep(2)}
+                        className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                      >
+                        Back
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleGenerateTailoredResume}
+                        className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                      >
+                        Generate Tailored Resume
+                      </button>
+                    </>
+                  )}
+
+                  {tailorWizardStep === 4 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={handleDownloadTailoredResume}
+                        className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 flex items-center justify-center gap-1.5"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>Download Tailored Resume</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsTailorWizardOpen(false)}
+                        className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                      >
+                        Done
+                      </button>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* Saved Version Preview Modal */}
+      {showSavedVersionPreviewModal && selectedSavedVersion && (
+        <div 
+          id="saved-version-preview-modal-backdrop"
+          className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto animate-fadeIn"
+          onClick={() => setShowSavedVersionPreviewModal(false)}
+        >
+          <div 
+            id="saved-version-preview-modal"
+            className="bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 sm:p-8 w-full max-w-2xl text-left relative animate-scaleIn flex flex-col max-h-[90vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close button */}
+            <button
+              id="btn-close-version-preview"
+              onClick={() => setShowSavedVersionPreviewModal(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-lg border-2 border-transparent hover:border-black text-neutral-550 hover:text-black transition cursor-pointer"
+              title="Close Preview"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {/* Header */}
+            <div className="mb-4 text-left border-b-2 border-black pb-3">
+              <h3 className="text-lg font-black tracking-tight text-black uppercase font-mono">Tailored Resume Preview</h3>
+              <p className="text-xs text-neutral-550 font-medium font-sans">
+                For {selectedSavedVersion.companyName} — {selectedSavedVersion.jobTitle}
+              </p>
+            </div>
+
+            {/* Body: scrollable preview */}
+            <div className="flex-1 overflow-y-auto pr-1 border border-neutral-250 rounded-xl mb-6 bg-neutral-50 p-4">
+              <ResumePreview resume={selectedSavedVersion.resumeData} templateStyle="two-column" />
+            </div>
+
+            {/* Footer buttons */}
+            <div className="flex flex-col sm:flex-row gap-3 pt-2 justify-end border-t border-neutral-200 mt-2 font-sans">
+              <button
+                type="button"
+                onClick={() => {
+                  handleDownloadSpecificResume(selectedSavedVersion);
+                }}
+                className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center gap-1.5"
+              >
+                <Download className="w-4 h-4" />
+                <span>Download TXT</span>
+              </button>
+              
+              <button
+                type="button"
+                onClick={() => {
+                  const prevActive = activeResume;
+                  setActiveResume(selectedSavedVersion.resumeData);
+                  setTimeout(() => {
+                    window.print();
+                    setActiveResume(prevActive);
+                  }, 100);
+                }}
+                className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+              >
+                Print / Save PDF
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSavedVersionPreviewModal(false);
+                  setVersionToDeleteId(selectedSavedVersion.id);
+                  setShowDeleteSavedVersionConfirmModal(true);
+                }}
+                className="px-5 py-3 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center gap-1.5"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Delete</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Specific Saved Version Confirmation Modal */}
+      {showDeleteSavedVersionConfirmModal && (
+        <div 
+          id="delete-version-confirm-backdrop"
+          className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto animate-fadeIn"
+        >
+          <div 
+            id="delete-version-confirm-modal"
+            className="bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 sm:p-8 w-full max-w-md text-center space-y-6 relative animate-scaleIn"
+          >
+            <div className="mx-auto w-16 h-16 rounded-full border-2 border-black flex items-center justify-center bg-rose-100 text-black">
+              <Trash2 className="w-8 h-8 text-rose-600 animate-pulse" />
+            </div>
+            
+            <div className="space-y-2">
+              <h3 className="text-lg font-black tracking-tight text-black uppercase font-mono">Are you sure?</h3>
+              <p className="text-xs text-neutral-800 leading-relaxed font-bold font-sans">
+                You are about to delete this tailored resume version. This action is irreversible.
+              </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3 pt-2 justify-center font-sans">
+              <button
+                id="btn-confirm-delete-version-yes"
+                onClick={() => {
+                  if (versionToDeleteId) {
+                    setSavedVersions(prev => prev.filter(v => v.id !== versionToDeleteId));
+                    showNotification("Tailored resume deleted successfully.", "info");
+                  }
+                  setShowDeleteSavedVersionConfirmModal(false);
+                  setVersionToDeleteId(null);
+                }}
+                className="px-5 py-3 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+              >
+                Yes, Delete
+              </button>
+              <button
+                id="btn-confirm-delete-version-cancel"
+                onClick={() => {
+                  setShowDeleteSavedVersionConfirmModal(false);
+                  setVersionToDeleteId(null);
+                }}
                 className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
               >
                 Cancel

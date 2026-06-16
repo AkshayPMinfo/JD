@@ -1,6 +1,67 @@
 import { ResumeStructure } from "./types";
 
 export const DEMO_RESUMES: Record<string, { label: string; data: ResumeStructure }> = {
+  akshay_anand: {
+    label: "Akshay Anand (Uploaded Resume)",
+    data: {
+      fullName: "Akshay Anand",
+      email: "Shivace.professional@gmail.com",
+      phone: "(+91) 8709227320",
+      linkedin: "linkedin.com/in/akshay-anand",
+      summary: "",
+      workExperience: [
+        {
+          id: "w-1",
+          role: "Associate Product Manager",
+          company: "Xfin.digital",
+          duration: "January, 2023 - October, 2024",
+          description: [
+            "Collaborated with cross functional teams to define and prioritize product features, ensuring alignment with business goals and customer needs.",
+            "Conducted market research and competitor analysis to identify opportunities for product differentiation and innovation.",
+            "Managed product backlogs, user stories, and sprint planning to ensure efficient project execution.",
+            "Coordinated with development teams using Agile methodologies to deliver high-quality product increments within tight deadlines."
+          ]
+        },
+        {
+          id: "w-2",
+          role: "Social Media Manager",
+          company: "Loudst, Mumbai",
+          duration: "March, 2018 - December, 2020",
+          description: [
+            "Managed content creation, scheduling, and publication for platforms like Facebook, Instagram, Twitter, and LinkedIn.",
+            "Developed and implemented comprehensive social media strategies, increasing brand visibility and engagement across platforms.",
+            "Created engaging, platform-specific content, including reels, stories, and posts, tailored to target demographics."
+          ]
+        },
+        {
+          id: "w-3",
+          role: "Campaign manager",
+          company: "It's Yummy, Pune",
+          duration: "May, 2014 - December, 2016",
+          description: [
+            "Developed and executed innovative marketing campaigns to increase customer footfall and boost revenue across multiple restaurant locations.",
+            "Managed a marketing budget, optimizing costs while maintaining high-impact campaigns."
+          ]
+        }
+      ],
+      education: [],
+      skills: [
+        "Product Management",
+        "Requirements Gathering",
+        "User Story Creation",
+        "MVP Definition",
+        "Feature Prioritization",
+        "Competitive Analysis",
+        "Agile Methodology",
+        "Stakeholder Management",
+        "Wireframing Tools (Figma)",
+        "Communication Skills",
+        "Team Collaboration",
+        "Customer journey mapping"
+      ],
+      languages: ["English", "Hindi"]
+    }
+  },
   software_grad: {
     label: "Software Engineer Graduate",
     data: {

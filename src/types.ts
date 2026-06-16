@@ -10,6 +10,12 @@ export interface ResumeWorkExperience {
   description: string[]; // List of bullet points
 }
 
+export interface ResumeProject {
+  id: string;
+  name: string;
+  description: string[]; // List of bullet points
+}
+
 export interface ResumeEducation {
   id: string;
   degree: string;
@@ -28,6 +34,9 @@ export interface ResumeStructure {
   workExperience: ResumeWorkExperience[];
   education: ResumeEducation[];
   skills: string[]; // List of skill tags
+  languages?: string[]; // List of languages
+  projects?: ResumeProject[];
+  certifications?: string[];
 }
 
 export interface SimplifiedJD {
@@ -41,7 +50,7 @@ export interface SimplifiedJD {
 export interface ResumeSuggestion {
   id: string;
   type: 'rewrite' | 'missing' | 'ats' | 'general';
-  section: 'summary' | 'experience' | 'skills' | 'education' | 'general';
+  section: 'summary' | 'experience' | 'skills' | 'education' | 'projects' | 'general';
   targetId?: string; // e.g. experience bullet ID or specific detail ID
   originalText?: string;
   suggestedText: string;

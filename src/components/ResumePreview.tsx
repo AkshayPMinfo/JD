@@ -4,12 +4,151 @@ import { Mail, Phone, Linkedin, Globe, Award, Briefcase, GraduationCap } from "l
 
 interface ResumePreviewProps {
   resume: ResumeStructure;
-  templateStyle: "classic" | "tech" | "executive";
+  templateStyle: "classic" | "tech" | "executive" | "two-column";
   id?: string;
 }
 
 export default function ResumePreview({ resume, templateStyle, id = "resume-preview-sheet" }: ResumePreviewProps) {
   const { fullName, email, phone, linkedin, website, summary, workExperience, education, skills } = resume;
+
+  // Render different styles based on template
+  if (templateStyle === "two-column") {
+    return (
+      <div
+        id={id}
+        className="bg-white text-gray-900 p-8 max-w-[820px] mx-auto text-sm print:p-0 print:border-none print:shadow-none"
+      >
+        {/* Header */}
+        <div className="flex justify-between items-start mb-8">
+          <div className="text-left">
+            <h1 className="text-4xl font-extrabold tracking-tight text-black font-serif">
+              {fullName || "Your Name"}
+            </h1>
+          </div>
+          <div className="text-right text-xs text-black font-sans space-y-1 font-bold">
+            {phone && <p>{phone}</p>}
+            {email && <p className="break-all max-w-[240px]">{email}</p>}
+            {linkedin && <p>{linkedin.replace(/https?:\/\/(www\.)?/, "")}</p>}
+            {website && <p>{website.replace(/https?:\/\/(www\.)?/, "")}</p>}
+          </div>
+        </div>
+
+        {/* Content columns */}
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-8 text-left">
+          {/* Left Column - Experience */}
+          <div className="md:col-span-8 space-y-6">
+            {workExperience && workExperience.length > 0 && (
+              <div>
+                <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
+                  Experience
+                </h2>
+                <div className="space-y-6">
+                  {workExperience.map((exp) => (
+                    <div key={exp.id} className="font-serif">
+                      <h3 className="font-bold text-black text-sm">
+                        <span>{exp.company}</span>
+                        <span className="text-gray-400 font-normal font-sans mx-1.5">—</span>
+                        <span className="italic font-bold text-neutral-800">{exp.role}</span>
+                      </h3>
+                      <p className="text-[11px] text-neutral-500 font-semibold font-sans mt-0.5">{exp.duration}</p>
+                      <ul className="list-disc pl-5 mt-2 space-y-1 text-xs text-neutral-700 leading-relaxed font-serif">
+                        {exp.description.map((bullet, idx) => (
+                          <li key={idx}>
+                            <span className="text-neutral-700">{bullet}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {resume.projects && resume.projects.length > 0 && (
+              <div>
+                <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
+                  Projects
+                </h2>
+                <div className="space-y-4">
+                  {resume.projects.map((proj) => (
+                    <div key={proj.id} className="font-serif">
+                      <h3 className="font-bold text-black text-sm">{proj.name}</h3>
+                      <ul className="list-disc pl-5 mt-1.5 space-y-1 text-xs text-neutral-700 leading-relaxed font-serif">
+                        {proj.description.map((bullet, idx) => (
+                          <li key={idx}>
+                            <span className="text-neutral-700">{bullet}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {education && education.length > 0 && (
+              <div>
+                <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
+                  Education
+                </h2>
+                <div className="space-y-4">
+                  {education.map((edu) => (
+                    <div key={edu.id} className="font-serif">
+                      <h3 className="font-bold text-black text-sm">{edu.degree}</h3>
+                      <p className="text-neutral-700 text-xs mt-0.5">{edu.school}</p>
+                      <p className="text-[10px] text-neutral-500 font-semibold font-sans mt-0.5">{edu.duration} {edu.gpa && <span>| GPA: {edu.gpa}</span>}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Right Column - Skills & Languages */}
+          <div className="md:col-span-4 space-y-6">
+            {skills && skills.length > 0 && (
+              <div>
+                <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
+                  Skills
+                </h2>
+                <ul className="list-disc pl-5 space-y-2 text-xs text-neutral-700 font-sans font-semibold">
+                  {skills.map((skill, index) => (
+                    <li key={index}>{skill}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {resume.certifications && resume.certifications.length > 0 && (
+              <div>
+                <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
+                  Certifications
+                </h2>
+                <ul className="list-disc pl-5 space-y-2 text-xs text-neutral-700 font-sans font-semibold">
+                  {resume.certifications.map((cert, index) => (
+                    <li key={index}>{cert}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {resume.languages && resume.languages.length > 0 && (
+              <div>
+                <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
+                  Languages
+                </h2>
+                <ul className="list-disc pl-5 space-y-2 text-xs text-neutral-700 font-sans font-semibold">
+                  {resume.languages.map((lang, index) => (
+                    <li key={index}>{lang}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Render different styles based on template
   if (templateStyle === "tech") {
@@ -108,9 +247,35 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
           </div>
         )}
 
+        {/* Projects Section */}
+        {resume.projects && resume.projects.length > 0 && (
+          <div className="mb-6">
+            <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-3 print:text-black">
+              // SELECTED PROJECTS
+            </h2>
+            <div className="space-y-4">
+              {resume.projects.map((proj) => (
+                <div key={proj.id} className="border-l-2 border-[#2a2a2e] pl-4 print:border-gray-200">
+                  <h3 className="font-bold text-gray-100 text-sm print:text-black">
+                    {proj.name}
+                  </h3>
+                  <ul className="list-none space-y-1.5 mt-2">
+                    {proj.description.map((bullet, idx) => (
+                      <li key={idx} className="text-xs text-gray-300 leading-relaxed print:text-gray-800 flex items-start gap-1">
+                        <span className="text-green-500 select-none">-</span>
+                        <span>{bullet}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Education Section */}
         {education && education.length > 0 && (
-          <div className="mb-4">
+          <div className="mb-6">
             <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-3 print:text-black">
               // EDUCATION
             </h2>
@@ -127,6 +292,23 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Certifications Section */}
+        {resume.certifications && resume.certifications.length > 0 && (
+          <div className="mb-4">
+            <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-3 print:text-black">
+              // CERTIFICATIONS
+            </h2>
+            <ul className="list-none space-y-1.5 text-xs text-gray-300 print:text-gray-800">
+              {resume.certifications.map((cert, index) => (
+                <li key={index} className="flex items-start gap-1">
+                  <span className="text-green-500 select-none">&#62;</span>
+                  <span>{cert}</span>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
       </div>
@@ -225,9 +407,32 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
           </div>
         )}
 
+        {/* Projects Section */}
+        {resume.projects && resume.projects.length > 0 && (
+          <div className="mb-6">
+            <h2 className="text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-3 print:text-black">
+              Key Projects
+            </h2>
+            <div className="space-y-4">
+              {resume.projects.map((proj) => (
+                <div key={proj.id}>
+                  <h3 className="text-sm font-bold text-[#111827]">{proj.name}</h3>
+                  <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed">
+                    {proj.description.map((bullet, idx) => (
+                      <li key={idx}>
+                        <span className="text-gray-700">{bullet}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Education Section */}
         {education && education.length > 0 && (
-          <div className="mb-4">
+          <div className="mb-6">
             <h2 className="text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-3 print:text-black">
               Education
             </h2>
@@ -242,6 +447,22 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                     {edu.school} {edu.gpa && <span className="text-[#1e3a8a] font-semibold">| GPA: {edu.gpa}</span>}
                   </p>
                 </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Certifications Section */}
+        {resume.certifications && resume.certifications.length > 0 && (
+          <div className="mb-4">
+            <h2 className="text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-3 print:text-black">
+              Certifications
+            </h2>
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {resume.certifications.map((cert, index) => (
+                <span key={index} className="bg-gray-50 text-gray-700 border border-gray-200 px-2.5 py-1 rounded text-xs font-semibold print:bg-gray-100 print:text-black">
+                  {cert}
+                </span>
               ))}
             </div>
           </div>
@@ -310,6 +531,29 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
         </div>
       )}
 
+      {/* Projects Section */}
+      {resume.projects && resume.projects.length > 0 && (
+        <div className="mb-6 font-sans">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-3 border-b border-gray-300 pb-0.5">
+            Projects
+          </h2>
+          <div className="space-y-4">
+            {resume.projects.map((proj) => (
+              <div key={proj.id}>
+                <div className="font-semibold text-gray-900 text-sm">{proj.name}</div>
+                <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed">
+                  {proj.description.map((bullet, idx) => (
+                    <li key={idx}>
+                      <span className="text-gray-700 font-normal">{bullet}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Skills Section */}
       {skills && skills.length > 0 && (
         <div className="mb-6 font-sans">
@@ -324,7 +568,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
 
       {/* Education Section */}
       {education && education.length > 0 && (
-        <div className="mb-4 font-sans">
+        <div className="mb-6 font-sans">
           <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-3 border-b border-gray-300 pb-0.5">
             Education
           </h2>
@@ -341,6 +585,18 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Certifications Section */}
+      {resume.certifications && resume.certifications.length > 0 && (
+        <div className="mb-4 font-sans">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-2 border-b border-gray-300 pb-0.5">
+            Certifications
+          </h2>
+          <p className="text-xs text-gray-700 leading-relaxed">
+            {resume.certifications.join(", ")}
+          </p>
         </div>
       )}
     </div>

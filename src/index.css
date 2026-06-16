@@ -70,8 +70,8 @@ body {
 .light-mode .card-bw,
 .light-mode .bg-slate-900,
 .light-mode .bg-slate-950,
-.light-mode .bg-[#0f172a],
-.light-mode .bg-[#0b0f19] {
+.light-mode .bg-\[\#0f172a\],
+.light-mode .bg-\[\#0b0f19\] {
   background-color: #ffffff !important;
   border-color: #eeeeee !important;
   color: #1a1c1c !important;
@@ -99,7 +99,7 @@ body {
 .light-mode .badge-bw,
 .light-mode .bg-slate-800,
 .light-mode .bg-slate-800\/80,
-.light-mode .bg-[#1e293b],
+.light-mode .bg-\[\#1e293b\],
 .light-mode .bg-indigo-950\/40,
 .light-mode .bg-emerald-950\/40 {
   background-color: #f3f3f3 !important;
@@ -147,8 +147,8 @@ body {
 }
 
 .dark-mode .card-bw,
-.dark-mode .bg-[#0f172a],
-.dark-mode .bg-[#0b0f19],
+.dark-mode .bg-\[\#0f172a\],
+.dark-mode .bg-\[\#0b0f19\],
 .dark-mode .bg-slate-900,
 .dark-mode .bg-slate-950 {
   background-color: #121212 !important;
@@ -175,7 +175,7 @@ body {
 .dark-mode .badge-bw,
 .dark-mode .bg-slate-800,
 .dark-mode .bg-slate-800\/80,
-.dark-mode .bg-[#1e293b],
+.dark-mode .bg-\[\#1e293b\],
 .dark-mode .bg-indigo-950\/40,
 .dark-mode .bg-emerald-950\/40 {
   background-color: #1c1c1c !important;
@@ -201,7 +201,7 @@ body {
 /* Purge any lingering neon colors or glowing accents in light mode */
 .light-mode .text-indigo-400,
 .light-mode .text-indigo-300,
-.light-mode .text-[#00ff66],
+.light-mode .text-\[\#00ff66\],
 .light-mode .text-emerald-400,
 .light-mode .text-blue-400 {
   color: #000000 !important;
@@ -210,7 +210,7 @@ body {
 .light-mode .border-indigo-500,
 .light-mode .border-emerald-500\/30,
 .light-mode .border-emerald-500\/20,
-.light-mode .border-indigo-500/20 {
+.light-mode .border-indigo-500\/20 {
   border-color: #dadada !important;
 }
 
@@ -223,8 +223,8 @@ body {
   background-color: #000000 !important;
 }
 
-.light-mode .bg-emerald-950/40,
-.light-mode .bg-indigo-950/40,
+.light-mode .bg-emerald-950\/40,
+.light-mode .bg-indigo-950\/40,
 .light-mode .text-emerald-300,
 .light-mode .text-indigo-300 {
   background-color: #f3f3f3 !important;
@@ -232,7 +232,7 @@ body {
 }
 
 /* Inner preview frame canvas is standard slate-100 */
-.light-mode .bg-[#111827] {
+.light-mode .bg-\[\#111827\] {
   background-color: #f3f3f3 !important;
 }
 

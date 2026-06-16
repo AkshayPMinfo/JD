@@ -24,7 +24,6 @@
     color: black !important;
     font-size: 11pt !important;
   }
-  /* Hide every element on the screen except the resume preview sheets */
   body > div:not(#root) {
     display: none !important;
   }
@@ -42,4 +41,209 @@
   .print-hide {
     display: none !important;
   }
+}
+
+/* ==========================================================================
+   MINIMALIST BLACK-AND-WHITE THEME ARCHITECTURE
+   ========================================================================== */
+
+/* Base overrides for modern instrument appearance */
+body {
+  font-family: var(--font-sans);
+  background-color: #f9f9f9;
+  color: #1a1c1c;
+}
+
+/* Light Mode Grayscale Rules */
+.light-mode {
+  background-color: #f9f9f9 !important;
+  color: #1a1c1c !important;
+}
+
+.light-mode #navbar-top {
+  background-color: rgba(255, 255, 255, 0.95) !important;
+  border-bottom-color: #eeeeee !important;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.02);
+}
+
+/* Containers list */
+.light-mode .card-bw,
+.light-mode .bg-slate-900,
+.light-mode .bg-slate-950,
+.light-mode .bg-[#0f172a],
+.light-mode .bg-[#0b0f19] {
+  background-color: #ffffff !important;
+  border-color: #eeeeee !important;
+  color: #1a1c1c !important;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.02);
+}
+
+/* Input Fields */
+.light-mode input,
+.light-mode textarea,
+.light-mode select,
+.light-mode .bg-slate-950 {
+  background-color: #ffffff !important;
+  color: #1a1c1c !important;
+  border-color: #dadada !important;
+}
+
+.light-mode input:focus,
+.light-mode textarea:focus,
+.light-mode select:focus {
+  border-color: #000000 !important;
+  box-shadow: 0 0 0 1px #000000 !important;
+}
+
+/* Badges / Chips */
+.light-mode .badge-bw,
+.light-mode .bg-slate-800,
+.light-mode .bg-slate-800\/80,
+.light-mode .bg-[#1e293b],
+.light-mode .bg-indigo-950\/40,
+.light-mode .bg-emerald-950\/40 {
+  background-color: #f3f3f3 !important;
+  border-color: #e2e2e2 !important;
+  color: #1a1c1c !important;
+}
+
+/* Primary and secondary custom buttons overrides */
+.light-mode button.btn-primary-bw,
+.light-mode .bg-indigo-600,
+.light-mode .bg-emerald-600 {
+  background-color: #000000 !important;
+  background-image: none !important;
+  color: #ffffff !important;
+  border-color: #000000 !important;
+}
+.light-mode button.btn-primary-bw:hover,
+.light-mode .bg-indigo-600:hover,
+.light-mode .bg-emerald-600:hover {
+  background-color: #222222 !important;
+  opacity: 0.95;
+}
+
+.light-mode button.btn-secondary-bw,
+.light-mode .bg-slate-850,
+.light-mode .bg-slate-950 {
+  background-color: #ffffff !important;
+  color: #1a1c1c !important;
+  border-color: #dadada !important;
+}
+.light-mode button.btn-secondary-bw:hover {
+  background-color: #f9f9f9 !important;
+}
+
+
+/* Dark Mode Grayscale Rules */
+.dark-mode {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+}
+
+.dark-mode #navbar-top {
+  background-color: rgba(10, 10, 10, 0.95) !important;
+  border-bottom-color: #222222 !important;
+}
+
+.dark-mode .card-bw,
+.dark-mode .bg-[#0f172a],
+.dark-mode .bg-[#0b0f19],
+.dark-mode .bg-slate-900,
+.dark-mode .bg-slate-950 {
+  background-color: #121212 !important;
+  border-color: #222222 !important;
+  color: #ffffff !important;
+}
+
+.dark-mode input,
+.dark-mode textarea,
+.dark-mode select,
+.dark-mode .bg-slate-950 {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+  border-color: #333333 !important;
+}
+
+.dark-mode input:focus,
+.dark-mode textarea:focus,
+.dark-mode select:focus {
+  border-color: #ffffff !important;
+  box-shadow: 0 0 0 1px #ffffff !important;
+}
+
+.dark-mode .badge-bw,
+.dark-mode .bg-slate-800,
+.dark-mode .bg-slate-800\/80,
+.dark-mode .bg-[#1e293b],
+.dark-mode .bg-indigo-950\/40,
+.dark-mode .bg-emerald-950\/40 {
+  background-color: #1c1c1c !important;
+  border-color: #333333 !important;
+  color: #ffffff !important;
+}
+
+.dark-mode button.btn-primary-bw,
+.dark-mode .bg-indigo-600,
+.dark-mode .bg-emerald-600 {
+  background-color: #ffffff !important;
+  background-image: none !important;
+  color: #000000 !important;
+  border-color: #ffffff !important;
+  font-weight: 600 !important;
+}
+.dark-mode button.btn-primary-bw:hover,
+.dark-mode .bg-indigo-600:hover,
+.dark-mode .bg-emerald-600:hover {
+  background-color: #e5e5e5 !important;
+}
+
+/* Purge any lingering neon colors or glowing accents in light mode */
+.light-mode .text-indigo-400,
+.light-mode .text-indigo-300,
+.light-mode .text-[#00ff66],
+.light-mode .text-emerald-400,
+.light-mode .text-blue-400 {
+  color: #000000 !important;
+}
+
+.light-mode .border-indigo-500,
+.light-mode .border-emerald-500\/30,
+.light-mode .border-emerald-500\/20,
+.light-mode .border-indigo-500/20 {
+  border-color: #dadada !important;
+}
+
+.light-mode .from-indigo-600,
+.light-mode .from-emerald-500,
+.light-mode .to-indigo-500,
+.light-mode .to-indigo-600,
+.light-mode .via-teal-500 {
+  background-image: none !important;
+  background-color: #000000 !important;
+}
+
+.light-mode .bg-emerald-950/40,
+.light-mode .bg-indigo-950/40,
+.light-mode .text-emerald-300,
+.light-mode .text-indigo-300 {
+  background-color: #f3f3f3 !important;
+  color: #444748 !important;
+}
+
+/* Inner preview frame canvas is standard slate-100 */
+.light-mode .bg-[#111827] {
+  background-color: #f3f3f3 !important;
+}
+
+/* Score display in B&W */
+.light-mode .bg-clip-text {
+  background-clip: unset !important;
+  -webkit-background-clip: unset !important;
+  color: #000000 !important;
+}
+.dark-mode .bg-clip-text {
+  background-clip: unset !important;
+  -webkit-background-clip: unset !important;
+  color: #ffffff !important;
 }

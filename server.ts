@@ -3,6 +3,7 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import mammoth from "mammoth";
 
 dotenv.config();
 
@@ -360,6 +361,166 @@ Format your response strictly as JSON matching this schema:
   } catch (error: any) {
     console.error("Error in ats-audit:", error);
     res.status(500).json({ error: error.message || "An error occurred while scanning the resume" });
+  }
+});
+
+// 4. Analyze Uploaded Resume API (supports PDF direct ingestion and DOCX text extraction)
+app.post("/api/analyze-uploaded-resume", async (req, res) => {
+  try {
+    const { fileName, fileType, base64Data } = req.body;
+    if (!base64Data) {
+      res.status(400).json({ error: "Base64 file data is required" });
+      return;
+    }
+
+    const ai = getAI();
+    let isPdf = false;
+    if (fileType === "application/pdf" || (fileName && fileName.toLowerCase().endsWith(".pdf"))) {
+      isPdf = true;
+    }
+
+    let parsedResponseText = "";
+
+    if (isPdf) {
+      const pdfPart = {
+        inlineData: {
+          mimeType: "application/pdf",
+          data: base64Data
+        }
+      };
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: [
+          pdfPart,
+          {
+            text: `You are an expert recruiter and applicant tracking system (ATS) scanner.
+Analyze the attached resume and deliver an evaluation strictly in JSON.
+First, verify if this document is actually a professional resume. (A cover letter, template with placeholder names, food recipe, empty text, or random non-resume file counts as isResume: false).
+Identify if any critical standard resume sections or standard contact info are missing.
+Extract key candidate profile information if available. Ensure detectedProfile includes any found experiences and skills.
+
+Return a JSON payload with exactly this schema:
+{
+  "isResume": boolean,
+  "confidenceScore": number, // 0 to 100 on how complete and professional the resume is
+  "missingItems": string[], // e.g. ["Professional Summary", "LinkedIn profile link", "Dates for work experiences", "Education details"]
+  "actionableImprovements": string[], // List of 3-5 specific bullet points for the candidate to improve their resume
+  "detectedProfile": {
+    "fullName": string,
+    "email": string,
+    "phone": string,
+    "summary": string,
+    "skills": string[]
+  },
+  "explanation": string
+}`
+          }
+        ],
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              isResume: { type: Type.BOOLEAN },
+              confidenceScore: { type: Type.INTEGER },
+              missingItems: { type: Type.ARRAY, items: { type: Type.STRING } },
+              actionableImprovements: { type: Type.ARRAY, items: { type: Type.STRING } },
+              detectedProfile: {
+                type: Type.OBJECT,
+                properties: {
+                  fullName: { type: Type.STRING },
+                  email: { type: Type.STRING },
+                  phone: { type: Type.STRING },
+                  summary: { type: Type.STRING },
+                  skills: { type: Type.ARRAY, items: { type: Type.STRING } }
+                },
+                required: ["fullName", "email", "phone", "summary", "skills"]
+              },
+              explanation: { type: Type.STRING }
+            },
+            required: ["isResume", "confidenceScore", "missingItems", "actionableImprovements", "detectedProfile", "explanation"]
+          }
+        }
+      });
+      parsedResponseText = response.text || "";
+    } else {
+      // It's a DOCX/Word document or other file
+      // Extract text using mammoth
+      let docText = "";
+      try {
+        const buffer = Buffer.from(base64Data, "base64");
+        const extractResult = await mammoth.extractRawText({ buffer });
+        docText = extractResult.value || "";
+      } catch (err: any) {
+        console.error("Mammoth extraction error:", err);
+        throw new Error("Failed to read text from Word document. Please ensure it is not password-protected.");
+      }
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: `You are an expert recruiter and applicant tracking system (ATS) scanner.
+Analyze the following resume text extracted from a Word document and deliver an evaluation strictly in JSON.
+First, verify if this text is actually from a professional resume. (A cover letter, template with placeholder names, food recipe, empty text, or random non-resume text counts as isResume: false).
+Identify if any critical standard resume sections or standard contact info are missing.
+Extract key candidate profile information if available.
+
+Resume Text:
+"""
+${docText}
+"""
+
+Return a JSON payload with exactly this schema:
+{
+  "isResume": boolean,
+  "confidenceScore": number, // 0 to 100 on how complete and professional the resume is
+  "missingItems": string[], // e.g. ["Professional Summary", "LinkedIn profile link", "Dates for work experiences", "Education details"]
+  "actionableImprovements": string[], // List of 3-5 specific bullet points for the candidate to improve their resume
+  "detectedProfile": {
+    "fullName": string,
+    "email": string,
+    "phone": string,
+    "summary": string,
+    "skills": string[]
+  },
+  "explanation": string
+}`,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              isResume: { type: Type.BOOLEAN },
+              confidenceScore: { type: Type.INTEGER },
+              missingItems: { type: Type.ARRAY, items: { type: Type.STRING } },
+              actionableImprovements: { type: Type.ARRAY, items: { type: Type.STRING } },
+              detectedProfile: {
+                type: Type.OBJECT,
+                properties: {
+                  fullName: { type: Type.STRING },
+                  email: { type: Type.STRING },
+                  phone: { type: Type.STRING },
+                  summary: { type: Type.STRING },
+                  skills: { type: Type.ARRAY, items: { type: Type.STRING } }
+                },
+                required: ["fullName", "email", "phone", "summary", "skills"]
+              },
+              explanation: { type: Type.STRING }
+            },
+            required: ["isResume", "confidenceScore", "missingItems", "actionableImprovements", "detectedProfile", "explanation"]
+          }
+        }
+      });
+      parsedResponseText = response.text || "";
+    }
+
+    if (!parsedResponseText) {
+      throw new Error("No response from AI analyzer.");
+    }
+
+    res.json(JSON.parse(parsedResponseText.trim()));
+  } catch (error: any) {
+    console.error("Error in analyze-uploaded-resume:", error);
+    res.status(500).json({ error: error.message || "An error occurred while analyzing the resume file." });
   }
 });
 

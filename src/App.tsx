@@ -60,18 +60,32 @@ import { supabaseAuth, supabaseData } from "./lib/supabase";
 
 export default function App() {
   const onboardingFileInputRef = useRef<HTMLInputElement>(null);
+  type AppUser = { email: string; name: string; isGuest?: boolean };
 
   // --------- STATE ---------
   // User Authentication
-  const [currentUser, setCurrentUser] = useState<{ email: string; name: string } | null>(() => {
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(() => {
+    const guest = sessionStorage.getItem("jd_resume_customizer_guest_user");
+    if (guest) return JSON.parse(guest);
     const saved = localStorage.getItem("jd_resume_customizer_user");
-    if (saved) return JSON.parse(saved);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed?.isGuest || parsed?.email === "guest@fresher.io") {
+        localStorage.removeItem("jd_resume_customizer_user");
+        return null;
+      }
+      return parsed;
+    }
     return null;
   });
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authConfirmPassword, setAuthConfirmPassword] = useState("");
   const [isSignUp, setIsSignUp] = useState(false);
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
+  const [isResetPassword, setIsResetPassword] = useState(false);
+  const [resetAccessToken, setResetAccessToken] = useState<string | null>(null);
+  const [authMessage, setAuthMessage] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
   const SUPABASE_SESSION_STORAGE_KEY = "jd_resume_customizer_supabase_session";
 
   // Resume Setup
@@ -138,7 +152,20 @@ export default function App() {
   // MVP Step Wizard: 'auth' | 'dashboard' | 'resume'
   const [currentStep, setCurrentStep] = useState<"auth" | "dashboard" | "resume">(() => {
     const savedUser = localStorage.getItem("jd_resume_customizer_user");
-    if (!savedUser) return "auth";
+    const guestUser = sessionStorage.getItem("jd_resume_customizer_guest_user");
+    if (!savedUser && !guestUser) return "auth";
+    if (savedUser) {
+      try {
+        const parsed = JSON.parse(savedUser);
+        if (parsed?.isGuest || parsed?.email === "guest@fresher.io") {
+          localStorage.removeItem("jd_resume_customizer_user");
+          return "auth";
+        }
+      } catch {
+        localStorage.removeItem("jd_resume_customizer_user");
+        return "auth";
+      }
+    }
     const hasRes = localStorage.getItem("jd_resume_customizer_has_resume") === "true";
     return hasRes ? "dashboard" : "resume";
   });
@@ -434,12 +461,56 @@ export default function App() {
 
   // --------- PERSISTENCE HELPERS ---------
   useEffect(() => {
-    if (currentUser) {
+    if (currentUser?.isGuest) {
+      sessionStorage.setItem("jd_resume_customizer_guest_user", JSON.stringify(currentUser));
+      localStorage.removeItem("jd_resume_customizer_user");
+    } else if (currentUser) {
       localStorage.setItem("jd_resume_customizer_user", JSON.stringify(currentUser));
+      sessionStorage.removeItem("jd_resume_customizer_guest_user");
     } else {
       localStorage.removeItem("jd_resume_customizer_user");
+      sessionStorage.removeItem("jd_resume_customizer_guest_user");
     }
   }, [currentUser]);
+
+  useEffect(() => {
+    const handleRecoveryLink = () => {
+      const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+      const queryParams = new URLSearchParams(window.location.search);
+      const error = hashParams.get("error_description") || queryParams.get("error_description") || hashParams.get("error") || queryParams.get("error");
+      const type = hashParams.get("type") || queryParams.get("type");
+      const accessToken = hashParams.get("access_token") || queryParams.get("access_token");
+
+      if (error) {
+        setCurrentStep("auth");
+        setIsSignUp(false);
+        setIsForgotPassword(true);
+        setIsResetPassword(false);
+        setResetAccessToken(null);
+        setAuthMessage({ type: "error", message: "This reset link is invalid or expired. Please request a new password reset link." });
+        window.history.replaceState({}, document.title, window.location.pathname);
+        return;
+      }
+
+      if (type === "recovery" && accessToken) {
+        setCurrentStep("auth");
+        setCurrentUser(null);
+        setIsSignUp(false);
+        setIsForgotPassword(false);
+        setIsResetPassword(true);
+        setResetAccessToken(accessToken);
+        setAuthPassword("");
+        setAuthConfirmPassword("");
+        setAuthMessage({ type: "info", message: "Enter a new password to finish resetting your account." });
+        localStorage.removeItem(SUPABASE_SESSION_STORAGE_KEY);
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    };
+
+    handleRecoveryLink();
+    window.addEventListener("hashchange", handleRecoveryLink);
+    return () => window.removeEventListener("hashchange", handleRecoveryLink);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("jd_resume_customizer_active_resume", JSON.stringify(activeResume));
@@ -462,6 +533,29 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem("jd_resume_customizer_versions", JSON.stringify(savedVersions));
+    const session = getStoredSupabaseSession();
+    if (!session?.accessToken || !session.user?.id || !currentUser) return;
+    savedVersions.forEach((version) => {
+      supabaseData.upsertTailoredResume(session.accessToken, {
+        id: version.id,
+        user_id: session.user.id,
+        companyName: version.companyName,
+        jobTitle: version.jobTitle,
+        savedAt: version.savedAt,
+        resumeData: version.resumeData,
+        originalResumeData: version.originalResumeData,
+        originalJobDescription: version.originalJobDescription,
+        appliedSuggestionsCount: version.appliedSuggestionsCount,
+        atsScore: version.atsScore,
+        matchPercentage: version.matchPercentage,
+        improvements: version.improvements,
+        missingRequirements: version.missingRequirements,
+        missingQualifications: version.missingQualifications,
+        diffAdded: version.diffAdded,
+        diffModified: version.diffModified,
+        diffUnchanged: version.diffUnchanged,
+      }).catch((error) => console.warn("Supabase tailored resume save failed:", error));
+    });
   }, [savedVersions]);
 
   useEffect(() => {
@@ -488,6 +582,22 @@ export default function App() {
   // Persist savedUserResumes whenever it changes
   useEffect(() => {
     localStorage.setItem("jd_resume_customizer_saved_resumes", JSON.stringify(savedUserResumes));
+    const session = getStoredSupabaseSession();
+    if (session?.accessToken && session.user?.id && currentUser) {
+      savedUserResumes.forEach((resume) => {
+        supabaseData.upsertResume(session.accessToken, {
+          id: resume.id,
+          user_id: session.user.id,
+          name: resume.name,
+          data: resume.data,
+          fileBase64: resume.fileBase64 || resume.pdfBase64,
+          originalFileName: resume.originalFileName,
+          fileType: resume.fileType,
+          extractedText: resume.extractedText,
+          uploadedAt: resume.uploadedAt,
+        }).catch((error) => console.warn("Supabase resume save failed:", error));
+      });
+    }
     // Keep hasResume in sync
     const nowHas = savedUserResumes.length > 0;
     if (nowHas !== hasResume) {
@@ -531,6 +641,11 @@ export default function App() {
 
   // Helper: delete a resume by id from the library
   const handleDeleteResumeById = (id: string) => {
+    const session = getStoredSupabaseSession();
+    if (session?.accessToken) {
+      supabaseData.deleteResume(session.accessToken, id)
+        .catch((error) => console.warn("Supabase resume delete failed:", error));
+    }
     setSavedUserResumes(prev => {
       const remaining = prev.filter(r => r.id !== id);
       if (remaining.length === 0) {
@@ -569,16 +684,59 @@ export default function App() {
   // Auth simulation
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAuthMessage(null);
     const email = authEmail.trim();
+    if (isResetPassword) {
+      if (!resetAccessToken) {
+        setAuthMessage({ type: "error", message: "This reset link is invalid or expired. Please request a new password reset link." });
+        return;
+      }
+      if (!authPassword.trim()) {
+        setAuthMessage({ type: "error", message: "Password cannot be empty." });
+        return;
+      }
+      if (authPassword !== authConfirmPassword) {
+        setAuthMessage({ type: "error", message: "Passwords do not match." });
+        return;
+      }
+      try {
+        await supabaseAuth.updatePassword(resetAccessToken, authPassword);
+        setIsResetPassword(false);
+        setIsForgotPassword(false);
+        setIsSignUp(false);
+        setResetAccessToken(null);
+        setAuthPassword("");
+        setAuthConfirmPassword("");
+        setAuthMessage({ type: "success", message: "Password updated successfully. Please sign in." });
+        showNotification("Password updated successfully. Please sign in.", "success");
+      } catch (error: any) {
+        setAuthMessage({ type: "error", message: error.message || "Could not update password. Please try again." });
+      }
+      return;
+    }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setAuthMessage({ type: "error", message: "Please provide a valid email address." });
       showNotification("Please provide a valid email address.", "error");
       return;
     }
+    if (isForgotPassword) {
+      try {
+        const resetUrl = `${window.location.origin}${window.location.pathname}`;
+        await supabaseAuth.sendPasswordReset(email, resetUrl);
+        setAuthMessage({ type: "success", message: "If an account exists for this email, a password reset link has been sent." });
+        showNotification("If an account exists for this email, a password reset link has been sent.", "success");
+      } catch (error: any) {
+        setAuthMessage({ type: "error", message: error.message || "Could not send reset link. Please try again." });
+      }
+      return;
+    }
     if (!authPassword.trim()) {
+      setAuthMessage({ type: "error", message: "Password cannot be empty." });
       showNotification("Password cannot be empty.", "error");
       return;
     }
     if (isSignUp && authPassword !== authConfirmPassword) {
+      setAuthMessage({ type: "error", message: "Passwords do not match." });
       showNotification("Passwords do not match.", "error");
       return;
     }
@@ -597,17 +755,20 @@ export default function App() {
         id: session.user.id,
         full_name: name,
       });
+      await loadPersistedSupabaseData(session);
       setCurrentUser(userObj);
-      const hasRes = localStorage.getItem("jd_resume_customizer_has_resume") === "true";
-      setCurrentStep(hasRes ? "dashboard" : "resume");
+      setCurrentStep("dashboard");
+      setAuthMessage(null);
       showNotification(isSignUp ? "Account created successfully." : `Welcome, ${name}! Your resume dashboard is ready.`, "success");
     } catch (error: any) {
       if (String(error.message || "").startsWith("Account created.")) {
         setIsSignUp(false);
         setAuthConfirmPassword("");
+        setAuthMessage({ type: "info", message: error.message });
         showNotification(error.message, "info");
         return;
       }
+      setAuthMessage({ type: "error", message: error.message || "Authentication failed. Please try again." });
       showNotification(error.message || "Authentication failed. Please try again.", "error");
     }
   };
@@ -621,6 +782,76 @@ export default function App() {
       return null;
     }
   };
+
+  async function loadPersistedSupabaseData(session: { accessToken: string; user: { id: string; email: string } }) {
+    try {
+      const [resumeRows, tailoredRows] = await Promise.all([
+        supabaseData.listResumes(session.accessToken).catch((error) => {
+          console.warn("Supabase resume load failed:", error);
+          return [];
+        }),
+        supabaseData.listTailoredResumes(session.accessToken).catch((error) => {
+          console.warn("Supabase tailored resume load failed:", error);
+          return [];
+        }),
+      ]);
+
+      const resumes: SavedResume[] = (resumeRows || []).map((row: any) => ({
+        id: row.id,
+        name: row.name,
+        data: row.resume_data,
+        fileBase64: row.file_base64 || undefined,
+        originalFileName: row.original_file_name || undefined,
+        fileType: row.file_type || undefined,
+        extractedText: row.extracted_text || undefined,
+        uploadedAt: row.uploaded_at || row.created_at,
+      }));
+
+      const versions: SavedResumeVersion[] = (tailoredRows || []).map((row: any) => ({
+        id: row.id,
+        companyName: row.company_name,
+        jobTitle: row.job_title,
+        savedAt: row.saved_at,
+        resumeData: row.resume_data,
+        originalResumeData: row.original_resume_data || undefined,
+        originalJobDescription: row.original_job_description || undefined,
+        appliedSuggestionsCount: row.applied_suggestions_count || 0,
+        atsScore: row.ats_score ?? undefined,
+        matchPercentage: row.match_percentage ?? undefined,
+        improvements: row.improvements || [],
+        missingRequirements: row.missing_requirements || [],
+        missingQualifications: row.missing_qualifications || [],
+        diffAdded: row.diff_added || [],
+        diffModified: row.diff_modified || [],
+        diffUnchanged: row.diff_unchanged || [],
+      }));
+
+      if (resumes.length > 0) {
+        setSavedUserResumes(resumes);
+        setActiveResumeId(resumes[0].id);
+        setActiveResume(resumes[0].data);
+        setOriginalResume(resumes[0].data);
+        setHasResume(true);
+        setIsUnlocked(true);
+        sessionStorage.setItem("auralis_platform_unlocked", "true");
+        localStorage.setItem("jd_resume_customizer_has_resume", "true");
+      } else {
+        setSavedUserResumes([]);
+        setHasResume(false);
+        localStorage.setItem("jd_resume_customizer_has_resume", "false");
+      }
+      setSavedVersions(versions);
+    } catch (error) {
+      console.warn("Supabase data restore failed:", error);
+    }
+  }
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const session = getStoredSupabaseSession();
+    if (!session?.accessToken || !session.user?.id) return;
+    loadPersistedSupabaseData(session);
+  }, [currentUser?.email]);
 
   const handleOpenTailorWizard = () => {
     setTailorCompany("");
@@ -1606,10 +1837,10 @@ WORK EXPERIENCE
         id: session.user.id,
         full_name: name,
       });
-      const userObj = { email, name };
+      await loadPersistedSupabaseData(session);
+      const userObj = { email, name, isGuest: true };
       setCurrentUser(userObj);
-      const hasRes = localStorage.getItem("jd_resume_customizer_has_resume") === "true";
-      setCurrentStep(hasRes ? "dashboard" : "resume");
+      setCurrentStep("dashboard");
       showNotification("Continuing as Guest.", "success");
     } catch (error: any) {
       showNotification(error.message || "Guest login failed. Please try again.", "error");
@@ -2164,6 +2395,11 @@ WORK EXPERIENCE
 
   const handleDeleteVersion = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    const session = getStoredSupabaseSession();
+    if (session?.accessToken) {
+      supabaseData.deleteTailoredResume(session.accessToken, id)
+        .catch((error) => console.warn("Supabase tailored resume delete failed:", error));
+    }
     setSavedVersions(prev => prev.filter(v => v.id !== id));
     showNotification("Version removed from management.", "info");
   };
@@ -2922,40 +3158,71 @@ WORK EXPERIENCE
    
                     <div className="relative flex py-1 items-center">
                       <div className="flex-grow border-t border-neutral-300"></div>
-                      <span className="flex-shrink mx-4 text-neutral-500 text-[10px] uppercase font-mono font-bold tracking-widest">{isSignUp ? "create account" : "sign in"}</span>
+                      <span className="flex-shrink mx-4 text-neutral-500 text-[10px] uppercase font-mono font-bold tracking-widest">
+                        {isResetPassword ? "reset password" : isForgotPassword ? "forgot password" : isSignUp ? "create account" : "sign in"}
+                      </span>
                       <div className="flex-grow border-t border-neutral-300"></div>
                     </div>
    
                     <form onSubmit={handleAuth} className="space-y-4 text-left">
-                      <h2 className="text-xl font-black text-black tracking-tight">{isSignUp ? "Create Account" : "Sign In"}</h2>
+                      <h2 className="text-xl font-black text-black tracking-tight">
+                        {isResetPassword ? "Reset Password" : isForgotPassword ? "Forgot Password" : isSignUp ? "Create Account" : "Sign In"}
+                      </h2>
    
-                      <div>
-                        <label className="block text-[10px] text-black uppercase font-mono mb-1.5 font-bold">Email Address</label>
-                        <input
-                          id="input-auth-email"
-                          type="email"
-                          required
-                          placeholder="name@university.edu"
-                          value={authEmail}
-                          onChange={(e) => setAuthEmail(e.target.value)}
-                          className="w-full pl-3 pr-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
-                        />
-                      </div>
+                      {!isResetPassword && (
+                        <div>
+                          <label className="block text-[10px] text-black uppercase font-mono mb-1.5 font-bold">Email Address</label>
+                          <input
+                            id="input-auth-email"
+                            type="email"
+                            required
+                            placeholder="name@university.edu"
+                            value={authEmail}
+                            onChange={(e) => {
+                              setAuthEmail(e.target.value);
+                              setAuthMessage(null);
+                            }}
+                            className="w-full pl-3 pr-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
+                          />
+                        </div>
+                      )}
    
-                      <div>
-                        <label className="block text-[10px] text-black uppercase font-mono mb-1.5 font-bold">Password</label>
+                      {!isForgotPassword && (
+                        <div>
+                        <label className="block text-[10px] text-black uppercase font-mono mb-1.5 font-bold">{isResetPassword ? "New Password" : "Password"}</label>
                         <input
                           id="input-auth-password"
                           type="password"
                           required
                           placeholder="••••••••"
                           value={authPassword}
-                          onChange={(e) => setAuthPassword(e.target.value)}
+                          onChange={(e) => {
+                            setAuthPassword(e.target.value);
+                            setAuthMessage(null);
+                          }}
                           className="w-full pl-3 pr-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
                         />
-                      </div>
+                          {!isSignUp && !isResetPassword && (
+                            <button
+                              id="btn-forgot-password"
+                              type="button"
+                              onClick={() => {
+                                setIsForgotPassword(true);
+                                setIsSignUp(false);
+                                setIsResetPassword(false);
+                                setAuthPassword("");
+                                setAuthConfirmPassword("");
+                                setAuthMessage(null);
+                              }}
+                              className="mt-2 text-[11px] text-black hover:text-neutral-700 underline font-semibold"
+                            >
+                              Forgot Password?
+                            </button>
+                          )}
+                        </div>
+                      )}
 
-                      {isSignUp && (
+                      {(isSignUp || isResetPassword) && (
                         <div>
                           <label className="block text-[10px] text-black uppercase font-mono mb-1.5 font-bold">Confirm Password</label>
                           <input
@@ -2964,9 +3231,27 @@ WORK EXPERIENCE
                             required
                             placeholder="••••••••"
                             value={authConfirmPassword}
-                            onChange={(e) => setAuthConfirmPassword(e.target.value)}
+                            onChange={(e) => {
+                              setAuthConfirmPassword(e.target.value);
+                              setAuthMessage(null);
+                            }}
                             className="w-full pl-3 pr-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
                           />
+                        </div>
+                      )}
+
+                      {authMessage && (
+                        <div
+                          id="auth-inline-message"
+                          className={`rounded-xl border px-3 py-2 text-xs font-semibold leading-relaxed ${
+                            authMessage.type === "error"
+                              ? "border-rose-300 bg-rose-50 text-rose-800"
+                              : authMessage.type === "info"
+                                ? "border-blue-300 bg-blue-50 text-blue-800"
+                                : "border-emerald-300 bg-emerald-50 text-emerald-800"
+                          }`}
+                        >
+                          {authMessage.message}
                         </div>
                       )}
    
@@ -2975,23 +3260,32 @@ WORK EXPERIENCE
                         type="submit"
                         className="w-full py-2.5 bg-black hover:bg-neutral-800 text-white text-xs font-semibold rounded-lg transition mt-4 cursor-pointer shadow-md"
                       >
-                        {isSignUp ? "Create Account" : "Sign In"}
+                        {isResetPassword ? "Update Password" : isForgotPassword ? "Send Reset Link" : isSignUp ? "Create Account" : "Sign In"}
                       </button>
    
                       <div className="text-center mt-3">
-                        {!isSignUp && (
+                        {!isSignUp && !isForgotPassword && !isResetPassword && (
                           <p className="text-xs text-neutral-600 mb-2 font-semibold">Don't have an account?</p>
                         )}
                         <button
                           id="btn-toggle-auth-mode"
                           type="button"
                           onClick={() => {
-                            setIsSignUp(!isSignUp);
+                            if (isForgotPassword || isResetPassword) {
+                              setIsForgotPassword(false);
+                              setIsResetPassword(false);
+                              setIsSignUp(false);
+                              setResetAccessToken(null);
+                            } else {
+                              setIsSignUp(!isSignUp);
+                            }
+                            setAuthPassword("");
                             setAuthConfirmPassword("");
+                            setAuthMessage(null);
                           }}
                           className="text-xs text-black hover:text-neutral-800 underline font-semibold transition"
                         >
-                          {isSignUp ? "Already have an account? Sign In" : "Create Account"}
+                          {isForgotPassword || isResetPassword ? "Back to Sign In" : isSignUp ? "Already have an account? Sign In" : "Create Account"}
                         </button>
                       </div>
                     </form>
@@ -3312,6 +3606,7 @@ WORK EXPERIENCE
                   }
                 }
                 localStorage.removeItem(SUPABASE_SESSION_STORAGE_KEY);
+                sessionStorage.removeItem("jd_resume_customizer_guest_user");
                 setCurrentUser(null);
                 setCurrentStep("auth");
                 setIsUnlocked(false);
@@ -6261,6 +6556,11 @@ WORK EXPERIENCE
                 id="btn-confirm-delete-version-yes"
                 onClick={() => {
                   if (versionToDeleteId) {
+                    const session = getStoredSupabaseSession();
+                    if (session?.accessToken) {
+                      supabaseData.deleteTailoredResume(session.accessToken, versionToDeleteId)
+                        .catch((error) => console.warn("Supabase tailored resume delete failed:", error));
+                    }
                     setSavedVersions(prev => {
                       const updated = prev.filter(v => v.id !== versionToDeleteId);
                       localStorage.setItem("jd_resume_customizer_versions", JSON.stringify(updated));

@@ -35,8 +35,50 @@ create table if not exists public.jd_job_descriptions (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.jd_resumes (
+  id text primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null,
+  resume_data jsonb not null,
+  file_base64 text,
+  original_file_name text,
+  file_type text,
+  extracted_text text,
+  uploaded_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.jd_tailored_resumes (
+  id text primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  company_name text not null,
+  job_title text not null,
+  saved_at text not null,
+  resume_data jsonb not null,
+  original_resume_data jsonb,
+  original_job_description text,
+  applied_suggestions_count integer not null default 0,
+  ats_score integer,
+  match_percentage integer,
+  improvements jsonb not null default '[]'::jsonb,
+  missing_requirements jsonb not null default '[]'::jsonb,
+  missing_qualifications jsonb not null default '[]'::jsonb,
+  diff_added jsonb not null default '[]'::jsonb,
+  diff_modified jsonb not null default '[]'::jsonb,
+  diff_unchanged jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create index if not exists jd_job_descriptions_user_created_idx
   on public.jd_job_descriptions (user_id, created_at desc);
+
+create index if not exists jd_resumes_user_created_idx
+  on public.jd_resumes (user_id, created_at desc);
+
+create index if not exists jd_tailored_resumes_user_created_idx
+  on public.jd_tailored_resumes (user_id, created_at desc);
 
 do $$
 begin
@@ -78,11 +120,25 @@ begin
     before update on public.jd_job_descriptions
     for each row execute function public.jd_set_updated_at();
   end if;
+
+  if not exists (select 1 from pg_trigger where tgname = 'jd_resumes_set_updated_at') then
+    create trigger jd_resumes_set_updated_at
+    before update on public.jd_resumes
+    for each row execute function public.jd_set_updated_at();
+  end if;
+
+  if not exists (select 1 from pg_trigger where tgname = 'jd_tailored_resumes_set_updated_at') then
+    create trigger jd_tailored_resumes_set_updated_at
+    before update on public.jd_tailored_resumes
+    for each row execute function public.jd_set_updated_at();
+  end if;
 end $$;
 
 alter table public.jd_users enable row level security;
 alter table public.jd_profiles enable row level security;
 alter table public.jd_job_descriptions enable row level security;
+alter table public.jd_resumes enable row level security;
+alter table public.jd_tailored_resumes enable row level security;
 
 do $$
 begin
@@ -211,6 +267,128 @@ begin
   if not exists (
     select 1 from pg_policies
     where schemaname = 'public'
+      and tablename = 'jd_resumes'
+      and policyname = 'jd_resumes_select_own'
+  ) then
+    create policy "jd_resumes_select_own"
+    on public.jd_resumes for select
+    to authenticated
+    using (auth.uid() = user_id);
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'jd_resumes'
+      and policyname = 'jd_resumes_insert_own'
+  ) then
+    create policy "jd_resumes_insert_own"
+    on public.jd_resumes for insert
+    to authenticated
+    with check (auth.uid() = user_id);
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'jd_resumes'
+      and policyname = 'jd_resumes_update_own'
+  ) then
+    create policy "jd_resumes_update_own"
+    on public.jd_resumes for update
+    to authenticated
+    using (auth.uid() = user_id)
+    with check (auth.uid() = user_id);
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'jd_resumes'
+      and policyname = 'jd_resumes_delete_own'
+  ) then
+    create policy "jd_resumes_delete_own"
+    on public.jd_resumes for delete
+    to authenticated
+    using (auth.uid() = user_id);
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'jd_tailored_resumes'
+      and policyname = 'jd_tailored_resumes_select_own'
+  ) then
+    create policy "jd_tailored_resumes_select_own"
+    on public.jd_tailored_resumes for select
+    to authenticated
+    using (auth.uid() = user_id);
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'jd_tailored_resumes'
+      and policyname = 'jd_tailored_resumes_insert_own'
+  ) then
+    create policy "jd_tailored_resumes_insert_own"
+    on public.jd_tailored_resumes for insert
+    to authenticated
+    with check (auth.uid() = user_id);
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'jd_tailored_resumes'
+      and policyname = 'jd_tailored_resumes_update_own'
+  ) then
+    create policy "jd_tailored_resumes_update_own"
+    on public.jd_tailored_resumes for update
+    to authenticated
+    using (auth.uid() = user_id)
+    with check (auth.uid() = user_id);
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'jd_tailored_resumes'
+      and policyname = 'jd_tailored_resumes_delete_own'
+  ) then
+    create policy "jd_tailored_resumes_delete_own"
+    on public.jd_tailored_resumes for delete
+    to authenticated
+    using (auth.uid() = user_id);
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
       and tablename = 'jd_job_descriptions'
       and policyname = 'jd_job_descriptions_insert_own'
   ) then
@@ -251,4 +429,3 @@ begin
     using (auth.uid() = user_id);
   end if;
 end $$;
-

@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from "react";
+import JSZip from "jszip";
 import {
   FileText,
   Sparkles,
@@ -50,10 +51,12 @@ import {
   SimplifiedJD,
   ResumeSuggestion,
   ATSCheckResult,
-  SavedResumeVersion
+  SavedResumeVersion,
+  SavedResume
 } from "./types";
 import { DEMO_RESUMES, DEMO_JDS } from "./demoData";
 import ResumePreview from "./components/ResumePreview";
+import { supabaseAuth, supabaseData } from "./lib/supabase";
 
 export default function App() {
   const onboardingFileInputRef = useRef<HTMLInputElement>(null);
@@ -63,15 +66,13 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<{ email: string; name: string } | null>(() => {
     const saved = localStorage.getItem("jd_resume_customizer_user");
     if (saved) return JSON.parse(saved);
-    // Frictionless bypass: greet first-time user directly as Guest on the dashboard
-    const guestUser = { email: "guest@fresher.io", name: "Guest Candidate" };
-    localStorage.setItem("jd_resume_customizer_user", JSON.stringify(guestUser));
-    return guestUser;
+    return null;
   });
   const [authEmail, setAuthEmail] = useState("");
-  const [authName, setAuthName] = useState("");
   const [authPassword, setAuthPassword] = useState("");
+  const [authConfirmPassword, setAuthConfirmPassword] = useState("");
   const [isSignUp, setIsSignUp] = useState(false);
+  const SUPABASE_SESSION_STORAGE_KEY = "jd_resume_customizer_supabase_session";
 
   // Resume Setup
   const [hasResume, setHasResume] = useState<boolean>(() => {
@@ -134,8 +135,10 @@ export default function App() {
   const [targetCompany, setTargetCompany] = useState("Vercel Systems");
   const [targetRole, setTargetRole] = useState("Junior Frontend Engineer");
 
-  // Step Wizard: 'auth' | 'dashboard' | 'resume' | 'jd' | 'tailor' | 'saves'
-  const [currentStep, setCurrentStep] = useState<"auth" | "dashboard" | "resume" | "jd" | "tailor" | "saves">(() => {
+  // MVP Step Wizard: 'auth' | 'dashboard' | 'resume'
+  const [currentStep, setCurrentStep] = useState<"auth" | "dashboard" | "resume">(() => {
+    const savedUser = localStorage.getItem("jd_resume_customizer_user");
+    if (!savedUser) return "auth";
     const hasRes = localStorage.getItem("jd_resume_customizer_has_resume") === "true";
     return hasRes ? "dashboard" : "resume";
   });
@@ -143,6 +146,7 @@ export default function App() {
   // AI Analysis states
   const [isSimplifyingJd, setIsSimplifyingJd] = useState(false);
   const [simplifiedJd, setSimplifiedJd] = useState<SimplifiedJD | null>(null);
+  const [diffTab, setDiffTab] = useState<"added" | "modified" | "unchanged">("added");
 
   const [isTailoring, setIsTailoring] = useState(false);
   const [suggestions, setSuggestions] = useState<ResumeSuggestion[]>([]);
@@ -163,7 +167,7 @@ export default function App() {
   const [notifications, setNotifications] = useState([
     { id: 1, text: "Welcome to Auralis! Ready to tailor your first resume.", time: "Just now", read: false },
     { id: 2, text: "Pro tip: Achieve >85% ATS score to pass corporate screening easily.", time: "1 hour ago", read: true },
-    { id: 3, text: "No recruitment files currently tailored. Get started in Voice Lab.", time: "5 hours ago", read: true }
+    { id: 3, text: "No recruitment files currently tailored. Start from Tailored Resumes.", time: "5 hours ago", read: true }
   ]);
 
   // Mandatory Prerequisite Check for resume creation/uploading to unlock Auralis
@@ -195,6 +199,154 @@ export default function App() {
   // Warning when trying to tailor without having a resume setup
   const [showNoResumeAlert, setShowNoResumeAlert] = useState(false);
 
+  // Multi-resume library — persisted to localStorage
+  const [savedUserResumes, setSavedUserResumes] = useState<SavedResume[]>(() => {
+    const saved = localStorage.getItem("jd_resume_customizer_saved_resumes");
+    if (saved) {
+      try { return JSON.parse(saved); } catch { return []; }
+    }
+    return [];
+  });
+
+  const isDuplicateResume = (name: string, fileBase64?: string, data?: ResumeStructure): boolean => {
+    return savedUserResumes.some(r => {
+      // 1. Compare uploaded file base64 if both have it (legacy pdfBase64 included)
+      const existingFileBase64 = r.fileBase64 || r.pdfBase64;
+      if (fileBase64 && existingFileBase64 && existingFileBase64 === fileBase64) {
+        return true;
+      }
+      // 2. Compare file names
+      if (r.name.toLowerCase() === name.toLowerCase()) {
+        return true;
+      }
+      // 3. Compare JSON data structure (fullName + email + phone) if data is provided
+      if (data && r.data && data.fullName && data.email) {
+        const nameMatch = r.data.fullName.trim().toLowerCase() === data.fullName.trim().toLowerCase();
+        const emailMatch = r.data.email.trim().toLowerCase() === data.email.trim().toLowerCase();
+        const phoneMatch = (r.data.phone || "").trim() === (data.phone || "").trim();
+        if (nameMatch && emailMatch && phoneMatch) {
+          return true;
+        }
+      }
+      return false;
+    });
+  };
+
+  const isStoredUploadedResumeObviouslyInvalid = (resume: SavedResume): boolean => {
+    const isUploadedDocument = resume.fileType === "pdf" || resume.fileType === "docx" || !!resume.fileBase64 || !!resume.pdfBase64;
+    if (!isUploadedDocument || !resume.extractedText) return false;
+
+    const text = resume.extractedText.toLowerCase();
+    if (/\b(invoice|receipt|bank statement|statement of account|transaction|balance|amount due|payment|vendor|chapter|session agenda|session kickoff|lecture notes|meeting notes|minutes of meeting)\b/i.test(text)) {
+      return true;
+    }
+
+    const indicators = [
+      /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(text) || /\+?\(?[0-9]{1,4}\)?[-.\s]?[0-9]{3,4}[-.\s]?[0-9]{3,4}/.test(text),
+      /\b(education|university|college|school|degree|bachelor|master|phd|gpa|coursework|academic)\b/i.test(text),
+      /\b(experience|work history|employment|internship|responsibilities|achievements|professional experience)\b/i.test(text),
+      /\b(skills|technical skills|technologies|tools|competencies|expertise|programming languages)\b/i.test(text),
+      /\b(projects|portfolio|personal projects|academic projects|repositories|github)\b/i.test(text),
+      /\b(certifications?|licenses?|awards?|credentials?)\b/i.test(text),
+    ].filter(Boolean).length;
+
+    return indicators < 3;
+  };
+
+  const formatFriendlyError = (errMessage: string | null): string => {
+    if (!errMessage) return "";
+    const trimmed = errMessage.trim();
+    
+    try {
+      if (trimmed.startsWith("{")) {
+        const parsed = JSON.parse(trimmed);
+        if (parsed.error && parsed.error.message) {
+          return parsed.error.message;
+        }
+        if (parsed.message) {
+          return parsed.message;
+        }
+      }
+    } catch (e) {
+      // Ignore JSON parsing
+    }
+
+    if (
+      trimmed.includes("experiencing high demand") || 
+      trimmed.includes("UNAVAILABLE") || 
+      trimmed.includes("503") ||
+      trimmed.includes("Resource has been exhausted") ||
+      trimmed.includes("429")
+    ) {
+      return "The AI model is currently experiencing high demand. Please try again in a few moments.";
+    }
+
+    if (trimmed.includes("API key not valid") || trimmed.includes("API_KEY_INVALID") || trimmed.includes("403")) {
+      return "The AI API key configuration is invalid. Please contact support or check settings.";
+    }
+
+    if (trimmed.includes("safety") || trimmed.includes("blocked by safety")) {
+      return "The request was flagged by the AI safety filters. Please review the content.";
+    }
+
+    return errMessage;
+  };
+
+  const formatResumeCreatedDate = (dateValue: string): string => {
+    const date = new Date(dateValue);
+    if (Number.isNaN(date.getTime())) return "Unknown date";
+    return date.toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric"
+    }).replace(",", "");
+  };
+
+  const isLikelyResumeHolderName = (value?: string): boolean => {
+    const name = value?.trim();
+    if (!name) return false;
+    if (name.length < 2 || name.length > 70) return false;
+    if (/[.!?]/.test(name)) return false;
+    if (/\b(customer|needs|summary|experience|education|skills|projects|resume|invoice|statement|chapter|agenda|session|introduction)\b/i.test(name)) return false;
+
+    const words = name.split(/\s+/).filter(Boolean);
+    if (words.length < 1 || words.length > 5) return false;
+
+    return words.every(word =>
+      /^[A-Za-z][A-Za-z'-]*$/.test(word) &&
+      (word === word.toUpperCase() || /^[A-Z][a-zA-Z'-]*$/.test(word))
+    );
+  };
+
+  const cleanResumeFileNameForCard = (value?: string): string => {
+    return (value || "")
+      .replace(/\.[^/.]+$/, "")
+      .replace(/[_-]+/g, " ")
+      .replace(/\b(resume|cv|curriculum vitae|profile)\b/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+
+  const getResumeCardDisplayName = (resume: SavedResume): string => {
+    const holderName = resume.data?.fullName?.trim();
+    if (isLikelyResumeHolderName(holderName)) return holderName;
+
+    const originalFileName = cleanResumeFileNameForCard(resume.originalFileName);
+    if (originalFileName) return originalFileName;
+
+    const savedName = resume.name?.trim();
+    const cleanSavedName = cleanResumeFileNameForCard(savedName);
+    if (cleanSavedName && savedName !== holderName && !/[.!?]/.test(cleanSavedName)) return cleanSavedName;
+
+    return "Uploaded Resume";
+  };
+
+  const [activeResumeId, setActiveResumeId] = useState<string | null>(() => {
+    return localStorage.getItem("jd_resume_customizer_active_resume_id");
+  });
+  // Which resume to show in the delete confirmation dialog
+  const [resumeToDeleteId, setResumeToDeleteId] = useState<string | null>(null);
+
   // Tailoring Wizard States
   const [isTailorWizardOpen, setIsTailorWizardOpen] = useState(false);
   const [tailorWizardStep, setTailorWizardStep] = useState<1 | 2 | 3 | 4>(1);
@@ -205,14 +357,26 @@ export default function App() {
   const [tailorJdMode, setTailorJdMode] = useState<"paste" | "upload" | null>(null);
   const [tailorJdImages, setTailorJdImages] = useState<string[]>([]);
   const [tailorJdImageNames, setTailorJdImageNames] = useState<string[]>([]);
+  const [tailorJdFileBase64, setTailorJdFileBase64] = useState<string | null>(null);
+  const [tailorJdFileName, setTailorJdFileName] = useState<string | null>(null);
+  const [tailorJdFileType, setTailorJdFileType] = useState<string | null>(null);
   const [tailorIsAnalyzing, setTailorIsAnalyzing] = useState(false);
+  const [tailorProgress, setTailorProgress] = useState(0);
+  const [tailorProcessingStage, setTailorProcessingStage] = useState("Reading Resume");
+  const tailorProgressTimerRef = useRef<number | null>(null);
+  const [tailorAnalysisError, setTailorAnalysisError] = useState<string | null>(null);
   const [tailorAnalysisResult, setTailorAnalysisResult] = useState<{
     matchedKeywords: string[];
     missingKeywords: string[];
+    missingQualifications: string[];
     improvements: string[];
     simplifiedText: string;
+    originalAtsScore: number;
+    originalMatchPct: number;
+    simplifiedJdObject: SimplifiedJD;
   } | null>(null);
   const [tailoredResultResume, setTailoredResultResume] = useState<ResumeStructure | null>(null);
+  const [tailoredResultVersion, setTailoredResultVersion] = useState<SavedResumeVersion | null>(null);
   const [tailoredAtsScore, setTailoredAtsScore] = useState<number | null>(null);
 
   // Dashboard item preview states
@@ -220,12 +384,14 @@ export default function App() {
   const [showSavedVersionPreviewModal, setShowSavedVersionPreviewModal] = useState(false);
   const [showDeleteSavedVersionConfirmModal, setShowDeleteSavedVersionConfirmModal] = useState(false);
   const [versionToDeleteId, setVersionToDeleteId] = useState<string | null>(null);
+  const [printResume, setPrintResume] = useState<ResumeStructure | null>(null);
 
   // User pathway selection inside Resume Setup (Upload or Create)
   const [resumeSelectionMode, setResumeSelectionMode] = useState<"upload" | "create" | null>(null);
 
   // Resume Quick View & Delete Confirms
   const [showResumePreviewModal, setShowResumePreviewModal] = useState(false);
+  const [previewResumeId, setPreviewResumeId] = useState<string | null>(null);
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [isChoiceModalOpen, setIsChoiceModalOpen] = useState(false);
   const [choiceModalPathway, setChoiceModalPathway] = useState<"upload" | "create">("upload");
@@ -240,22 +406,10 @@ export default function App() {
     return saved ? JSON.parse(saved) : null;
   });
 
-  // Resume analysis states
+  // Resume upload/validation states
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisResult, setAnalysisResult] = useState<{
-    isResume: boolean;
-    confidenceScore: number;
-    missingItems: string[];
-    actionableImprovements: string[];
-    detectedProfile: {
-      fullName: string;
-      email: string;
-      phone: string;
-      summary: string;
-      skills: string[];
-    };
-    explanation: string;
-  } | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<{ isResume: boolean } | null>(null);
+  const showInvalidResumeCard = !isAnalyzing && analysisResult && !analysisResult.isResume;
 
   // Resume Form Editor states (for manual adjustments)
   const [isEditingForm, setIsEditingForm] = useState(false);
@@ -315,15 +469,93 @@ export default function App() {
     localStorage.setItem("jd_resume_customizer_theme", "light");
   }, [currentStep]);
 
-  // Resumes that actually exist in Resume Setup
-  const existingResumes = [];
-  if (hasResume) {
-    existingResumes.push({
-      key: "active",
-      label: uploadedResumeMeta ? uploadedResumeMeta.name : (originalResume.fullName ? `${originalResume.fullName}'s Resume` : "My Resume"),
-      data: originalResume
+  useEffect(() => {
+    return () => {
+      if (tailorProgressTimerRef.current) {
+        window.clearInterval(tailorProgressTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Remove stale uploaded non-resume cards that were saved before strict validation existed.
+  useEffect(() => {
+    setSavedUserResumes(prev => {
+      const filtered = prev.filter(resume => !isStoredUploadedResumeObviouslyInvalid(resume));
+      return filtered.length === prev.length ? prev : filtered;
     });
-  }
+  }, []);
+
+  // Persist savedUserResumes whenever it changes
+  useEffect(() => {
+    localStorage.setItem("jd_resume_customizer_saved_resumes", JSON.stringify(savedUserResumes));
+    // Keep hasResume in sync
+    const nowHas = savedUserResumes.length > 0;
+    if (nowHas !== hasResume) {
+      setHasResume(nowHas);
+      localStorage.setItem("jd_resume_customizer_has_resume", String(nowHas));
+    }
+  }, [savedUserResumes]);
+
+  // Persist activeResumeId
+  useEffect(() => {
+    if (activeResumeId) {
+      localStorage.setItem("jd_resume_customizer_active_resume_id", activeResumeId);
+    } else {
+      localStorage.removeItem("jd_resume_customizer_active_resume_id");
+    }
+  }, [activeResumeId]);
+
+  // Sync activeResume from savedUserResumes whenever activeResumeId or the list changes
+  useEffect(() => {
+    if (savedUserResumes.length === 0) return;
+    const found = savedUserResumes.find(r => r.id === activeResumeId);
+    if (found) {
+      setActiveResume(found.data);
+      setOriginalResume(found.data);
+    } else {
+      // Fall back to first resume
+      const first = savedUserResumes[0];
+      setActiveResumeId(first.id);
+      setActiveResume(first.data);
+      setOriginalResume(first.data);
+    }
+  }, [activeResumeId, savedUserResumes]);
+
+  // Helper: update the active resume's data in the library whenever activeResume changes via manual editor
+  const syncActiveResumeToLibrary = (updatedData: ResumeStructure) => {
+    if (!activeResumeId) return;
+    setSavedUserResumes(prev =>
+      prev.map(r => r.id === activeResumeId ? { ...r, data: updatedData } : r)
+    );
+  };
+
+  // Helper: delete a resume by id from the library
+  const handleDeleteResumeById = (id: string) => {
+    setSavedUserResumes(prev => {
+      const remaining = prev.filter(r => r.id !== id);
+      if (remaining.length === 0) {
+        // No resumes left — reset everything
+        setActiveResumeId(null);
+        setIsUnlocked(false);
+        sessionStorage.setItem("auralis_platform_unlocked", "false");
+        localStorage.removeItem("jd_resume_customizer_active_resume_id");
+      } else if (activeResumeId === id) {
+        // Deleted the active one — switch to first remaining
+        setActiveResumeId(remaining[0].id);
+      }
+      return remaining;
+    });
+    setResumeToDeleteId(null);
+    setShowDeleteConfirmModal(false);
+    showNotification("Resume deleted successfully.", "info");
+  };
+
+  // Resumes that actually exist in Resume Setup (for tailor wizard dropdown)
+  const existingResumes = savedUserResumes.map(r => ({
+    key: r.id,
+    label: r.name,
+    data: r.data
+  }));
 
   // Alert Helper
   const showNotification = (message: string, type: "success" | "error" | "info" = "success") => {
@@ -335,36 +567,59 @@ export default function App() {
 
   // --------- HANDLERS ---------
   // Auth simulation
-  const handleAuth = (e: React.FormEvent) => {
+  const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!authEmail) {
+    const email = authEmail.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       showNotification("Please provide a valid email address.", "error");
       return;
     }
-    const name = authName || authEmail.split("@")[0];
-    const userObj = { email: authEmail, name };
-    setCurrentUser(userObj);
-    const hasRes = localStorage.getItem("jd_resume_customizer_has_resume") === "true";
-    setCurrentStep(hasRes ? "dashboard" : "resume");
-    showNotification(`Welcome, ${name}! Your resume dashboard is ready.`, "success");
+    if (!authPassword.trim()) {
+      showNotification("Password cannot be empty.", "error");
+      return;
+    }
+    if (isSignUp && authPassword !== authConfirmPassword) {
+      showNotification("Passwords do not match.", "error");
+      return;
+    }
+    try {
+      const session = isSignUp
+        ? await supabaseAuth.signUp(email, authPassword)
+        : await supabaseAuth.signIn(email, authPassword);
+      const name = session.user.email.split("@")[0];
+      const userObj = { email: session.user.email, name };
+      localStorage.setItem(SUPABASE_SESSION_STORAGE_KEY, JSON.stringify(session));
+      await supabaseData.upsertUser(session.accessToken, {
+        id: session.user.id,
+        email: session.user.email,
+      });
+      await supabaseData.upsertProfile(session.accessToken, {
+        id: session.user.id,
+        full_name: name,
+      });
+      setCurrentUser(userObj);
+      const hasRes = localStorage.getItem("jd_resume_customizer_has_resume") === "true";
+      setCurrentStep(hasRes ? "dashboard" : "resume");
+      showNotification(isSignUp ? "Account created successfully." : `Welcome, ${name}! Your resume dashboard is ready.`, "success");
+    } catch (error: any) {
+      if (String(error.message || "").startsWith("Account created.")) {
+        setIsSignUp(false);
+        setAuthConfirmPassword("");
+        showNotification(error.message, "info");
+        return;
+      }
+      showNotification(error.message || "Authentication failed. Please try again.", "error");
+    }
   };
 
-  const handleOAuthSimulate = (provider: "google" | "linkedin" | "facebook") => {
-    const name = provider === "google" ? "Alex Rivera (via Google)" : provider === "linkedin" ? "Sophia Vance (via LinkedIn)" : "Social Candidate";
-    const email = `${provider.toLowerCase()}@candidate.org`;
-    const userObj = { email, name };
-    setCurrentUser(userObj);
-
-    // Auto load appropriate presets for demonstration to build prompt satisfaction
-    if (provider === "google") {
-      loadPresetResume("akshay_anand");
-    } else if (provider === "linkedin") {
-      loadPresetResume("marketing_grad");
+  const getStoredSupabaseSession = () => {
+    const storedSession = localStorage.getItem(SUPABASE_SESSION_STORAGE_KEY);
+    if (!storedSession) return null;
+    try {
+      return JSON.parse(storedSession) as { accessToken: string; user: { id: string; email: string } };
+    } catch {
+      return null;
     }
-
-    showNotification(`Signed in with ${provider.charAt(0).toUpperCase() + provider.slice(1)} successfully!`, "success");
-    const hasRes = localStorage.getItem("jd_resume_customizer_has_resume") === "true";
-    setCurrentStep(hasRes ? "dashboard" : "resume");
   };
 
   const handleOpenTailorWizard = () => {
@@ -374,16 +629,48 @@ export default function App() {
     setTailorJdImages([]);
     setTailorJdImageNames([]);
     setTailorJdMode(null);
+    setTailorJdFileBase64(null);
+    setTailorJdFileName(null);
+    setTailorJdFileType(null);
     if (existingResumes.length > 0) {
       setTailorSelectedResumeKey(existingResumes[0].key);
     } else {
       setTailorSelectedResumeKey("active");
     }
     setTailorAnalysisResult(null);
+    setTailorAnalysisError(null);
     setTailoredResultResume(null);
+    setTailoredResultVersion(null);
     setTailoredAtsScore(null);
     setTailorWizardStep(1);
     setIsTailorWizardOpen(true);
+  };
+
+  const handleTailorFileUpload = (file: File) => {
+    const name = file.name;
+    const extension = name.split('.').pop()?.toLowerCase();
+    
+    if (['png', 'jpg', 'jpeg'].includes(extension || "")) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = reader.result as string;
+        setTailorJdImages(prev => [...prev, base64]);
+        setTailorJdImageNames(prev => [...prev, name]);
+      };
+      reader.readAsDataURL(file);
+    } else if (['pdf', 'docx'].includes(extension || "")) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const base64 = result.split(',')[1];
+        setTailorJdFileBase64(base64 || "");
+        setTailorJdFileName(name);
+        setTailorJdFileType(file.type);
+      };
+      reader.readAsDataURL(file);
+    } else {
+      showNotification("Unsupported file format. Please upload PDF, DOCX, or PNG/JPG images.", "error");
+    }
   };
 
   const handleTailorImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -424,6 +711,106 @@ export default function App() {
     setTailorJdImageNames((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const processingStages = [
+    { label: "Reading Resume", at: 0 },
+    { label: "Analyzing Job Description", at: 20 },
+    { label: "Comparing Resume vs JD", at: 45 },
+    { label: "Generating Tailored Resume", at: 65 },
+    { label: "Preparing Download Files", at: 88 },
+  ];
+
+  const JD_MIN_WORDS = 50;
+  const JD_RECOMMENDED_MIN_WORDS = 100;
+  const JD_RECOMMENDED_MAX_WORDS = 1000;
+  const JD_MAX_WORDS = 5000;
+  const INVALID_JD_MESSAGE = "This does not appear to be a valid Job Description. Please enter or paste a proper Job Description.";
+  const ANALYSIS_WARNING_MS = 30000;
+  const ANALYSIS_HARD_TIMEOUT_MS = 60000;
+
+  const logTailorAnalysis = (message: string, details?: unknown) => {
+    if (details !== undefined) {
+      console.info(`[Tailored Resume Analysis] ${message}`, details);
+    } else {
+      console.info(`[Tailored Resume Analysis] ${message}`);
+    }
+  };
+
+  const validateJobDescriptionText = (jdText: string) => {
+    console.info("[JD Validation] JD Validation Started");
+    const normalizedText = jdText
+      .replace(/\s+/g, " ")
+      .trim();
+    const words = normalizedText.match(/\b[\w'+.-]+\b/g) || [];
+    const lowerText = normalizedText.toLowerCase();
+
+    const indicatorChecks = [
+      { name: "Responsibilities", matched: /\b(responsibilities|responsibility|duties|what you'?ll do|day[-\s]?to[-\s]?day|key tasks|deliverables)\b/i.test(normalizedText) },
+      { name: "Requirements", matched: /\b(requirements|required|must have|minimum qualifications|basic qualifications|candidate should|you should have)\b/i.test(normalizedText) },
+      { name: "Qualifications", matched: /\b(qualifications|qualified|eligibility|background|degree|bachelor|master|mba|education)\b/i.test(normalizedText) },
+      { name: "Skills", matched: /\b(skills|competencies|proficiency|expertise|tools|technologies|tech stack|knowledge of)\b/i.test(normalizedText) },
+      { name: "Experience", matched: /\b(experience|years of experience|professional experience|worked with|track record)\b/i.test(normalizedText) },
+      { name: "Role Description", matched: /\b(role description|about the role|job description|position overview|the role|job summary|we are looking for|we're looking for)\b/i.test(normalizedText) },
+      { name: "Preferred Skills", matched: /\b(preferred|nice to have|good to have|bonus|plus|preferred qualifications)\b/i.test(normalizedText) },
+      { name: "Education Requirements", matched: /\b(education requirements|degree required|bachelor'?s degree|master'?s degree|educational background)\b/i.test(normalizedText) },
+    ];
+
+    const foundIndicators = indicatorChecks
+      .filter(indicator => indicator.matched)
+      .map(indicator => indicator.name);
+    const isLoremIpsum = /\blorem ipsum\b|\bdolor sit amet\b|\bconsectetur adipiscing\b/i.test(lowerText);
+    const isValid =
+      words.length >= JD_MIN_WORDS &&
+      words.length <= JD_MAX_WORDS &&
+      foundIndicators.length >= 2 &&
+      !isLoremIpsum;
+
+    console.info("[JD Validation] JD Indicators Found", foundIndicators);
+    console.info("[JD Validation] Word Count", words.length);
+    console.info(`[JD Validation] Validation ${isValid ? "Passed" : "Failed"}`, {
+      wordCount: words.length,
+      indicatorCount: foundIndicators.length,
+      recommendedRange: `${JD_RECOMMENDED_MIN_WORDS}-${JD_RECOMMENDED_MAX_WORDS} words`,
+      maxWords: JD_MAX_WORDS,
+      isLoremIpsum
+    });
+
+    return {
+      isValid,
+      wordCount: words.length,
+      foundIndicators,
+      isTooLong: words.length > JD_MAX_WORDS,
+      isTooShort: words.length < JD_MIN_WORDS,
+      isLoremIpsum
+    };
+  };
+
+  const startTailorProgress = (initialStage = "Reading Resume") => {
+    if (tailorProgressTimerRef.current) {
+      window.clearInterval(tailorProgressTimerRef.current);
+    }
+    setTailorProcessingStage(initialStage);
+    setTailorProgress(4);
+    const startedAt = Date.now();
+    tailorProgressTimerRef.current = window.setInterval(() => {
+      const elapsed = Date.now() - startedAt;
+      const nextProgress = Math.min(98, 4 + Math.floor((elapsed / ANALYSIS_HARD_TIMEOUT_MS) * 94));
+      setTailorProgress(nextProgress);
+      const activeStage = [...processingStages].reverse().find(stage => nextProgress >= stage.at);
+      if (activeStage) setTailorProcessingStage(activeStage.label);
+    }, 300);
+  };
+
+  const stopTailorProgress = (complete = false) => {
+    if (tailorProgressTimerRef.current) {
+      window.clearInterval(tailorProgressTimerRef.current);
+      tailorProgressTimerRef.current = null;
+    }
+    if (complete) {
+      setTailorProcessingStage("Preparing Download Files");
+      setTailorProgress(100);
+    }
+  };
+
   const getResumeToTailor = (): ResumeStructure => {
     const found = existingResumes.find(r => r.key === tailorSelectedResumeKey);
     if (found) {
@@ -435,119 +822,494 @@ export default function App() {
     return originalResume;
   };
 
+  const extractJDHeuristically = (jdText: string, companyName: string) => {
+    const jdTextLower = jdText.toLowerCase();
+    const lines = jdText.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+    let jobTitle = "Tailored Position";
+    
+    const commonTitles = [
+      "software engineer", "frontend developer", "backend developer", "fullstack developer",
+      "web developer", "product manager", "project manager", "data scientist", "data analyst",
+      "qa engineer", "system administrator", "devops engineer", "ui/ux designer"
+    ];
+    
+    for (const title of commonTitles) {
+      if (jdTextLower.includes(title)) {
+        jobTitle = title.split(" ").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+        break;
+      }
+    }
+    if (jobTitle === "Tailored Position" && lines.length > 0) {
+      const firstLine = lines[0];
+      if (firstLine.length < 50 && !firstLine.toLowerCase().includes("job") && !firstLine.toLowerCase().includes("about")) {
+        jobTitle = firstLine;
+      }
+    }
+
+    const companyPitch = `Opportunity to join the team at ${companyName || "the target company"} and contribute to designing and developing core products.`;
+
+    const skillsDict = [
+      "React", "TypeScript", "JavaScript", "Python", "Java", "C++", "C#", "Go", "Rust",
+      "HTML", "CSS", "SQL", "Node.js", "Express", "Docker", "AWS", "Git", "Next.js",
+      "TailwindCSS", "Redux", "GraphQL", "REST API", "NoSQL", "MongoDB", "PostgreSQL",
+      "Firebase", "Kubernetes", "Linux", "Scrum", "Agile"
+    ];
+    const requiredSkills: { name: string; priority: "high" | "medium" }[] = [];
+    skillsDict.forEach(skill => {
+      if (jdTextLower.includes(skill.toLowerCase())) {
+        requiredSkills.push({
+          name: skill,
+          priority: Math.random() > 0.4 ? "high" : "medium"
+        });
+      }
+    });
+    if (requiredSkills.length === 0) {
+      requiredSkills.push({ name: "JavaScript", priority: "high" });
+      requiredSkills.push({ name: "Web Development", priority: "high" });
+      requiredSkills.push({ name: "Git", priority: "medium" });
+    }
+
+    const keyResponsibilities: string[] = [];
+    lines.forEach(line => {
+      if ((line.startsWith("-") || line.startsWith("*") || line.startsWith("•")) && line.length > 15 && keyResponsibilities.length < 5) {
+        keyResponsibilities.push(line.replace(/^[-*•]\s*/, ""));
+      }
+    });
+    if (keyResponsibilities.length === 0) {
+      keyResponsibilities.push("Design, develop, and maintain clean and efficient code.");
+      keyResponsibilities.push("Collaborate with cross-functional teams to define and build new features.");
+      keyResponsibilities.push("Write unit tests and perform debugging to ensure software quality.");
+    }
+
+    const candidateExpectations = [
+      "Strong analytical and problem-solving skills.",
+      "Excellent communication and collaboration abilities.",
+      "Eagerness to learn new technical stacks and tools."
+    ];
+
+    const keywordsToTarget = requiredSkills.map(s => s.name).concat(["API Integration", "Version Control", "Agile Workflow"]);
+
+    return {
+      jobTitle,
+      companyPitch,
+      requiredSkills,
+      keyResponsibilities,
+      candidateExpectations,
+      keywordsToTarget
+    };
+  };
+
+  const calculateRealisticAtsScore = (resume: ResumeStructure, jd: SimplifiedJD) => {
+    const requiredSkills = (jd.requiredSkills || []).map((s: any) => s?.name || s || "");
+    const keywordsToTarget = jd.keywordsToTarget || [];
+    const allKeywords = [...new Set([...requiredSkills, ...keywordsToTarget])].filter(Boolean);
+    
+    // Lowercase items for lookup
+    const skillsLower = (resume.skills || []).map(s => String(s || "").toLowerCase());
+    const summaryLower = String(resume.summary || "").toLowerCase();
+    const expTextLower = (resume.workExperience || [])
+      .map(exp => [exp.role, exp.company, ...(exp.description || [])].join(" "))
+      .join(" ")
+      .toLowerCase();
+    const projTextLower = (resume.projects || [])
+      .map(proj => [proj.name, ...(proj.description || [])].join(" "))
+      .join(" ")
+      .toLowerCase();
+    const allTextLower = `${skillsLower.join(" ")} ${summaryLower} ${expTextLower} ${projTextLower}`;
+
+    let matchCount = 0;
+    const matched: string[] = [];
+    const missing: string[] = [];
+
+    allKeywords.forEach(kw => {
+      const kwLower = kw.toLowerCase();
+      // Match if present in skills list, or using word boundary search in general text
+      const isMatched = skillsLower.some(s => s === kwLower) || 
+                        allTextLower.includes(` ${kwLower} `) || 
+                        allTextLower.includes(`,${kwLower}`) || 
+                        allTextLower.includes(`${kwLower},`) || 
+                        allTextLower.startsWith(kwLower) || 
+                        allTextLower.endsWith(kwLower) ||
+                        new RegExp(`\\b${kwLower.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`, 'i').test(allTextLower);
+      if (isMatched) {
+        matchCount++;
+        matched.push(kw);
+      } else {
+        missing.push(kw);
+      }
+    });
+
+    const matchPct = allKeywords.length > 0 ? Math.round((matchCount / allKeywords.length) * 100) : 50;
+
+    // Structure score out of 40 points
+    let structureScore = 0;
+    if (resume.email && resume.phone) structureScore += 10;
+    if ((resume.workExperience || []).length > 0) structureScore += 10;
+    if ((resume.education || []).length > 0) structureScore += 10;
+    if ((resume.skills || []).length > 0) structureScore += 10;
+
+    // Content Match score out of 60 points
+    const contentScore = Math.round((matchPct / 100) * 60);
+
+    const overallScore = Math.min(100, Math.max(10, structureScore + contentScore));
+
+    const criteria = [
+      {
+        name: "Keyword Match Density",
+        passed: matchCount >= Math.min(3, Math.ceil(allKeywords.length * 0.3)),
+        feedback: matchCount >= Math.min(3, Math.ceil(allKeywords.length * 0.3))
+          ? `Your resume contains ${matchCount} target keywords matching the JD. Good alignment.`
+          : `Only ${matchCount} keyword matches found. Try incorporating more skills like: ${allKeywords.slice(0, 3).join(", ")}.`
+      },
+      {
+        name: "Contact Details Validation",
+        passed: !!(resume.email && resume.phone),
+        feedback: (resume.email && resume.phone)
+          ? "Resume header contains complete email and telephone contact information."
+          : "Please ensure your resume includes both phone and email contact details."
+      },
+      {
+        name: "Structure & Layout Review",
+        passed: structureScore >= 30,
+        feedback: structureScore >= 30
+          ? "Document structure has clear section headings (Experience, Education, Skills)."
+          : "Please ensure you have completed all key sections of your resume (Experiences, Skills, Education)."
+      }
+    ];
+
+    return {
+      score: overallScore,
+      matchPercentage: matchPct,
+      matchedKeywords: matched,
+      missingKeywords: missing,
+      criteria
+    };
+  };
+
+  const sanitizeResume = (tailored: ResumeStructure, original: ResumeStructure): ResumeStructure => {
+    const sanitized = { ...tailored };
+
+    // 1. Preserve identity/contact exactly. AI is never allowed to rewrite these.
+    sanitized.fullName = original.fullName;
+    sanitized.email = original.email;
+    sanitized.phone = original.phone;
+    sanitized.linkedin = original.linkedin || "";
+    sanitized.website = original.website || "";
+    sanitized.location = original.location || "";
+    sanitized.summary = sanitized.summary?.trim() && !/unknown|undefined/i.test(sanitized.summary) ? sanitized.summary : original.summary;
+
+    // 2. Sanitize experience while preserving all original job entries, company names, roles, and dates exactly.
+    const originalExp = original.workExperience || [];
+    sanitized.workExperience = originalExp.map((orig, idx) => {
+      const exp = (sanitized.workExperience || []).find(e => e.id === orig.id) || (sanitized.workExperience || [])[idx];
+      const rewrittenBullets = (exp?.description || []).filter(Boolean).map(desc => desc.trim()).filter(d => !/unknown|undefined/i.test(d));
+      return {
+        id: orig.id || `exp-${idx}`,
+        role: orig.role,
+        company: orig.company,
+        duration: orig.duration,
+        description: rewrittenBullets.length > 0 ? rewrittenBullets : orig.description
+      };
+    });
+
+    // 3. Preserve education exactly. Do not invent or rewrite institutions, degrees, or years.
+    const originalEdu = original.education || [];
+    sanitized.education = originalEdu.map((edu, idx) => ({ ...edu, id: edu.id || `edu-${idx}` }));
+
+    // 4. Preserve project names/count exactly; only project bullets may be improved.
+    const originalProj = original.projects || [];
+    sanitized.projects = originalProj.map((orig, idx) => {
+      const proj = (sanitized.projects || []).find(p => p.id === orig.id) || (sanitized.projects || [])[idx];
+      const rewrittenBullets = (proj?.description || []).filter(Boolean).map(desc => desc.trim()).filter(d => !/unknown|undefined/i.test(d));
+      return {
+        ...orig,
+        id: orig.id || `proj-${idx}`,
+        description: rewrittenBullets.length > 0 ? rewrittenBullets : orig.description
+      };
+    });
+
+    // 5. Preserve certifications exactly. Do not invent certifications.
+    sanitized.certifications = original.certifications || [];
+
+    return sanitized;
+  };
+
+  const generateResumeDiff = (original: ResumeStructure, tailored: ResumeStructure) => {
+    const added: string[] = [];
+    const modified: string[] = [];
+    const unchanged: string[] = [];
+
+    // 1. Compare skills
+    const origSkills = original.skills || [];
+    const tailSkills = tailored.skills || [];
+    
+    tailSkills.forEach(s => {
+      if (!origSkills.includes(s)) {
+        added.push(`Added skill tag: "${s}"`);
+      } else {
+        unchanged.push(`Retained skill tag: "${s}"`);
+      }
+    });
+    origSkills.forEach(s => {
+      if (!tailSkills.includes(s)) {
+        modified.push(`Removed skill tag: "${s}"`);
+      }
+    });
+
+    // 2. Compare summary
+    if (original.summary !== tailored.summary) {
+      modified.push(`Professional Summary tailored for the role.`);
+    } else {
+      unchanged.push(`Professional Summary remains unchanged.`);
+    }
+
+    // 3. Compare Work Experience bullet points
+    (tailored.workExperience || []).forEach((exp, idx) => {
+      const orig = original.workExperience?.[idx] || original.workExperience?.find(e => e.id === exp.id);
+      if (!orig) {
+        added.push(`Added entire Work Experience entry for ${exp.company}.`);
+        return;
+      }
+
+      if (orig.role !== exp.role || orig.company !== exp.company) {
+        modified.push(`Modified role details at ${exp.company}.`);
+      }
+
+      const origBullets = orig.description || [];
+      const tailBullets = exp.description || [];
+
+      tailBullets.forEach((bullet) => {
+        if (!origBullets.includes(bullet)) {
+          modified.push(`Optimized accomplishment bullet under ${exp.company}: "${bullet}"`);
+        } else {
+          unchanged.push(`Retained bullet under ${exp.company}: "${bullet.substring(0, 40)}..."`);
+        }
+      });
+    });
+
+    // 4. Compare projects
+    (tailored.projects || []).forEach((proj, idx) => {
+      const orig = original.projects?.[idx] || original.projects?.find(p => p.id === proj.id);
+      if (!orig) {
+        added.push(`Added entire project: ${proj.name}.`);
+        return;
+      }
+
+      const origBullets = orig.description || [];
+      const tailBullets = proj.description || [];
+
+      tailBullets.forEach((bullet) => {
+        if (!origBullets.includes(bullet)) {
+          modified.push(`Optimized project bullet under ${proj.name}: "${bullet}"`);
+        } else {
+          unchanged.push(`Retained project bullet under ${proj.name}: "${bullet.substring(0, 40)}..."`);
+        }
+      });
+    });
+
+    // 5. Compare Education
+    (tailored.education || []).forEach((edu, idx) => {
+      const orig = original.education?.[idx] || original.education?.find(e => e.id === edu.id);
+      if (orig && (orig.degree !== edu.degree || orig.school !== edu.school)) {
+        modified.push(`Modified education record: ${edu.degree} at ${edu.school}.`);
+      } else {
+        unchanged.push(`Factual education record at ${edu.school} preserved.`);
+      }
+    });
+
+    return {
+      added: added.slice(0, 15),
+      modified: modified.slice(0, 15),
+      unchanged: unchanged.slice(0, 15)
+    };
+  };
+
   const handleAnalyzeJD = async () => {
-    if (!tailorCompany.trim()) {
+    setTailorAnalysisError(null);
+    const companyVal = tailorCompany || "";
+    const jdTextVal = tailorJdText || "";
+
+    if (!companyVal.trim()) {
       showNotification("Please enter the company name.", "error");
       return;
     }
-    if (!tailorJdMode) {
-      showNotification("Please select an input method.", "error");
-      return;
-    }
-    if (tailorJdMode === "paste" && !tailorJdText.trim()) {
+    if (!jdTextVal.trim()) {
       showNotification("Please paste a job description.", "error");
       return;
     }
-    if (tailorJdMode === "upload" && tailorJdImages.length === 0) {
-      showNotification("Please upload at least one screenshot.", "error");
+    const jdValidation = validateJobDescriptionText(jdTextVal);
+    if (jdValidation.isTooLong) {
+      showNotification(`Job description is too long. Please keep it under ${JD_MAX_WORDS.toLocaleString()} words.`, "error");
       return;
     }
+    if (!jdValidation.isValid) {
+      showNotification(INVALID_JD_MESSAGE, "error");
+      return;
+    }
+    logTailorAnalysis("Analysis Started", {
+      jdWords: jdValidation.wordCount,
+      jdIndicators: jdValidation.foundIndicators
+    });
 
     setTailorIsAnalyzing(true);
-    try {
-      // 1. Simplify / Parse JD (handles image OCR + Jargon cleaning)
-      const simplifyRes = await fetch("/api/simplify-jd", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jdText: tailorJdMode === "paste" ? tailorJdText : "",
-          jdImagesBase64: tailorJdMode === "upload" ? tailorJdImages : []
-        })
-      });
+    startTailorProgress("Analyzing Job Description");
+    const controller = new AbortController();
+    const warningId = window.setTimeout(() => {
+      logTailorAnalysis("Analysis warning threshold reached", { warningAfterMs: ANALYSIS_WARNING_MS });
+      showNotification("Still processing your resume and job description. This can take up to 60 seconds.", "info");
+    }, ANALYSIS_WARNING_MS);
+    const timeoutId = window.setTimeout(() => controller.abort(), ANALYSIS_HARD_TIMEOUT_MS);
 
-      if (!simplifyRes.ok) {
-        const errData = await simplifyRes.json().catch(() => ({}));
-        throw new Error(errData.error || `Simplify failed status: ${simplifyRes.status}`);
+    try {
+      // 1. Simplify / Parse JD (handles Jargon cleaning)
+      let simplifyRes;
+      try {
+        logTailorAnalysis("JD Parsed", { source: "input", characters: jdTextVal.length });
+        simplifyRes = await fetch("/api/simplify-jd", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jdText: jdTextVal
+          }),
+          signal: controller.signal
+        });
+      } catch (fetchErr: any) {
+        console.warn("Simplify JD API failed or timed out, falling back", fetchErr);
+        logTailorAnalysis("AI JD parsing failed; falling back to heuristic parsing", fetchErr?.message || fetchErr);
+      } finally {
+        // Keep the overall progress warning active until the whole analysis path finishes.
       }
 
-      const simplifiedJd = await simplifyRes.json();
-      
-      // Update tailorRole with the extracted job title from AI
+      let simplifiedJd;
+      if (simplifyRes && simplifyRes.ok) {
+        simplifiedJd = await simplifyRes.json();
+      }
+
+      const isAiFallback = !simplifiedJd;
+      if (isAiFallback) {
+        showNotification("Advanced AI analysis is temporarily unavailable. Using standard ATS analysis instead.", "info");
+        simplifiedJd = extractJDHeuristically(jdTextVal, companyVal);
+      }
+      logTailorAnalysis("JD Parsed", { fallback: isAiFallback, role: simplifiedJd.jobTitle || "Tailored Position" });
+
       const extractedRole = simplifiedJd.jobTitle || "Tailored Position";
       setTailorRole(extractedRole);
 
       // 2. Perform initial ATS Audit to get matches, gaps, improvements
       const simplifiedJdText = `Role: ${extractedRole}
-Company Pitch: ${simplifiedJd.companyPitch}
-Core Skills Required: ${simplifiedJd.requiredSkills.map((s: any) => s.name).join(", ")}
-Core Responsibilities: ${simplifiedJd.keyResponsibilities.join("\n")}
-Candidate Expectations: ${simplifiedJd.candidateExpectations.join("\n")}
-Keywords: ${simplifiedJd.keywordsToTarget.join(", ")}`;
+Company Pitch: ${simplifiedJd.companyPitch || ""}
+Core Skills Required: ${(simplifiedJd.requiredSkills || []).map((s: any) => s?.name || s || "").join(", ")}
+Core Responsibilities: ${(simplifiedJd.keyResponsibilities || []).join("\n")}
+Candidate Expectations: ${(simplifiedJd.candidateExpectations || []).join("\n")}
+Keywords: ${(simplifiedJd.keywordsToTarget || []).join(", ")}`;
 
       const selectedResume = getResumeToTailor();
+      if (!selectedResume) {
+        throw new Error("Could not find selected resume to analyze.");
+      }
+      logTailorAnalysis("Resume Parsed", { name: selectedResume.fullName, experienceCount: selectedResume.workExperience?.length || 0 });
 
-      const auditRes = await fetch("/api/ats-audit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          resume: selectedResume,
-          jdText: simplifiedJdText
-        })
-      });
-
-      if (!auditRes.ok) {
-        const errData = await auditRes.json().catch(() => ({}));
-        throw new Error(errData.error || `Audit failed status: ${auditRes.status}`);
+      let auditResult;
+      if (!isAiFallback) {
+        const auditController = new AbortController();
+        const auditTimeoutId = window.setTimeout(() => auditController.abort(), ANALYSIS_HARD_TIMEOUT_MS);
+        try {
+          logTailorAnalysis("ATS Analysis Started");
+          const auditRes = await fetch("/api/ats-audit", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              resume: selectedResume,
+              jdText: simplifiedJdText
+            }),
+            signal: auditController.signal
+          });
+          if (auditRes.ok) {
+            auditResult = await auditRes.json();
+            logTailorAnalysis("ATS Analysis Completed", { source: "api", score: auditResult?.score });
+          }
+        } catch (auditErr) {
+          console.warn("ATS Audit API failed, falling back to local audit", auditErr);
+          logTailorAnalysis("ATS Analysis API failed; falling back to local audit", auditErr instanceof Error ? auditErr.message : auditErr);
+        } finally {
+          window.clearTimeout(auditTimeoutId);
+        }
       }
 
-      const auditResult = await auditRes.json();
-
-      // 3. Extract matches, missing, improvements
-      const matched: string[] = [];
-      const missing: string[] = [];
+      // Calculate realistic score, match percentage, matched/missing keywords using our new deterministic function
+      logTailorAnalysis("ATS Analysis Started", { source: "local" });
+      const atsEvaluation = calculateRealisticAtsScore(selectedResume, simplifiedJd);
+      logTailorAnalysis("ATS Analysis Completed", { source: "local", score: atsEvaluation.score, matchPercentage: atsEvaluation.matchPercentage });
+      
+      const matched = atsEvaluation.matchedKeywords;
+      const missing = atsEvaluation.missingKeywords;
       const improvements: string[] = [];
 
-      const originalSkillsLower = selectedResume.skills.map(s => s.toLowerCase());
-      simplifiedJd.keywordsToTarget.forEach((kw: string) => {
-        if (originalSkillsLower.some(sk => sk.includes(kw.toLowerCase()) || kw.toLowerCase().includes(sk))) {
-          matched.push(kw);
-        } else {
-          missing.push(kw);
+      // Extract criteria improvements
+      const criteriaList = auditResult?.criteria || atsEvaluation.criteria;
+      criteriaList.forEach((c: any) => {
+        if (c && !c.passed) {
+          improvements.push(`${c.name || "Recommendation"}: ${c.feedback || ""}`);
         }
       });
 
-      simplifiedJd.requiredSkills.forEach((skillObj: any) => {
-        const skName = skillObj.name;
-        if (originalSkillsLower.some(sk => sk.includes(skName.toLowerCase()) || skName.toLowerCase().includes(sk))) {
-          if (!matched.includes(skName)) matched.push(skName);
-        } else {
-          if (!missing.includes(skName)) missing.push(skName);
-        }
-      });
+      // Extract missing qualifications
+      const missingQualifications: string[] = [];
+      const requiredQuals = simplifiedJd.requiredQualifications || [];
+      const resumeEducationText = (selectedResume.education || []).map(edu => `${edu.degree} ${edu.school}`).join(" ").toLowerCase();
+      const resumeCertificationsText = (selectedResume.certifications || []).map(c => c.toLowerCase()).join(" ");
 
-      (auditResult.criteria || []).forEach((c: any) => {
-        if (!c.passed) {
-          improvements.push(`${c.name}: ${c.feedback}`);
+      requiredQuals.forEach((qual: string) => {
+        if (!qual) return;
+        const qualLower = qual.toLowerCase();
+        const hasQual = resumeEducationText.includes(qualLower) || resumeCertificationsText.includes(qualLower);
+        if (!hasQual) {
+          missingQualifications.push(qual);
         }
       });
 
       if (matched.length === 0) matched.push("General profile keywords");
       if (missing.length === 0) missing.push("No missing critical keywords found");
       if (improvements.length === 0) improvements.push("Format is clean. Add more context to experience descriptions.");
+      if (missingQualifications.length === 0) missingQualifications.push("No critical missing qualifications found");
 
       setTailorAnalysisResult({
         matchedKeywords: matched,
         missingKeywords: missing,
+        missingQualifications: missingQualifications,
         improvements: improvements,
-        simplifiedText: simplifiedJdText
+        simplifiedText: simplifiedJdText,
+        originalAtsScore: auditResult?.score || atsEvaluation.score,
+        originalMatchPct: atsEvaluation.matchPercentage,
+        simplifiedJdObject: simplifiedJd
       });
 
+      const storedSession = getStoredSupabaseSession();
+      if (storedSession?.accessToken && storedSession.user?.id) {
+        supabaseData.createJobDescription(storedSession.accessToken, {
+          user_id: storedSession.user.id,
+          company_name: companyVal,
+          job_role: extractedRole,
+          description: jdTextVal,
+          source: "tailored-resume-analysis",
+        }).catch(error => {
+          console.warn("Supabase job description save failed:", error);
+        });
+      }
+
       setTailorWizardStep(3);
+      stopTailorProgress(true);
       showNotification("Job description analyzed successfully!", "success");
     } catch (err: any) {
       console.error("Analysis error:", err);
-      showNotification(err.message || "Failed to analyze Job Description.", "error");
+      logTailorAnalysis("Analysis failed", err?.message || err);
+      setTailorAnalysisError(err.name === "AbortError"
+        ? "Analysis is taking longer than expected. Please retry."
+        : err.message || "An unexpected error occurred during Job Description analysis.");
     } finally {
+      window.clearTimeout(timeoutId);
+      window.clearTimeout(warningId);
+      stopTailorProgress(false);
       setTailorIsAnalyzing(false);
     }
   };
@@ -556,67 +1318,181 @@ Keywords: ${simplifiedJd.keywordsToTarget.join(", ")}`;
     if (!tailorAnalysisResult) return;
 
     setTailorIsAnalyzing(true);
+    startTailorProgress("Reading Resume");
+    setTailorAnalysisError(null);
+    const controller = new AbortController();
+    logTailorAnalysis("Tailored Resume Generation Started");
+    const warningId = window.setTimeout(() => {
+      logTailorAnalysis("Tailored resume generation warning threshold reached", { warningAfterMs: ANALYSIS_WARNING_MS });
+      showNotification("Still generating your tailored resume. This can take up to 60 seconds.", "info");
+    }, ANALYSIS_WARNING_MS);
+    const timeoutId = window.setTimeout(() => controller.abort(), ANALYSIS_HARD_TIMEOUT_MS);
+
     try {
       const selectedResume = getResumeToTailor();
+      if (!selectedResume) {
+        throw new Error("Could not find selected resume to tailor.");
+      }
+      logTailorAnalysis("Resume Parsed", { name: selectedResume.fullName, experienceCount: selectedResume.workExperience?.length || 0 });
 
       // 1. Generate tailored resume details
-      const tailorRes = await fetch("/api/tailor-resume", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          resume: selectedResume,
-          jdText: tailorAnalysisResult.simplifiedText
-        })
-      });
-
-      if (!tailorRes.ok) {
-        const errData = await tailorRes.json().catch(() => ({}));
-        throw new Error(errData.error || `Tailoring failed status: ${tailorRes.status}`);
+      let tailorRes;
+      try {
+        setTailorProcessingStage("Generating Tailored Resume");
+        logTailorAnalysis("Tailored Resume Generation Started", { source: "api" });
+        tailorRes = await fetch("/api/tailor-resume", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            resume: selectedResume,
+            jdText: tailorAnalysisResult.simplifiedText
+          }),
+          signal: controller.signal
+        });
+      } catch (fetchErr: any) {
+        console.warn("Tailoring API was slow/unavailable, falling back to deterministic tailoring", fetchErr);
+        logTailorAnalysis("Tailored resume API failed; falling back to deterministic tailoring", fetchErr?.message || fetchErr);
+      } finally {
+        window.clearTimeout(timeoutId);
       }
 
-      const tailoredData = await tailorRes.json();
-      const { tailoredResume, suggestions } = tailoredData;
+      let tailoredResume;
+      let suggestions = [];
 
-      // 2. Perform ATS audit on the tailored resume
-      const auditRes = await fetch("/api/ats-audit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          resume: tailoredResume,
-          jdText: tailorAnalysisResult.simplifiedText
-        })
-      });
-
-      let newScore = 85;
-      if (auditRes.ok) {
-        const auditResult = await auditRes.json();
-        newScore = auditResult.score || 85;
+      if (tailorRes && tailorRes.ok) {
+        const tailoredData = await tailorRes.json();
+        tailoredResume = sanitizeResume(tailoredData.tailoredResume, selectedResume);
+        suggestions = tailoredData.suggestions;
+        logTailorAnalysis("Tailored Resume Generation Completed", { source: "api" });
+      } else {
+        // Fallback to heuristic tailoring if AI model fails or throws error
+        showNotification("AI tailoring is temporarily unavailable. Using standard ATS matching instead.", "info");
+        
+        const missingKeywords = tailorAnalysisResult.missingKeywords || [];
+        tailoredResume = sanitizeResume({
+          ...selectedResume,
+          summary: `${selectedResume.summary || ""} Targeting the ${tailorRole} position at ${tailorCompany}. Possesses key skills in ${tailorAnalysisResult.matchedKeywords.slice(0, 3).join(', ')}.`,
+          skills: [...new Set([...(selectedResume.skills || []), ...missingKeywords])]
+        }, selectedResume);
+        suggestions = missingKeywords.map((kw, i) => ({
+          id: `he-s-${i}`,
+          type: "missing",
+          section: "skills",
+          suggestedText: kw,
+          reason: `Added missing critical skill "${kw}" requested in job description.`,
+          applied: true
+        }));
+        logTailorAnalysis("Tailored Resume Generation Completed", { source: "deterministic-fallback" });
       }
 
-      // 3. Save tailored resume version
+      // Calculate realistic tailored ATS Score, Match Percentage and Gaps
+      setTailorProcessingStage("Comparing Resume vs JD");
+      logTailorAnalysis("ATS Analysis Started", { phase: "tailored-resume" });
+      const tailoredAtsEvaluation = calculateRealisticAtsScore(tailoredResume, tailorAnalysisResult.simplifiedJdObject);
+      logTailorAnalysis("ATS Analysis Completed", { phase: "tailored-resume", score: tailoredAtsEvaluation.score, matchPercentage: tailoredAtsEvaluation.matchPercentage });
+      const diffResult = generateResumeDiff(selectedResume, tailoredResume);
+
+      // Remaining missing qualifications post-tailoring
+      const remainingQuals: string[] = [];
+      const requiredQuals = tailorAnalysisResult.simplifiedJdObject.requiredQualifications || [];
+      const resumeEducationText = (tailoredResume.education || []).map(edu => `${edu.degree} ${edu.school}`).join(" ").toLowerCase();
+      const resumeCertificationsText = (tailoredResume.certifications || []).map(c => c.toLowerCase()).join(" ");
+
+      requiredQuals.forEach((qual: string) => {
+        if (!qual) return;
+        const qualLower = qual.toLowerCase();
+        const hasQual = resumeEducationText.includes(qualLower) || resumeCertificationsText.includes(qualLower);
+        if (!hasQual) {
+          remainingQuals.push(qual);
+        }
+      });
+
+      // 3. Automatically persist every successfully generated tailored resume as its own card.
       const newVersion: SavedResumeVersion = {
         id: `ver-${Date.now()}`,
         companyName: tailorCompany,
         jobTitle: tailorRole,
-        savedAt: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        savedAt: formatResumeCreatedDate(new Date().toISOString()),
         resumeData: tailoredResume,
-        appliedSuggestionsCount: suggestions?.length || 0
+        originalResumeData: selectedResume,
+        originalJobDescription: tailorJdText,
+        appliedSuggestionsCount: suggestions?.length || 0,
+        atsScore: tailoredAtsEvaluation.score,
+        matchPercentage: tailoredAtsEvaluation.matchPercentage,
+        improvements: (suggestions || []).map((s: any) => s.reason).filter(Boolean).slice(0, 5),
+        missingRequirements: tailoredAtsEvaluation.missingKeywords,
+        missingQualifications: remainingQuals,
+        diffAdded: diffResult.added,
+        diffModified: diffResult.modified,
+        diffUnchanged: diffResult.unchanged
       };
 
-      const updatedVersions = [newVersion, ...savedVersions];
-      setSavedVersions(updatedVersions);
-      localStorage.setItem("jd_resume_customizer_versions", JSON.stringify(updatedVersions));
-
       setTailoredResultResume(tailoredResume);
-      setTailoredAtsScore(newScore);
+      setTailoredResultVersion(newVersion);
+      setSavedVersions(prev => {
+        const updated = [newVersion, ...prev];
+        localStorage.setItem("jd_resume_customizer_versions", JSON.stringify(updated));
+        return updated;
+      });
+      setTailoredAtsScore(tailoredAtsEvaluation.score);
+      setTailorProcessingStage("Preparing Download Files");
+      stopTailorProgress(true);
       setTailorWizardStep(4);
-      showNotification(`Successfully generated resume for ${tailorCompany}!`, "success");
+      showNotification(`Tailored resume card created automatically. Review or download anytime.`, "success");
     } catch (err: any) {
       console.error("Tailoring error:", err);
-      showNotification(err.message || "Failed to generate tailored resume.", "error");
+      logTailorAnalysis("Tailored resume generation failed", err?.message || err);
+      setTailorAnalysisError(err.name === "AbortError"
+        ? "Tailored resume generation is taking longer than expected. Please retry."
+        : err.message || "An unexpected error occurred while generating tailored resume.");
     } finally {
+      window.clearTimeout(timeoutId);
+      window.clearTimeout(warningId);
+      stopTailorProgress(false);
       setTailorIsAnalyzing(false);
     }
+  };
+
+  const getTailoredResultInsights = (original: ResumeStructure | null, tailored: ResumeStructure | null, version: SavedResumeVersion | null) => {
+    const originalSkills = new Set((original?.skills || []).map(skill => skill.toLowerCase()));
+    const skillsAdded = (tailored?.skills || []).filter(skill => !originalSkills.has(skill.toLowerCase()));
+    const targetKeywords = tailorAnalysisResult?.simplifiedJdObject?.keywordsToTarget || [];
+    const originalText = JSON.stringify(original || {}).toLowerCase();
+    const tailoredText = JSON.stringify(tailored || {}).toLowerCase();
+    const keywordsAdded = targetKeywords.filter(keyword =>
+      keyword && !originalText.includes(String(keyword).toLowerCase()) && tailoredText.includes(String(keyword).toLowerCase())
+    );
+    const sectionsImproved = [
+      original?.summary !== tailored?.summary ? "Professional Summary" : null,
+      JSON.stringify(original?.workExperience || []) !== JSON.stringify(tailored?.workExperience || []) ? "Experience" : null,
+      JSON.stringify(original?.projects || []) !== JSON.stringify(tailored?.projects || []) ? "Projects" : null,
+      skillsAdded.length > 0 ? "Skills" : null,
+      JSON.stringify(original?.education || []) !== JSON.stringify(tailored?.education || []) ? "Education" : null,
+    ].filter(Boolean) as string[];
+
+    return {
+      skillsAdded,
+      keywordsAdded,
+      sectionsImproved,
+      missingRequirements: tailorAnalysisResult?.missingKeywords || version?.missingRequirements || [],
+      improvements: version?.improvements || [],
+      added: version?.diffAdded || [],
+      modified: version?.diffModified || [],
+      unchanged: version?.diffUnchanged || [],
+    };
+  };
+
+  const getHighlightClass = (section: "summary" | "skills" | "experience" | "projects", originalValue: unknown, tailoredValue: unknown, value?: string) => {
+    const changed = JSON.stringify(originalValue || "") !== JSON.stringify(tailoredValue || "");
+    if (!changed) return "";
+    if (section === "summary") return "bg-purple-100 border-purple-300";
+    if (section === "skills") {
+      const originalSkills = Array.isArray(originalValue) ? originalValue.map(skill => String(skill).toLowerCase()) : [];
+      return value && !originalSkills.includes(value.toLowerCase()) ? "bg-blue-100 border-blue-300" : "";
+    }
+    if (section === "experience") return "bg-emerald-100 border-emerald-300";
+    if (section === "projects") return "bg-yellow-100 border-yellow-300";
+    return "";
   };
 
   const handleDownloadTailoredResume = () => {
@@ -716,14 +1592,28 @@ WORK EXPERIENCE
     showNotification("Downloaded tailored resume successfully!", "success");
   };
 
-  const handleGuestAccess = () => {
+  const handleGuestAccess = async () => {
     const name = "Guest Candidate";
     const email = "guest@fresher.io";
-    const userObj = { email, name };
-    setCurrentUser(userObj);
-    const hasRes = localStorage.getItem("jd_resume_customizer_has_resume") === "true";
-    setCurrentStep(hasRes ? "dashboard" : "resume");
-    showNotification("Welcome! Running in frictionless Guest Mode.", "success");
+    try {
+      const session = await supabaseAuth.signInAnonymously();
+      localStorage.setItem(SUPABASE_SESSION_STORAGE_KEY, JSON.stringify(session));
+      await supabaseData.upsertUser(session.accessToken, {
+        id: session.user.id,
+        email,
+      });
+      await supabaseData.upsertProfile(session.accessToken, {
+        id: session.user.id,
+        full_name: name,
+      });
+      const userObj = { email, name };
+      setCurrentUser(userObj);
+      const hasRes = localStorage.getItem("jd_resume_customizer_has_resume") === "true";
+      setCurrentStep(hasRes ? "dashboard" : "resume");
+      showNotification("Continuing as Guest.", "success");
+    } catch (error: any) {
+      showNotification(error.message || "Guest login failed. Please try again.", "error");
+    }
   };
 
   const toggleNotifications = () => {
@@ -737,22 +1627,31 @@ WORK EXPERIENCE
 
   const handleLoadVersionClick = (ver: SavedResumeVersion) => {
     handleLoadVersion(ver);
-    setCurrentStep("tailor");
+    setCurrentStep("dashboard");
     showNotification(`Loaded tailoring details for ${ver.companyName}!`, "info");
   };
 
   // Preset loaders
   const loadPresetResume = (key: "software_grad" | "marketing_grad" | "akshay_anand") => {
     const presetData = DEMO_RESUMES[key].data;
+    const label = DEMO_RESUMES[key].label;
+    if (isDuplicateResume(label, undefined, presetData)) {
+      showNotification("This resume has already been added.", "error");
+      return;
+    }
+    const newId = `resume-preset-${key}-${Date.now()}`;
+    const newEntry: SavedResume = {
+      id: newId,
+      name: label,
+      data: presetData,
+      uploadedAt: new Date().toISOString()
+    };
+    setSavedUserResumes(prev => [...prev, newEntry]);
+    setActiveResumeId(newId);
     setActiveResume(presetData);
     setOriginalResume(presetData);
     setIsUnlocked(true);
     sessionStorage.setItem("auralis_platform_unlocked", "true");
-    setHasResume(true);
-    localStorage.setItem("jd_resume_customizer_has_resume", "true");
-    if (!localStorage.getItem("jd_resume_customizer_resume_created_at")) {
-      localStorage.setItem("jd_resume_customizer_resume_created_at", new Date().toLocaleDateString());
-    }
     showNotification(`Loaded ${DEMO_RESUMES[key].label} Resume Template and unlocked platform!`, "info");
   };
 
@@ -788,6 +1687,19 @@ WORK EXPERIENCE
       try {
         const parsed = JSON.parse(event.target?.result as string);
         if (parsed.fullName && parsed.email && Array.isArray(parsed.workExperience)) {
+          if (isDuplicateResume(file.name, undefined, parsed)) {
+            showNotification("This resume has already been added.", "error");
+            return;
+          }
+          const newId = `resume-json-${Date.now()}`;
+          const newEntry: SavedResume = {
+            id: newId,
+            name: file.name,
+            data: parsed,
+            uploadedAt: new Date().toISOString()
+          };
+          setSavedUserResumes(prev => [...prev, newEntry]);
+          setActiveResumeId(newId);
           setActiveResume(parsed);
           setIsUnlocked(true);
           sessionStorage.setItem("auralis_platform_unlocked", "true");
@@ -819,51 +1731,6 @@ WORK EXPERIENCE
     });
   };
 
-  // Call backend to analyze the resume layout & content
-  const triggerResumeAnalysis = async (file: File) => {
-    setIsAnalyzing(true);
-    setUploadError(null);
-    setAnalysisResult(null);
-
-    try {
-      const base64Data = await convertFileToBase64(file);
-      const res = await fetch("/api/analyze-uploaded-resume", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          fileName: file.name,
-          fileType: file.type,
-          base64Data
-        })
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || `Server error status: ${res.status}`);
-      }
-
-      const result = await res.json();
-      setAnalysisResult(result);
-      if (result.isResume) {
-        if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
-          (window as any).__lastUploadedPdfBase64 = base64Data;
-        } else {
-          (window as any).__lastUploadedPdfBase64 = null;
-        }
-        showNotification("Resume successfully audited and validated!", "success");
-      } else {
-        showNotification("maybe you uploaded a wrong file. The scanned uploaded document isnt a resume. please check and retry again", "error");
-      }
-    } catch (err: any) {
-      console.error("Resume analysis error:", err);
-      setUploadError(err.message || "Failed to analyze resume. Please try again.");
-      showNotification("Error validating resume.", "error");
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
-  // Validate and handle PDF & DOCX files
   const validateAndSetUploadedFile = (file: File) => {
     const name = file.name;
     const extension = name.split('.').pop()?.toLowerCase();
@@ -913,90 +1780,138 @@ WORK EXPERIENCE
     }
   };
 
-  const handleContinueUpload = () => {
-    if (!tempFile) return;
+  // Call backend to validate whether file is a resume, then save it
+  const triggerResumeAnalysis = async (file: File) => {
+    setIsAnalyzing(true);
+    setUploadError(null);
+    setAnalysisResult(null);
 
-    const meta = {
-      name: tempFile.name,
-      size: tempFile.size,
-      uploadedAt: new Date().toISOString()
-    };
-    setUploadedResumeMeta(meta);
-    localStorage.setItem("jd_resume_customizer_uploaded_resume_meta", JSON.stringify(meta));
-    
-    if ((window as any).__lastUploadedPdfBase64) {
-      setUploadedPdfBase64((window as any).__lastUploadedPdfBase64);
-      localStorage.setItem("jd_resume_customizer_uploaded_pdf_base64", (window as any).__lastUploadedPdfBase64);
-      (window as any).__lastUploadedPdfBase64 = null;
-    } else {
-      setUploadedPdfBase64(null);
-      localStorage.removeItem("jd_resume_customizer_uploaded_pdf_base64");
-    }
-    
-    setIsUnlocked(true);
-    sessionStorage.setItem("auralis_platform_unlocked", "true");
-    setOnboardingChoice("done");
-    sessionStorage.setItem("auralis_onboarding_dismissed", "true");
-    localStorage.setItem("jd_resume_customizer_onboarding_done", "true");
-    
-    setHasResume(true);
-    localStorage.setItem("jd_resume_customizer_has_resume", "true");
-    if (!localStorage.getItem("jd_resume_customizer_resume_created_at")) {
-      localStorage.setItem("jd_resume_customizer_resume_created_at", new Date().toLocaleDateString());
-    }
+    try {
+      const base64Data = await convertFileToBase64(file);
 
-    // Pre-fill fields if we successfully verified they are a resume
-    if (analysisResult && analysisResult.isResume) {
-      const { detectedProfile } = analysisResult;
-      setActiveResume(prev => {
-        const mappedExperience = (detectedProfile.workExperience || []).map((exp: any, idx: number) => ({
-          id: exp.id || `exp-${Date.now()}-${idx}`,
+      if (isDuplicateResume(file.name, base64Data)) {
+        setUploadError("This resume has already been added to your library.");
+        setIsAnalyzing(false);
+        return;
+      }
+
+      const controller = new AbortController();
+      const validationTimeout = window.setTimeout(() => controller.abort(), 10000);
+      const res = await fetch("/api/analyze-uploaded-resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileName: file.name, fileType: file.type, base64Data }),
+        signal: controller.signal
+      });
+      window.clearTimeout(validationTimeout);
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Server error ${res.status}`);
+      }
+
+      const result = await res.json();
+
+      console.info("[Resume Validation] Result", {
+        fileName: file.name,
+        isResume: result.isResume,
+        indicators: result.indicators || [],
+        reason: result.reason || ""
+      });
+
+      if (!result.isResume) {
+        setAnalysisResult({ isResume: false });
+        setTempFile(null);
+        setUploadError(null);
+        return;
+      }
+
+      {
+        const dp = result.detectedProfile || {};
+        const defaultName = file.name.replace(/\.[^/.]+$/, "");
+        const resumeHolderName = isLikelyResumeHolderName(dp.fullName) ? dp.fullName.trim() : "";
+        const extension = file.name.split(".").pop()?.toLowerCase();
+        const storedFileType: "pdf" | "docx" =
+          result.fileType === "docx" || extension === "docx" ? "docx" : "pdf";
+
+        const mappedExperience = (dp.workExperience || []).map((exp: any, idx: number) => ({
+          id: `exp-${Date.now()}-${idx}`,
           role: exp.role || "",
           company: exp.company || "",
           duration: exp.duration || "",
           description: Array.isArray(exp.description) ? exp.description : [exp.description || ""]
         }));
 
-        const mappedEducation = (detectedProfile.education || []).map((edu: any, idx: number) => ({
-          id: edu.id || `edu-${Date.now()}-${idx}`,
+        const mappedEducation = (dp.education || []).map((edu: any, idx: number) => ({
+          id: `edu-${Date.now()}-${idx}`,
           degree: edu.degree || "",
           school: edu.school || "",
           duration: edu.duration || "",
           gpa: edu.gpa || ""
         }));
 
-        const updatedResume = {
-          fullName: detectedProfile.fullName || prev.fullName || "Guest Candidate",
-          email: detectedProfile.email || prev.email || "guest@fresher.io",
-          phone: detectedProfile.phone || prev.phone || "",
-          summary: detectedProfile.summary || prev.summary || "",
-          skills: detectedProfile.skills && detectedProfile.skills.length > 0 
-            ? detectedProfile.skills 
-            : prev.skills,
-          languages: detectedProfile.languages && detectedProfile.languages.length > 0
-            ? detectedProfile.languages
-            : [],
-          workExperience: mappedExperience,
-          education: mappedEducation
-        };
-        localStorage.setItem("jd_resume_customizer_active_resume", JSON.stringify(updatedResume));
-        setOriginalResume(updatedResume);
-        return updatedResume;
-      });
-    }
+        const mappedProjects = (dp.projects || []).map((proj: any, idx: number) => ({
+          id: `proj-${Date.now()}-${idx}`,
+          name: proj.name || "",
+          description: Array.isArray(proj.description) ? proj.description : [proj.description || ""]
+        }));
 
-    showNotification(`Successfully processed "${tempFile.name}"! Ready to proceed.`, "success");
-    setIsUploadModalOpen(false);
-    setIsChoiceModalOpen(false); // Close choice modal too if open
-    setTempFile(null);
+        const newResumeData: ResumeStructure = {
+          fullName: resumeHolderName || defaultName,
+          email: dp.email || "",
+          phone: dp.phone || "",
+          summary: dp.summary || "",
+          skills: dp.skills && dp.skills.length > 0 ? dp.skills : [],
+          languages: dp.languages && dp.languages.length > 0 ? dp.languages : [],
+          workExperience: mappedExperience,
+          education: mappedEducation,
+          projects: mappedProjects,
+          certifications: dp.certifications || []
+        };
+
+        const newId = `resume-${Date.now()}`;
+        const newEntry: SavedResume = {
+          id: newId,
+          name: resumeHolderName || file.name,
+          data: newResumeData,
+          fileBase64: base64Data,
+          originalFileName: file.name,
+          fileType: storedFileType,
+          extractedText: result.extractedText || "",
+          pdfBase64: storedFileType === "pdf" ? base64Data : undefined,
+          uploadedAt: new Date().toISOString()
+        };
+
+        setSavedUserResumes(prev => [...prev, newEntry]);
+        setActiveResumeId(newId);
+        setIsUnlocked(true);
+        sessionStorage.setItem("auralis_platform_unlocked", "true");
+        setOnboardingChoice("done");
+        sessionStorage.setItem("auralis_onboarding_dismissed", "true");
+        localStorage.setItem("jd_resume_customizer_onboarding_done", "true");
+
+        // Auto-close modal and toast success
+        setIsUploadModalOpen(false);
+        setIsChoiceModalOpen(false);
+        setTempFile(null);
+        setAnalysisResult(null);
+        showNotification("Resume saved successfully!", "success");
+      }
+    } catch (err: any) {
+      console.error("Resume validation error:", err);
+      setUploadError(err.name === "AbortError" ? "Resume validation timed out. Please upload a smaller or readable resume file." : err.message || "Failed to process the file. Please try again.");
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   // Manual Editor Actions
   const handleUpdateContact = (field: keyof ResumeStructure, value: any) => {
-    setActiveResume(prev => ({
-      ...prev,
-      [field]: value
-    }));
+    setActiveResume(prev => {
+      const updated = { ...prev, [field]: value };
+      syncActiveResumeToLibrary(updated);
+      return updated;
+    });
   };
 
   const handleAddExperience = () => {
@@ -1253,10 +2168,646 @@ WORK EXPERIENCE
     showNotification("Version removed from management.", "info");
   };
 
+  const cleanExportValue = (value?: string): string => {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    if (/^(unknown institution|unknown degree|undefined|null|n\/a|na)$/i.test(text)) return "";
+    if (/^(page\s*\d+|>\s*|candidate\s*\/\s*profile optimized)$/i.test(text)) return "";
+    return text
+      .replace(/^>\s*/, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  };
+
+  const sanitizeResumeForExport = (resume: ResumeStructure): ResumeStructure => ({
+    ...resume,
+    fullName: cleanExportValue(resume.fullName) || "Candidate",
+    email: cleanExportValue(resume.email),
+    phone: cleanExportValue(resume.phone),
+    linkedin: cleanExportValue(resume.linkedin),
+    website: cleanExportValue(resume.website),
+    location: cleanExportValue(resume.location),
+    summary: cleanExportValue(resume.summary),
+    skills: Array.from(new Set((resume.skills || []).map(cleanExportValue).filter(Boolean))),
+    workExperience: (resume.workExperience || [])
+      .map(exp => ({
+        ...exp,
+        role: cleanExportValue(exp.role),
+        company: cleanExportValue(exp.company),
+        duration: cleanExportValue(exp.duration),
+        description: Array.from(new Set((exp.description || []).map(cleanExportValue).filter(Boolean)))
+      }))
+      .filter(exp => exp.role || exp.company || exp.description.length > 0),
+    education: (resume.education || [])
+      .map(edu => ({
+        ...edu,
+        degree: cleanExportValue(edu.degree),
+        school: cleanExportValue(edu.school),
+        duration: cleanExportValue(edu.duration),
+        gpa: cleanExportValue(edu.gpa)
+      }))
+      .filter(edu => edu.degree || edu.school),
+    projects: (resume.projects || [])
+      .map(project => ({
+        ...project,
+        name: cleanExportValue(project.name),
+        duration: cleanExportValue(project.duration),
+        description: Array.from(new Set((project.description || []).map(cleanExportValue).filter(Boolean)))
+      }))
+      .filter(project => project.name || project.description.length > 0),
+    certifications: Array.from(new Set((resume.certifications || []).map(cleanExportValue).filter(Boolean))),
+    languages: Array.from(new Set((resume.languages || []).map(cleanExportValue).filter(Boolean))),
+  });
+
+  const DOWNLOAD_ERROR_MESSAGE = "Unable to generate resume. Please try again.";
+
+  const logDownloadEvent = (message: string, details?: unknown) => {
+    if (details !== undefined) {
+      console.info(`[Resume Download] ${message}`, details);
+    } else {
+      console.info(`[Resume Download] ${message}`);
+    }
+  };
+
+  const failDownload = (reason: string, error?: unknown) => {
+    console.error(`[Resume Download] Reason for failure: ${reason}`, error || "");
+    showNotification(DOWNLOAD_ERROR_MESSAGE, "error");
+  };
+
+  const hasDownloadableResumeContent = (resume?: ResumeStructure | null): boolean => {
+    if (!resume) return false;
+    const textParts = [
+      resume.fullName,
+      resume.email,
+      resume.phone,
+      resume.summary,
+      ...(resume.skills || []),
+      ...(resume.workExperience || []).flatMap(exp => [exp.company, exp.role, exp.duration, ...(exp.description || [])]),
+      ...(resume.education || []).flatMap(edu => [edu.degree, edu.school, edu.duration]),
+      ...(resume.projects || []).flatMap(project => [project.name, project.duration, ...(project.description || [])]),
+      ...(resume.certifications || []),
+    ];
+    return textParts.some(part => Boolean(String(part || "").trim()));
+  };
+
+  const validateResumeForExport = (resume: ResumeStructure, original?: ResumeStructure): string[] => {
+    const issues: string[] = [];
+    if (!hasDownloadableResumeContent(resume)) issues.push("Resume content is empty.");
+    if (!resume.email && !resume.phone) issues.push("Contact details are missing.");
+    if ((resume.education || []).length === 0) issues.push("Education section is missing.");
+    if ((resume.workExperience || []).length === 0) issues.push("Experience section is missing.");
+    if ((resume.skills || []).length === 0) issues.push("Skills section is missing.");
+    const serialized = JSON.stringify(resume).toLowerCase();
+    if (/unknown institution|unknown degree|undefined|null/.test(serialized)) issues.push("Placeholder values were found.");
+    const bullets = (resume.workExperience || []).flatMap(exp => exp.description || []);
+    if (new Set(bullets.map(b => b.toLowerCase())).size !== bullets.length) issues.push("Duplicate experience bullets were found.");
+    if (original) {
+      if (resume.fullName !== original.fullName) issues.push("Name was not preserved exactly.");
+      if (resume.phone !== original.phone) issues.push("Phone number was not preserved exactly.");
+      if (resume.email !== original.email) issues.push("Email was not preserved exactly.");
+      if ((original.linkedin || "") && resume.linkedin !== original.linkedin) issues.push("LinkedIn was not preserved exactly.");
+      if ((original.website || "") && resume.website !== original.website) issues.push("Website was not preserved exactly.");
+      if ((original.location || "") && resume.location !== original.location) issues.push("Location was not preserved exactly.");
+      if ((resume.workExperience || []).length !== (original.workExperience || []).length) issues.push("Work experience entries were not preserved.");
+      if ((resume.education || []).length !== (original.education || []).length) issues.push("Education entries were not preserved.");
+      if ((resume.projects || []).length !== (original.projects || []).length) issues.push("Project entries were not preserved.");
+      if ((resume.certifications || []).length !== (original.certifications || []).length) issues.push("Certifications were not preserved.");
+      (original.workExperience || []).forEach((orig, idx) => {
+        const exp = resume.workExperience?.[idx];
+        if (!exp || exp.company !== orig.company || exp.role !== orig.role || exp.duration !== orig.duration) {
+          issues.push("Work experience company, role, or date was not preserved exactly.");
+        }
+      });
+      (original.education || []).forEach((orig, idx) => {
+        const edu = resume.education?.[idx];
+        if (!edu || edu.degree !== orig.degree || edu.school !== orig.school || edu.duration !== orig.duration) {
+          issues.push("Education details were not preserved exactly.");
+        }
+      });
+      (original.projects || []).forEach((orig, idx) => {
+        const project = resume.projects?.[idx];
+        if (!project || project.name !== orig.name || project.duration !== orig.duration) {
+          issues.push("Project names or dates were not preserved exactly.");
+        }
+      });
+      (original.certifications || []).forEach((orig, idx) => {
+        if (resume.certifications?.[idx] !== orig) {
+          issues.push("Certifications were not preserved exactly.");
+        }
+      });
+    }
+    return issues;
+  };
+
+  const prepareResumeForDownload = (resume?: ResumeStructure | null, original?: ResumeStructure): ResumeStructure | null => {
+    logDownloadEvent("File Generation Started");
+    if (!resume) {
+      failDownload("Resume does not exist.");
+      return null;
+    }
+    if (!hasDownloadableResumeContent(resume)) {
+      failDownload("Resume generation has not completed or resume content is empty.");
+      return null;
+    }
+
+    const repaired = original ? sanitizeResume(resume, original) : resume;
+    const sanitized = sanitizeResumeForExport(repaired);
+    const originalForValidation = original ? sanitizeResumeForExport(original) : undefined;
+    const issues = validateResumeForExport(sanitized, originalForValidation);
+    if (issues.length > 0) {
+      console.warn("Resume download validation failed:", issues);
+      failDownload(`Validation failed: ${issues.join("; ")}`);
+      return null;
+    }
+    return sanitized;
+  };
+
+  const escapeHtml = (value?: string): string =>
+    String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+
   // Exporters
   const handlePrintDownload = () => {
     // Triggers standard print screen with custom pure print target styling
     window.print();
+  };
+
+  const downloadResumeAsDocxLegacy = (resume: ResumeStructure, filename: string) => {
+    const exportResume = prepareResumeForDownload(resume);
+    if (!exportResume) return;
+
+    let htmlContent = `
+      <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+      <head>
+        <title>${escapeHtml(exportResume.fullName)} - Resume</title>
+        <!--[if gte mso 9]>
+        <xml>
+          <w:WordDocument>
+            <w:View>Print</w:View>
+            <w:Zoom>100</w:Zoom>
+            <w:DoNotOptimizeForBrowser/>
+          </w:WordDocument>
+        </xml>
+        <![endif]-->
+        <style>
+          body {
+            font-family: Calibri, Arial, sans-serif;
+            line-height: 1.28;
+            color: #1f2933;
+            margin: 0.72in;
+          }
+          h1 {
+            font-size: 24pt;
+            font-weight: bold;
+            text-align: center;
+            margin: 0 0 3pt 0;
+            color: #111111;
+          }
+          .contact-info {
+            text-align: center;
+            font-size: 10pt;
+            color: #555555;
+            margin-bottom: 20pt;
+            border-bottom: 2px solid #333333;
+            padding-bottom: 8pt;
+          }
+          h2 {
+            font-size: 13pt;
+            font-weight: bold;
+            text-transform: uppercase;
+            color: #111111;
+            margin-top: 18pt;
+            margin-bottom: 6pt;
+            border-bottom: 1px solid #cccccc;
+            padding-bottom: 2pt;
+            page-break-after: avoid;
+          }
+          .summary {
+            font-size: 10.5pt;
+            margin-bottom: 12pt;
+          }
+          .skills-list {
+            font-size: 10.5pt;
+            margin-bottom: 12pt;
+          }
+          .item-header {
+            font-size: 11pt;
+            font-weight: bold;
+            margin-top: 10pt;
+            margin-bottom: 2pt;
+            page-break-after: avoid;
+          }
+          .bullet-list {
+            margin-top: 2pt;
+            margin-bottom: 8pt;
+            padding-left: 20px;
+          }
+          .bullet-item {
+            font-size: 10pt;
+            margin-bottom: 3pt;
+          }
+          .section {
+            page-break-inside: avoid;
+          }
+        </style>
+      </head>
+      <body>
+        <h1>${escapeHtml(exportResume.fullName)}</h1>
+        <div class="contact-info">
+    `;
+
+    if (exportResume.email) htmlContent += `<span>${escapeHtml(exportResume.email)}</span>`;
+    if (exportResume.phone) htmlContent += `<span> | ${escapeHtml(exportResume.phone)}</span>`;
+    if (exportResume.linkedin) htmlContent += `<span> | LinkedIn: ${escapeHtml(exportResume.linkedin)}</span>`;
+    if (exportResume.website) htmlContent += `<span> | Portfolio: ${escapeHtml(exportResume.website)}</span>`;
+
+    htmlContent += `</div>`;
+
+    if (exportResume.summary) {
+      htmlContent += `
+        <div class="section"><h2>Professional Summary</h2>
+        <div class="summary">${escapeHtml(exportResume.summary)}</div></div>
+      `;
+    }
+
+    if (exportResume.skills && exportResume.skills.length > 0) {
+      htmlContent += `
+        <div class="section"><h2>Skills</h2>
+        <div class="skills-list">
+          <strong>Technical Skills:</strong> ${exportResume.skills.map(escapeHtml).join(", ")}
+        </div></div>
+      `;
+    }
+
+    if (exportResume.workExperience && exportResume.workExperience.length > 0) {
+      htmlContent += `<h2>Work Experience</h2>`;
+      exportResume.workExperience.forEach(exp => {
+        htmlContent += `
+          <div class="section"><div class="item-header" style="display: flex; justify-content: space-between;">
+            <span>${escapeHtml(exp.role)}${exp.company ? ` - ${escapeHtml(exp.company)}` : ""}</span>
+            <span style="font-weight: normal; font-size: 10pt; float: right;">${escapeHtml(exp.duration)}</span>
+          </div>
+          <div style="clear: both;"></div>
+          <ul class="bullet-list">
+            ${exp.description.map(bullet => `<li class="bullet-item">${escapeHtml(bullet)}</li>`).join("")}
+          </ul></div>
+        `;
+      });
+    }
+
+    if (exportResume.projects && exportResume.projects.length > 0) {
+      htmlContent += `<h2>Projects</h2>`;
+      exportResume.projects.forEach(proj => {
+        htmlContent += `
+          <div class="section"><div class="item-header" style="display: flex; justify-content: space-between;">
+            <span>${escapeHtml(proj.name)}</span>
+            <span style="font-weight: normal; font-size: 10pt; float: right;">${escapeHtml(proj.duration)}</span>
+          </div>
+          <div style="clear: both;"></div>
+          <ul class="bullet-list">
+            ${proj.description.map(bullet => `<li class="bullet-item">${escapeHtml(bullet)}</li>`).join("")}
+          </ul></div>
+        `;
+      });
+    }
+
+    if (exportResume.education && exportResume.education.length > 0) {
+      htmlContent += `<h2>Education</h2>`;
+      exportResume.education.forEach(edu => {
+        htmlContent += `
+          <div class="section"><div class="item-header" style="display: flex; justify-content: space-between;">
+            <span>${escapeHtml(edu.degree)}${edu.school ? ` - ${escapeHtml(edu.school)}` : ""}</span>
+            <span style="font-weight: normal; font-size: 10pt; float: right;">${escapeHtml(edu.duration)}</span>
+          </div>
+          <div style="font-style: italic; font-size: 10pt; color: #555555; margin-bottom: 4pt;">${edu.gpa ? `GPA: ${escapeHtml(edu.gpa)}` : ""}</div></div>
+        `;
+      });
+    }
+
+    if (exportResume.certifications && exportResume.certifications.length > 0) {
+      htmlContent += `
+        <h2>Certifications</h2>
+        <ul class="bullet-list">
+          ${exportResume.certifications.map(cert => `<li class="bullet-item">${escapeHtml(cert)}</li>`).join("")}
+        </ul>
+      `;
+    }
+
+    htmlContent += `
+      </body>
+      </html>
+    `;
+
+    const blob = new Blob(['\ufeff' + htmlContent], {
+      type: 'application/msword'
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename.endsWith('.docx') ? filename : `${filename}.docx`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showNotification("DOCX resume downloaded successfully!", "success");
+  };
+
+  const handlePrintOrSavePDFLegacy = (resume: ResumeStructure) => {
+    const exportResume = prepareResumeForDownload(resume);
+    if (!exportResume) return;
+
+    setPrintResume(exportResume);
+    setTimeout(() => {
+      window.print();
+      setTimeout(() => {
+        setPrintResume(null);
+      }, 500);
+    }, 100);
+  };
+
+  const downloadBlob = (blob: Blob, filename: string): boolean => {
+    if (!blob || blob.size === 0) {
+      failDownload(`Generated file is empty for ${filename}.`);
+      return false;
+    }
+    const url = URL.createObjectURL(blob);
+    try {
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.rel = "noopener";
+      link.style.display = "none";
+      document.body.appendChild(link);
+      logDownloadEvent("Download Triggered", { filename, bytes: blob.size });
+      link.click();
+      document.body.removeChild(link);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      logDownloadEvent("Download Completed", { filename });
+      return true;
+    } catch (error) {
+      URL.revokeObjectURL(url);
+      failDownload(`Browser download trigger failed for ${filename}.`, error);
+      return false;
+    }
+  };
+
+  const buildResumePlainLines = (resume: ResumeStructure, headline = "") => {
+    const contactParts = [resume.phone, resume.email, resume.linkedin, resume.location, resume.website].filter(Boolean);
+    const lines: { text: string; type?: "title" | "headline" | "contact" | "heading" | "body" | "bullet" | "subhead" | "meta" | "rule" | "spacer" }[] = [];
+    lines.push({ text: resume.fullName, type: "title" });
+    if (headline) lines.push({ text: headline, type: "headline" });
+    if (contactParts.length) lines.push({ text: contactParts.join(" | "), type: "contact" });
+    lines.push({ text: "", type: "rule" });
+    if (resume.summary) {
+      lines.push({ text: "Professional Summary", type: "heading" });
+      lines.push({ text: resume.summary, type: "body" });
+    }
+    if (resume.skills?.length) {
+      lines.push({ text: "Core Skills", type: "heading" });
+      resume.skills.forEach(skill => lines.push({ text: skill, type: "bullet" }));
+    }
+    if (resume.workExperience?.length) {
+      lines.push({ text: "Work Experience", type: "heading" });
+      resume.workExperience.forEach((exp, idx) => {
+        if (exp.company) lines.push({ text: exp.company, type: "subhead" });
+        if (exp.role || exp.duration) lines.push({ text: [exp.role, exp.duration].filter(Boolean).join(" | "), type: "meta" });
+        exp.description.forEach(bullet => lines.push({ text: bullet, type: "bullet" }));
+        if (idx < resume.workExperience.length - 1) lines.push({ text: "", type: "spacer" });
+      });
+    }
+    if (resume.projects?.length) {
+      lines.push({ text: "Projects", type: "heading" });
+      resume.projects.forEach((project, idx) => {
+        lines.push({ text: project.name, type: "subhead" });
+        if (project.duration) lines.push({ text: project.duration, type: "meta" });
+        project.description.forEach(bullet => lines.push({ text: bullet, type: "bullet" }));
+        if (idx < (resume.projects || []).length - 1) lines.push({ text: "", type: "spacer" });
+      });
+    }
+    if (resume.education?.length) {
+      lines.push({ text: "Education", type: "heading" });
+      resume.education.forEach(edu => {
+        if (edu.degree) lines.push({ text: edu.degree, type: "subhead" });
+        if (edu.school) lines.push({ text: edu.school, type: "body" });
+        if (edu.duration) lines.push({ text: edu.duration, type: "meta" });
+      });
+    }
+    if (resume.certifications?.length) {
+      lines.push({ text: "Certifications", type: "heading" });
+      resume.certifications.forEach(cert => lines.push({ text: cert, type: "bullet" }));
+    }
+    return lines;
+  };
+
+  const wrapPdfText = (text: string, maxChars: number) => {
+    const words = text.split(/\s+/).filter(Boolean);
+    const rows: string[] = [];
+    let current = "";
+    words.forEach(word => {
+      const next = current ? `${current} ${word}` : word;
+      if (next.length > maxChars && current) {
+        rows.push(current);
+        current = word;
+      } else {
+        current = next;
+      }
+    });
+    if (current) rows.push(current);
+    return rows.length ? rows : [""];
+  };
+
+  const handlePrintOrSavePDF = (resume: ResumeStructure, original?: ResumeStructure, headline = "") => {
+    try {
+      logDownloadEvent("Download Started", { type: "PDF" });
+      const exportResume = prepareResumeForDownload(resume, original);
+      if (!exportResume) return;
+
+      logDownloadEvent("File Generation Started", { type: "PDF" });
+      const pageWidth = 612;
+      const pageHeight = 792;
+      const margin = 54;
+      const maxY = pageHeight - margin;
+      const minY = margin;
+      const pages: string[][] = [[]];
+      let y = maxY;
+      const pdfSafeText = (value: string) =>
+        value
+          .replace(/[•]/g, "-")
+          .replace(/[–—]/g, "-")
+          .replace(/[“”]/g, '"')
+          .replace(/[‘’]/g, "'")
+          .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "");
+      const pdfEscape = (value: string) => pdfSafeText(value).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+      const addRule = () => {
+        if (y < minY + 14) {
+          pages.push([]);
+          y = maxY;
+        }
+        pages[pages.length - 1].push(`0.55 w ${margin} ${y} m ${pageWidth - margin} ${y} l S`);
+        y -= 16;
+      };
+      const addText = (text: string, x: number, size: number, font = "F1", leading = size + 4) => {
+        if (y < minY + leading) {
+          pages.push([]);
+          y = maxY;
+        }
+        pages[pages.length - 1].push(`BT /${font} ${size} Tf ${x} ${y} Td (${pdfEscape(text)}) Tj ET`);
+        y -= leading;
+      };
+
+      buildResumePlainLines(exportResume, headline).forEach(item => {
+        if (item.type === "title") {
+          addText(item.text, margin, 18, "F2", 22);
+        } else if (item.type === "headline") {
+          addText(item.text, margin, 11, "F2", 15);
+        } else if (item.type === "contact") {
+          wrapPdfText(item.text, 82).forEach(line => addText(line, margin, 11, "F1", 15));
+          y -= 6;
+        } else if (item.type === "rule") {
+          addRule();
+        } else if (item.type === "heading") {
+          y -= 7;
+          addText(item.text.toUpperCase(), margin, 13, "F2", 17);
+          addRule();
+        } else if (item.type === "subhead") {
+          addText(item.text, margin, 11, "F2", 15);
+        } else if (item.type === "meta") {
+          wrapPdfText(item.text, 90).forEach(line => addText(line, margin, 10, "F1", 14));
+        } else if (item.type === "bullet") {
+          wrapPdfText(`- ${item.text}`, 88).forEach((line, index) => addText(line, margin + (index ? 14 : 8), 10.5, "F1", 14));
+        } else if (item.type === "spacer") {
+          y -= 5;
+        } else {
+          wrapPdfText(item.text, 90).forEach(line => addText(line, margin, 10.5, "F1", 14));
+        }
+      });
+
+      const objects: string[] = [];
+      const addObject = (body: string) => {
+        objects.push(body);
+        return objects.length;
+      };
+      const catalogId = addObject("<< /Type /Catalog /Pages 2 0 R >>");
+      objects.push(""); // pages placeholder at id 2
+      const fontRegularId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+      const fontBoldId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
+      const pageIds: number[] = [];
+      pages.forEach(pageContent => {
+        const stream = pageContent.join("\n");
+        const contentId = addObject(`<< /Length ${new TextEncoder().encode(stream).length} >>\nstream\n${stream}\nendstream`);
+        const pageId = addObject(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 ${fontRegularId} 0 R /F2 ${fontBoldId} 0 R >> >> /Contents ${contentId} 0 R >>`);
+        pageIds.push(pageId);
+      });
+      objects[1] = `<< /Type /Pages /Kids [${pageIds.map(id => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`;
+
+      let pdf = "%PDF-1.4\n";
+      const offsets = [0];
+      objects.forEach((body, index) => {
+        offsets.push(pdf.length);
+        pdf += `${index + 1} 0 obj\n${body}\nendobj\n`;
+      });
+      const xrefOffset = pdf.length;
+      pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+      offsets.slice(1).forEach(offset => {
+        pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
+      });
+      pdf += `trailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+
+      const blob = new Blob([pdf], { type: "application/pdf" });
+      if (blob.size === 0) {
+        failDownload("PDF generation produced an empty file.");
+        return;
+      }
+      logDownloadEvent("PDF Generated", { bytes: blob.size });
+      const didDownload = downloadBlob(blob, `${exportResume.fullName.replace(/\s+/g, "_")}_Resume.pdf`);
+      if (didDownload) showNotification("PDF resume downloaded successfully.", "success");
+    } catch (error: any) {
+      console.error("PDF generation failed:", error);
+      failDownload(error.message || "PDF generation failed.", error);
+    }
+  };
+
+  const downloadResumeAsDocx = async (resume: ResumeStructure, filename: string, original?: ResumeStructure, headline = "") => {
+    try {
+      logDownloadEvent("Download Started", { type: "DOCX" });
+      const exportResume = prepareResumeForDownload(resume, original);
+      if (!exportResume) return;
+
+      logDownloadEvent("File Generation Started", { type: "DOCX" });
+      const textXml = (value?: string) => escapeHtml(value).replace(/\n/g, " ");
+      const paragraph = (text: string, style = "BodyText") => `<w:p><w:pPr><w:pStyle w:val="${style}"/></w:pPr><w:r><w:t xml:space="preserve">${textXml(text)}</w:t></w:r></w:p>`;
+      const bullet = (text: string) => `<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t xml:space="preserve">${textXml(text)}</w:t></w:r></w:p>`;
+      const heading = (text: string) => paragraph(text.toUpperCase(), "Heading1");
+      const subhead = (text: string) => paragraph(text, "Heading2");
+      const smallLine = (text: string) => paragraph(text, "BodyText");
+      const metaLine = (text: string) => paragraph(text, "Meta");
+      const entryGap = () => paragraph("", "EntryGap");
+      const contactLines = [exportResume.phone, exportResume.email, exportResume.linkedin, exportResume.location, exportResume.website].filter(Boolean);
+      const cell = (content: string, width: number) => `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/><w:tcMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tcMar></w:tcPr>${content}</w:tc>`;
+      const headerTable = () => `<w:tbl><w:tblPr><w:tblW w:w="10080" w:type="dxa"/><w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="single" w:sz="6" w:space="3" w:color="C9CDD3"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/><w:bottom w:w="120" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid><w:gridCol w:w="6048"/><w:gridCol w:w="4032"/></w:tblGrid><w:tr>${cell(paragraph(exportResume.fullName, "HeaderName") + (headline ? paragraph(headline, "HeaderRole") : ""), 6048)}${cell(contactLines.map(line => paragraph(String(line), "HeaderContact")).join(""), 4032)}</w:tr></w:tbl>`;
+
+      let body = "";
+      body += headerTable();
+      if (exportResume.summary) body += heading("Professional Summary") + paragraph(exportResume.summary);
+      if (exportResume.skills.length) {
+        body += heading("Core Skills");
+        exportResume.skills.forEach(skill => { body += bullet(skill); });
+      }
+      if (exportResume.workExperience.length) {
+        body += heading("Work Experience");
+        exportResume.workExperience.forEach((exp, idx) => {
+          if (exp.company) body += subhead(exp.company);
+          if (exp.role || exp.duration) body += metaLine([exp.role, exp.duration].filter(Boolean).join(" | "));
+          exp.description.forEach(item => { body += bullet(item); });
+          if (idx < exportResume.workExperience.length - 1) body += entryGap();
+        });
+      }
+      if (exportResume.projects?.length) {
+        body += heading("Projects");
+        exportResume.projects.forEach((project, idx) => {
+          body += subhead(project.name);
+          if (project.duration) body += metaLine(project.duration);
+          project.description.forEach(item => { body += bullet(item); });
+          if (idx < (exportResume.projects || []).length - 1) body += entryGap();
+        });
+      }
+      if (exportResume.education.length) {
+        body += heading("Education");
+        exportResume.education.forEach(edu => {
+          if (edu.degree) body += subhead(edu.degree);
+          if (edu.school) body += smallLine(edu.school);
+          if (edu.duration) body += metaLine(edu.duration);
+          if (edu.gpa) body += paragraph(`GPA: ${edu.gpa}`);
+        });
+      }
+      if (exportResume.certifications?.length) {
+        body += heading("Certifications");
+        exportResume.certifications.forEach(cert => { body += bullet(cert); });
+      }
+
+      const zip = new JSZip();
+      zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>`);
+      zip.folder("_rels")?.file(".rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`);
+      zip.folder("word")?.folder("_rels")?.file("document.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rIdNumbering" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/></Relationships>`);
+      zip.folder("word")?.file("styles.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="21"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="BodyText"><w:name w:val="Body Text"/><w:pPr><w:spacing w:after="90" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="21"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="HeaderName"><w:name w:val="Header Name"/><w:pPr><w:spacing w:after="40" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:b/><w:sz w:val="34"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="HeaderRole"><w:name w:val="Header Role"/><w:pPr><w:spacing w:after="40" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:b/><w:color w:val="374151"/><w:sz w:val="22"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="HeaderContact"><w:name w:val="Header Contact"/><w:pPr><w:jc w:val="right"/><w:spacing w:after="20" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:color w:val="111827"/><w:sz w:val="18"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="Heading 1"/><w:pPr><w:spacing w:before="180" w:after="80" w:line="276" w:lineRule="auto"/><w:pBdr><w:bottom w:val="single" w:sz="5" w:space="3" w:color="C9CDD3"/></w:pBdr></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:b/><w:sz w:val="24"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="Heading 2"/><w:pPr><w:spacing w:before="80" w:after="20" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:b/><w:sz w:val="21"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Meta"><w:name w:val="Meta"/><w:pPr><w:spacing w:after="50" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:color w:val="4B5563"/><w:sz w:val="19"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="EntryGap"><w:name w:val="Entry Gap"/><w:pPr><w:spacing w:after="80"/></w:pPr><w:rPr><w:sz w:val="4"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:pPr><w:ind w:left="420" w:hanging="240"/><w:spacing w:after="45" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="21"/></w:rPr></w:style></w:styles>`);
+      zip.folder("word")?.file("numbering.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="420" w:hanging="240"/></w:pPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>`);
+      zip.folder("word")?.file("document.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1080" w:right="1080" w:bottom="1080" w:left="1080" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>`);
+
+      const blob = await zip.generateAsync({ type: "blob", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+      if (blob.size === 0) {
+        failDownload("DOCX generation produced an empty file.");
+        return;
+      }
+      logDownloadEvent("DOCX Generated", { bytes: blob.size });
+      const didDownload = downloadBlob(blob, filename.endsWith(".docx") ? filename : `${filename}.docx`);
+      if (didDownload) showNotification("DOCX resume downloaded successfully.", "success");
+    } catch (error: any) {
+      console.error("DOCX generation failed:", error);
+      failDownload(error.message || "DOCX generation failed.", error);
+    }
   };
 
   const handleCopyText = () => {
@@ -1308,7 +2859,7 @@ WORK EXPERIENCE
                   onClick={handleGuestAccess}
                   className="bg-neutral-950 text-white font-medium text-xs px-5 py-2.5 rounded-full hover:opacity-90 active:scale-95 duration-200 cursor-pointer"
                 >
-                  Guest Mode
+                  Continue as Guest
                 </button>
               </div>
             </div>
@@ -1366,53 +2917,17 @@ WORK EXPERIENCE
                       onClick={handleGuestAccess}
                       className="w-full py-3.5 bg-black hover:bg-neutral-800 text-white text-sm font-bold rounded-xl transition duration-150 cursor-pointer shadow-md"
                     >
-                      Guest Mode
+                      Continue as Guest
                     </button>
    
                     <div className="relative flex py-1 items-center">
                       <div className="flex-grow border-t border-neutral-300"></div>
-                      <span className="flex-shrink mx-4 text-neutral-500 text-[10px] uppercase font-mono font-bold tracking-widest">or sign in with</span>
-                      <div className="flex-grow border-t border-neutral-300"></div>
-                    </div>
-   
-                    {/* Social Sign In Block from Screenshot (Black/White minimal) */}
-                    <div className="grid grid-cols-2 gap-4">
-                      <button
-                        id="btn-auth-linkedin"
-                        onClick={() => handleOAuthSimulate("linkedin")}
-                        className="py-2.5 px-4 bg-white hover:bg-neutral-50 border border-neutral-300 text-black rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition cursor-pointer shadow-2xs"
-                      >
-                        <span className="text-black font-bold">LinkedIn</span>
-                      </button>
-                      <button
-                        id="btn-auth-google"
-                        onClick={() => handleOAuthSimulate("google")}
-                        className="py-2.5 px-4 bg-white hover:bg-neutral-50 border border-neutral-300 text-black rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition cursor-pointer shadow-2xs"
-                      >
-                        <span className="text-black font-bold">Google</span>
-                      </button>
-                    </div>
-   
-                    <div className="relative flex py-1 items-center">
-                      <div className="flex-grow border-t border-neutral-300"></div>
-                      <span className="flex-shrink mx-4 text-neutral-500 text-[10px] uppercase font-mono font-bold tracking-widest">or email access</span>
+                      <span className="flex-shrink mx-4 text-neutral-500 text-[10px] uppercase font-mono font-bold tracking-widest">{isSignUp ? "create account" : "sign in"}</span>
                       <div className="flex-grow border-t border-neutral-300"></div>
                     </div>
    
                     <form onSubmit={handleAuth} className="space-y-4 text-left">
-                      {isSignUp && (
-                        <div>
-                          <label className="block text-[10px] text-black uppercase font-mono mb-1.5 font-bold">Full Name</label>
-                          <input
-                            id="input-signup-name"
-                            type="text"
-                            placeholder="Alex Rivera"
-                            value={authName}
-                            onChange={(e) => setAuthName(e.target.value)}
-                            className="w-full pl-3 pr-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
-                          />
-                        </div>
-                      )}
+                      <h2 className="text-xl font-black text-black tracking-tight">{isSignUp ? "Create Account" : "Sign In"}</h2>
    
                       <div>
                         <label className="block text-[10px] text-black uppercase font-mono mb-1.5 font-bold">Email Address</label>
@@ -1439,23 +2954,44 @@ WORK EXPERIENCE
                           className="w-full pl-3 pr-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
                         />
                       </div>
+
+                      {isSignUp && (
+                        <div>
+                          <label className="block text-[10px] text-black uppercase font-mono mb-1.5 font-bold">Confirm Password</label>
+                          <input
+                            id="input-auth-confirm-password"
+                            type="password"
+                            required
+                            placeholder="••••••••"
+                            value={authConfirmPassword}
+                            onChange={(e) => setAuthConfirmPassword(e.target.value)}
+                            className="w-full pl-3 pr-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
+                          />
+                        </div>
+                      )}
    
                       <button
                         id="btn-auth-submit"
                         type="submit"
                         className="w-full py-2.5 bg-black hover:bg-neutral-800 text-white text-xs font-semibold rounded-lg transition mt-4 cursor-pointer shadow-md"
                       >
-                        {isSignUp ? "Create Free Account" : "Access Optimizer Suite"}
+                        {isSignUp ? "Create Account" : "Sign In"}
                       </button>
    
                       <div className="text-center mt-3">
+                        {!isSignUp && (
+                          <p className="text-xs text-neutral-600 mb-2 font-semibold">Don't have an account?</p>
+                        )}
                         <button
                           id="btn-toggle-auth-mode"
                           type="button"
-                          onClick={() => setIsSignUp(!isSignUp)}
+                          onClick={() => {
+                            setIsSignUp(!isSignUp);
+                            setAuthConfirmPassword("");
+                          }}
                           className="text-xs text-black hover:text-neutral-800 underline font-semibold transition"
                         >
-                          {isSignUp ? "Already have an account? Log In" : "Need an account? Sign Up for Free"}
+                          {isSignUp ? "Already have an account? Sign In" : "Create Account"}
                         </button>
                       </div>
                     </form>
@@ -1617,10 +3153,7 @@ WORK EXPERIENCE
           <nav className="p-4 space-y-2">
             {[
               { step: "resume", label: "Resume Setup", icon: FileText },
-              { step: "dashboard", label: "Tailored Resumes", icon: FolderOpen },
-              { step: "jd", label: "Job Analysis", icon: BookOpen },
-              { step: "tailor", label: "Tailoring Studio", icon: Sparkles },
-              { step: "saves", label: "Saved Copies", icon: Save, badge: savedVersions.length }
+              { step: "dashboard", label: "Tailored Resumes", icon: FolderOpen }
             ].map((item) => {
               const IconComponent = item.icon;
               const isActive = currentStep === item.step;
@@ -1636,7 +3169,7 @@ WORK EXPERIENCE
                         setIsUnlocked(true);
                         sessionStorage.setItem("auralis_platform_unlocked", "true");
                       }
-                      setCurrentStep(item.step as any);
+                      setCurrentStep(item.step as "resume" | "dashboard");
                     }
                   }}
                   className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-black tracking-wide uppercase transition-all duration-200 cursor-pointer border-2 ${
@@ -1649,9 +3182,6 @@ WORK EXPERIENCE
                   {!isSidebarCollapsed && (
                     <div className="flex justify-between items-center w-full min-w-0">
                       <span className="truncate">{item.label}</span>
-                      {item.badge !== undefined && item.badge > 0 && (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-600 text-white font-black flex-shrink-0 ml-1 leading-none">{item.badge}</span>
-                      )}
                     </div>
                   )}
                 </button>
@@ -1771,7 +3301,17 @@ WORK EXPERIENCE
             {/* Sign Out Button */}
             <button
               id="btn-sign-out"
-              onClick={() => {
+              onClick={async () => {
+                const storedSession = localStorage.getItem(SUPABASE_SESSION_STORAGE_KEY);
+                if (storedSession) {
+                  try {
+                    const session = JSON.parse(storedSession);
+                    await supabaseAuth.signOut(session.accessToken);
+                  } catch {
+                    // Local sign-out should still continue even if remote sign-out fails.
+                  }
+                }
+                localStorage.removeItem(SUPABASE_SESSION_STORAGE_KEY);
                 setCurrentUser(null);
                 setCurrentStep("auth");
                 setIsUnlocked(false);
@@ -1795,110 +3335,103 @@ WORK EXPERIENCE
           {notification && (
             <div
               id="toast-notification-workspace"
-              className="fixed top-24 right-6 z-50 flex items-center gap-3 p-4 rounded-xl border-2 border-black dark:border-neutral-800 bg-white dark:bg-neutral-950 text-neutral-950 dark:text-white shadow-xl text-xs font-bold animate-slideIn"
+              className="fixed top-24 right-6 z-55 flex items-center gap-3 p-4 rounded-xl border-2 border-black dark:border-neutral-800 bg-white dark:bg-neutral-950 text-neutral-950 dark:text-white shadow-xl text-xs font-bold animate-slideIn"
             >
-              <Check className="w-4 h-4 text-emerald-500" />
+              {notification.type === "error" ? (
+                <XCircle className="w-4 h-4 text-rose-500" />
+              ) : notification.type === "info" ? (
+                <AlertTriangle className="w-4 h-4 text-blue-500" />
+              ) : (
+                <Check className="w-4 h-4 text-emerald-500" />
+              )}
+              <span>{notification.message}</span>
             </div>
           )}
 
-          {/* -------------------- STEP: DASHBOARD SCREEN -------------------- */}
           {currentStep === "dashboard" && (
-            <div className={`space-y-6 ${savedVersions.length === 0 ? 'w-full' : 'max-w-5xl mx-auto'}`}>
-              {savedVersions.length === 0 ? (
-                /* FIRST TIME USER BLANK SCREEN STYLED SIMILAR TO LOGIN CARD WITH THICK BLACK BORDER */
-                <div className="relative min-h-[70vh] w-full flex flex-col items-center justify-center animate-fadeIn">
-                  <div className="flex flex-col items-center justify-center py-16 px-8 bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] text-center max-w-xl w-full mx-auto my-6 transition-all duration-300">
-                    <div className="w-16 h-16 rounded-full border-2 border-dashed border-neutral-400 flex items-center justify-center mb-6">
-                      <FolderOpen className="w-8 h-8 text-black" />
-                    </div>
-                    {/* Shortened empty state text as requested */}
-                    <h3 className="text-xl font-black tracking-tight text-black uppercase font-mono">No Resumes Tailored</h3>
-                    <p className="text-sm text-neutral-600 mt-3 max-w-sm leading-relaxed font-semibold">
-                      To create tailored resumes, use the Left Sidebar menu options!
-                    </p>
-                  </div>
-                  
-                  {/* FLOATING ACTION PILL ON BOTTOM RIGHT OF MAIN STAGE: "CREATE NEW" ROYAL BLUE PILLED BUTTON */}
-                  <div className="absolute bottom-2 right-2 sm:bottom-0 sm:right-4">
-                    <button
-                      id="btn-dashboard-float-create-new"
-                      onClick={() => {
-                        if (!hasResume) {
-                          setShowNoResumeAlert(true);
-                        } else {
-                          if (!isUnlocked) {
-                            setIsUnlocked(true);
-                            sessionStorage.setItem("auralis_platform_unlocked", "true");
-                          }
-                          handleOpenTailorWizard();
-                        }
-                      }}
-                      className="px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border border-transparent flex items-center gap-1.5"
-                    >
-                      <Plus className="w-4 h-4 text-white" strokeWidth={3} />
-                      <span>Create New</span>
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                /* EXQUISITE JD CARD LAYOUT REPRESENTING CREATED JDS AS DEPICTED IN THE WIREFRAME */
-                <div className="space-y-6 max-w-3xl mr-auto text-left mt-2 animate-fadeIn w-full">
-                  {savedVersions.map((version) => (
-                    <div
-                      key={version.id}
-                      id={`jd-item-${version.id}`}
-                      onClick={() => {
-                        setSelectedSavedVersion(version);
-                        setShowSavedVersionPreviewModal(true);
-                      }}
-                      className="w-full bg-white border-4 border-black rounded-3xl p-6 sm:p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] hover:shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] hover:-translate-x-0.5 hover:-translate-y-0.5 transition-all duration-200 cursor-pointer flex justify-between items-center text-left"
-                    >
-                      <div className="space-y-2 min-w-0 flex-1 pr-4">
-                        <h3 className="text-xl font-black text-black tracking-tight font-sans truncate">
-                          {version.companyName} — <span className="italic text-neutral-800 font-medium">{version.jobTitle}</span>
-                        </h3>
-                        <p className="text-xs font-mono font-bold text-neutral-550 uppercase tracking-wider">
-                          Created: {version.savedAt}
-                        </p>
+            <div className="max-w-5xl mx-auto space-y-6 relative min-h-[70vh] flex flex-col justify-between w-full">
+              <div>
+                {savedVersions.length === 0 ? (
+                  /* FIRST TIME USER BLANK SCREEN STYLED SIMILAR TO LOGIN CARD WITH THICK BLACK BORDER */
+                  <div className="max-w-xl w-full mx-auto my-6 animate-fadeIn">
+                    <div className="flex flex-col items-center justify-center py-16 px-8 bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] text-center w-full transition-all duration-300">
+                      <div className="w-16 h-16 rounded-full border-2 border-dashed border-neutral-400 flex items-center justify-center mb-6">
+                        <FolderOpen className="w-8 h-8 text-black" />
                       </div>
-                      <div className="flex flex-col items-end gap-2 text-right flex-shrink-0">
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setVersionToDeleteId(version.id);
-                            setShowDeleteSavedVersionConfirmModal(true);
-                          }}
-                          className="text-xs font-black uppercase tracking-widest text-rose-600 hover:text-rose-800 hover:underline transition-all cursor-pointer"
-                        >
-                          Delete
-                        </button>
-                      </div>
+                      {/* Shortened empty state text as requested */}
+                      <h3 className="text-xl font-black tracking-tight text-black uppercase font-mono">No Resumes Tailored</h3>
+                      <p className="text-sm text-neutral-650 mt-3 max-w-sm leading-relaxed font-semibold">
+                        Add a resume in Resume Setup, then create and download a tailored resume here.
+                      </p>
                     </div>
-                  ))}
-                  
-                  {/* Floating Action Pill on dashboard when savedVersions exist */}
-                  <div className="flex justify-end pt-12">
-                    <button
-                      id="btn-dashboard-float-create-new-has-items"
-                      onClick={() => {
-                        if (!hasResume) {
-                          setShowNoResumeAlert(true);
-                        } else {
-                          if (!isUnlocked) {
-                            setIsUnlocked(true);
-                            sessionStorage.setItem("auralis_platform_unlocked", "true");
-                          }
-                          handleOpenTailorWizard();
-                        }
-                      }}
-                      className="px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border border-transparent flex items-center gap-1.5"
-                    >
-                      <Plus className="w-4 h-4 text-white" strokeWidth={3} />
-                      <span>Create New</span>
-                    </button>
                   </div>
-                </div>
-              )}
+                ) : (
+                  /* EXQUISITE JD CARD LAYOUT REPRESENTING CREATED JDS AS DEPICTED IN THE WIREFRAME */
+                  <div className="space-y-3 max-w-3xl mr-auto text-left mt-2 animate-fadeIn w-full pb-4">
+                    {savedVersions.map((version) => (
+                      <div
+                        key={version.id}
+                        id={`jd-item-${version.id}`}
+                        className="w-full bg-white border-4 border-black rounded-3xl p-5 sm:p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all duration-200 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 text-left"
+                      >
+                        <div className="space-y-1.5 min-w-0 flex-1">
+                          <h3 className="text-lg font-black text-black tracking-tight font-sans truncate">
+                            {version.companyName} — <span className="italic text-neutral-800 font-medium">{version.jobTitle}</span>
+                          </h3>
+                          <p className="text-[10px] font-mono font-bold text-neutral-550 tracking-wider">
+                            Created: {version.savedAt}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-3 flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedSavedVersion(version);
+                              setShowSavedVersionPreviewModal(true);
+                            }}
+                            className="px-4 py-2 bg-black text-white rounded-xl text-xs font-black uppercase tracking-widest border-2 border-black hover:bg-neutral-800 transition-all cursor-pointer"
+                          >
+                            View
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setVersionToDeleteId(version.id);
+                              setShowDeleteSavedVersionConfirmModal(true);
+                            }}
+                            className="px-4 py-2 bg-white text-rose-600 rounded-xl text-xs font-black uppercase tracking-widest border-2 border-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Floating Action Pill on dashboard placed on the right side below, near to the corner */}
+              <div className="flex justify-end mt-4 pr-1">
+                <button
+                  id={savedVersions.length === 0 ? "btn-dashboard-float-create-new" : "btn-dashboard-float-create-new-has-items"}
+                  onClick={() => {
+                    if (!hasResume) {
+                      setShowNoResumeAlert(true);
+                    } else {
+                      if (!isUnlocked) {
+                        setIsUnlocked(true);
+                        sessionStorage.setItem("auralis_platform_unlocked", "true");
+                      }
+                      handleOpenTailorWizard();
+                    }
+                  }}
+                  className="px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border border-transparent flex items-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4 text-white" strokeWidth={3} />
+                  <span>Create New</span>
+                </button>
+              </div>
             </div>
           )}
 
@@ -2037,18 +3570,29 @@ WORK EXPERIENCE
                       showNotification("Please provide your full name.", "error");
                       return;
                     }
-                    setHasResume(true);
-                    localStorage.setItem("jd_resume_customizer_has_resume", "true");
                     setIsUnlocked(true);
                     sessionStorage.setItem("auralis_platform_unlocked", "true");
                     setOnboardingChoice("done");
                     sessionStorage.setItem("auralis_onboarding_dismissed", "true");
                     localStorage.setItem("jd_resume_customizer_onboarding_done", "true");
-                    if (!localStorage.getItem("jd_resume_customizer_resume_created_at")) {
-                      localStorage.setItem("jd_resume_customizer_resume_created_at", new Date().toLocaleDateString());
+
+                    // Push into the library
+                    const newId = `resume-manual-${Date.now()}`;
+                    const newName = activeResume.fullName ? `${activeResume.fullName}'s Resume` : "My Resume";
+                    if (isDuplicateResume(newName, undefined, activeResume)) {
+                      showNotification("This resume has already been added.", "error");
+                      return;
                     }
+                    const newEntry: SavedResume = {
+                      id: newId,
+                      name: newName,
+                      data: { ...activeResume },
+                      uploadedAt: new Date().toISOString()
+                    };
+                    setSavedUserResumes(prev => [...prev, newEntry]);
+                    setActiveResumeId(newId);
                     setOriginalResume(activeResume);
-                    showNotification("Custom resume generated and loaded successfully! Platform unlocked.", "success");
+                    showNotification("Resume created and added to your library! Platform unlocked.", "success");
                   }}
                   className="space-y-6 text-left"
                 >
@@ -2325,28 +3869,82 @@ WORK EXPERIENCE
         </div>
       )}
               {currentStep === "resume" && (
-              <div id="step-resume-panel" className="max-w-5xl mx-auto space-y-6">
-                {resumeSelectionMode === "create" ? null : !hasResume ? (
-                  <div className="relative min-h-[65vh] flex flex-col items-center justify-center">
-                    {/* Center empty state box matching the wireframe precisely */}
-                    <div className="flex flex-col items-center justify-center py-16 px-8 bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] text-center max-w-xl w-full mx-auto my-6 transition-all duration-300">
-                      <div className="w-16 h-16 rounded-full border-2 border-dashed border-neutral-400 flex items-center justify-center mb-6">
-                        <FolderOpen className="w-8 h-8 text-black" />
+              <div id="step-resume-panel" className="max-w-5xl mx-auto space-y-6 min-h-[70vh] flex flex-col justify-between">
+                <div>
+                  {resumeSelectionMode === "create" ? null : !hasResume ? (
+                    <div className="max-w-xl w-full mx-auto my-6 animate-fadeIn">
+                      {/* Center empty state box matching the wireframe precisely */}
+                      <div className="flex flex-col items-center justify-center py-16 px-8 bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] text-center w-full transition-all duration-300">
+                        <div className="w-16 h-16 rounded-full border-2 border-dashed border-neutral-400 flex items-center justify-center mb-6">
+                          <FolderOpen className="w-8 h-8 text-black" />
+                        </div>
+                        <h3 className="text-xl font-black tracking-tight text-black uppercase font-mono">No Resumes Setup</h3>
+                        <p className="text-sm text-neutral-650 mt-3 max-w-sm leading-relaxed font-semibold">
+                          Please click on 'Create New' to upload or create your resume. Once your resume is ready, you'll unlock all Auralis features.
+                        </p>
                       </div>
-                      <h3 className="text-xl font-black tracking-tight text-black uppercase font-mono">No Resumes Tailored</h3>
-                      <p className="text-sm text-neutral-650 mt-3 max-w-sm leading-relaxed font-semibold">
-                        Please click on 'Create New' to upload or create your resume. Once your resume is ready, you'll unlock all Auralis features.
-                      </p>
                     </div>
+                  ) : (
+                    <div className="relative flex flex-col justify-start items-start text-left p-2 animate-fadeIn w-full">
+                      {/* Resume Library Card List and Floating Add Button Wrapper */}
+                      <div className="max-w-3xl w-full relative space-y-3 pb-4">
+                        {savedUserResumes.map((savedResume) => (
+                          <div
+                            key={savedResume.id}
+                            className="w-full bg-white border-4 border-black rounded-3xl p-5 sm:p-6 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-all duration-200 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4"
+                          >
+                            <div className="space-y-1.5 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h3 className="text-base font-black text-black tracking-tight font-sans truncate">
+                                  {getResumeCardDisplayName(savedResume)}
+                                </h3>
+                              </div>
+                              <p className="text-[10px] font-mono font-bold text-neutral-550 tracking-wider">
+                                Created: {formatResumeCreatedDate(savedResume.uploadedAt)}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-3 flex-shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveResumeId(savedResume.id);
+                                  setPreviewResumeId(savedResume.id);
+                                  setShowResumePreviewModal(true);
+                                }}
+                                className="px-4 py-2 bg-black text-white rounded-xl text-xs font-black uppercase tracking-widest border-2 border-black hover:bg-neutral-800 transition-all cursor-pointer"
+                              >
+                                View
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setResumeToDeleteId(savedResume.id);
+                                  setShowDeleteConfirmModal(true);
+                                }}
+                                className="px-4 py-2 bg-white text-rose-600 rounded-xl text-xs font-black uppercase tracking-widest border-2 border-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
 
-                    {/* Floating Bottom Right Button styled and positioned precisely as shown in the wireframe */}
-                    <div className="absolute bottom-[-32px] right-[-32px] sm:bottom-[-44px] sm:right-[-44px]">
+                {resumeSelectionMode !== "create" && (
+                  <div className="flex justify-end mt-4 pr-1">
+                    {!hasResume ? (
                       <div className="group relative inline-block">
                         <button
                           id="btn-first-time-create-resume"
                           onClick={() => {
-                            setChoiceModalPathway("upload");
-                            setIsChoiceModalOpen(true);
+                            setTempFile(null);
+                            setUploadError(null);
+                            setAnalysisResult(null);
+                            setIsUploadModalOpen(true);
                           }}
                           className="px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border-2 border-transparent flex items-center gap-2"
                           title="Start here to unlock Auralis."
@@ -2358,51 +3956,21 @@ WORK EXPERIENCE
                           Start here to unlock Auralis.
                         </div>
                       </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="relative min-h-[65vh] flex flex-col justify-start items-start text-left p-2 animate-fadeIn">
-                    <div className="max-w-3xl mr-auto text-left -mt-2 -ml-2 w-full">
-                      <div 
-                        onClick={() => setShowResumePreviewModal(true)}
-                        className="w-full bg-white border-4 border-black rounded-3xl p-6 sm:p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] hover:shadow-[10px_10px_0px_0px_rgba(0,0,0,1)] hover:-translate-x-0.5 hover:-translate-y-0.5 transition-all duration-200 cursor-pointer flex justify-between items-center"
-                      >
-                        <div className="space-y-2">
-                          <h3 className="text-xl font-black text-black tracking-tight font-sans">
-                            {uploadedResumeMeta ? uploadedResumeMeta.name : (activeResume.fullName ? `${activeResume.fullName}'s Resume` : "My Resume")}
-                          </h3>
-                          <p className="text-xs font-mono font-bold text-neutral-550 uppercase tracking-wider">
-                            Created: {localStorage.getItem("jd_resume_customizer_resume_created_at") || new Date().toLocaleDateString()}
-                          </p>
-                        </div>
-                        <div className="flex flex-col items-end gap-2 text-right">
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setShowDeleteConfirmModal(true);
-                            }}
-                            className="text-xs font-black uppercase tracking-widest text-rose-600 hover:text-rose-800 hover:underline transition-all cursor-pointer"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Floating Create New button in bottom right */}
-                    <div className="absolute bottom-[-32px] right-[-32px] sm:bottom-[-44px] sm:right-[-44px]">
+                    ) : (
                       <button
                         id="btn-create-resume-setup-floating"
                         onClick={() => {
-                          setChoiceModalPathway("upload");
-                          setIsChoiceModalOpen(true);
+                          setTempFile(null);
+                          setUploadError(null);
+                          setAnalysisResult(null);
+                          setIsUploadModalOpen(true);
                         }}
                         className="px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border-2 border-transparent flex items-center gap-2"
                       >
                         <Plus className="w-4 h-4 text-white" strokeWidth={3} />
-                        <span>Create New</span>
+                        <span>Add Resume</span>
                       </button>
-                    </div>
+                    )}
                   </div>
                 )}
 
@@ -2435,18 +4003,29 @@ WORK EXPERIENCE
                           return;
                         }
                         const wasLocked = !isUnlocked;
-                        setHasResume(true);
-                        localStorage.setItem("jd_resume_customizer_has_resume", "true");
                         setIsUnlocked(true);
                         sessionStorage.setItem("auralis_platform_unlocked", "true");
                         setOnboardingChoice("done");
                         sessionStorage.setItem("auralis_onboarding_dismissed", "true");
                         localStorage.setItem("jd_resume_customizer_onboarding_done", "true");
-                        if (!localStorage.getItem("jd_resume_customizer_resume_created_at")) {
-                          localStorage.setItem("jd_resume_customizer_resume_created_at", new Date().toLocaleDateString());
+
+                        // Push the manually created resume into the library
+                        const newId = `resume-manual-${Date.now()}`;
+                        const newName = activeResume.fullName ? `${activeResume.fullName}'s Resume` : "My Resume";
+                        if (isDuplicateResume(newName, undefined, activeResume)) {
+                          showNotification("This resume has already been added.", "error");
+                          return;
                         }
+                        const newEntry: SavedResume = {
+                          id: newId,
+                          name: newName,
+                          data: { ...activeResume },
+                          uploadedAt: new Date().toISOString()
+                        };
+                        setSavedUserResumes(prev => [...prev, newEntry]);
+                        setActiveResumeId(newId);
                         setOriginalResume(activeResume);
-                        showNotification("Custom resume generated and loaded successfully! Platform unlocked.", "success");
+                        showNotification("Resume created and added to your library!", "success");
                         setResumeSelectionMode(null);
                         if (wasLocked) {
                           setCurrentStep("dashboard");
@@ -2759,23 +4338,19 @@ WORK EXPERIENCE
                   {/* Header Titles Based on State */}
                   <div className="space-y-1">
                     <h3 className="text-xl font-black font-sans tracking-tight text-neutral-900 leading-tight">
-                      {isAnalyzing 
-                        ? "Recruiter AI Verification Scan"
-                        : analysisResult
-                          ? analysisResult.isResume 
-                            ? "Resume Successfully Verified!" 
-                            : "Invalid File: Verification Failed"
-                          : "Upload your existing resume"
+                      {isAnalyzing
+                        ? "Checking your resume..."
+                        : analysisResult && !analysisResult.isResume
+                          ? "Not a Valid Resume"
+                          : "Upload your resume"
                       }
                     </h3>
                     <p className="text-xs text-neutral-550 font-sans font-medium">
-                      {isAnalyzing 
-                        ? "Please wait while Gemini performs a deep AST audit on your content..."
-                        : analysisResult
-                          ? analysisResult.isResume 
-                            ? "Our AI detected valid structures and generated optimization metrics."
-                            : "The uploaded file does not meet standard resume requirements."
-                          : "Select or drop your file to parse and customize it against ATS job queries."
+                      {isAnalyzing
+                        ? "Please wait while we check your file..."
+                        : analysisResult && !analysisResult.isResume
+                          ? "Please upload a valid resume file."
+                          : "Select or drop your PDF or DOCX file below."
                       }
                     </p>
                   </div>
@@ -2788,9 +4363,9 @@ WORK EXPERIENCE
                         <span className="w-4 h-4 rounded-full bg-blue-500 animate-pulse"></span>
                       </div>
                       <div className="space-y-1.5 text-center max-w-sm">
-                        <p className="text-sm font-black text-neutral-800 font-mono uppercase tracking-wide">Scanning structure...</p>
+                        <p className="text-sm font-black text-neutral-800 font-mono uppercase tracking-wide">Checking file...</p>
                         <p className="text-[11px] text-neutral-550 font-sans leading-relaxed font-semibold">
-                          We are validating key profile details, scanning contact coordinates, and evaluating ATS keyword readiness.
+                          Verifying that your file is a resume. This only takes a few seconds.
                         </p>
                       </div>
                     </div>
@@ -2841,125 +4416,39 @@ WORK EXPERIENCE
                     </>
                   )}
 
-                  {/* 3. Analysis Reports View */}
-                  {!isAnalyzing && analysisResult && (
-                    <div className="space-y-5">
-                      {/* Scenario 3A. Is NOT a Resume */}
-                      {!analysisResult.isResume ? (
-                        <div className="border-2 border-rose-500 bg-rose-50/20 rounded-2xl p-5 space-y-3.5">
-                          <div className="flex items-start gap-3">
-                            <XCircle className="w-5 h-5 text-rose-500 mt-0.5 flex-shrink-0" />
-                            <div>
-                              <p className="text-sm font-black text-rose-950 uppercase font-mono tracking-wide">Document Rejected</p>
-                              <p className="text-[11px] text-neutral-700 font-semibold mt-1 font-sans leading-relaxed">
-                                maybe you uploaded a wrong file. The scanned uploaded document isnt a resume. please check and retry again
-                              </p>
-                            </div>
-                          </div>
-                          
-                          <div className="pt-1.5 flex justify-start">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setTempFile(null);
-                                setAnalysisResult(null);
-                              }}
-                              className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition cursor-pointer"
-                            >
-                              Try Another File
-                            </button>
-                          </div>
+                  {/* Invalid resume error */}
+                  {showInvalidResumeCard && (
+                    <div className="border-2 border-rose-500 bg-rose-50/20 rounded-2xl p-5 space-y-3.5">
+                      <div className="flex items-start gap-3">
+                        <XCircle className="w-5 h-5 text-rose-500 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <p className="text-sm font-black text-rose-950 uppercase font-mono tracking-wide">Not a Valid Resume</p>
+                          <p className="text-[11px] text-neutral-700 font-semibold mt-1 font-sans leading-relaxed">
+                            This file does not appear to be a valid resume. Please upload a resume.
+                          </p>
                         </div>
-                      ) : (
-                        /* Scenario 3B. Is a legitimate Resume! */
-                        <div className="space-y-4">
-                          {/* Success and dynamic audit score meter */}
-                          <div className="border-2 border-emerald-500 bg-emerald-50/20 rounded-2xl p-4 flex items-center justify-between gap-4">
-                            <div className="flex items-center gap-3">
-                              <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
-                              <div className="text-left">
-                                <span className="text-xs uppercase font-mono font-black text-emerald-800 tracking-wide">Verified Format</span>
-                                <p className="text-xs text-neutral-700 font-bold font-sans mt-0.5">
-                                  {tempFile?.name || "Uploaded Resume"}
-                                </p>
-                              </div>
-                            </div>
-
-                            <div className="text-right flex-shrink-0">
-                              <span className="text-[10px] uppercase font-mono font-black text-neutral-500">Completeness</span>
-                              <div className="flex items-baseline gap-0.5 mt-0.5">
-                                <span className="text-2xl font-black text-emerald-700 font-mono">{analysisResult.confidenceScore}</span>
-                                <span className="text-xs font-mono font-black text-neutral-500">/100</span>
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Horizontal Score Progress Bar */}
-                          <div className="w-full bg-neutral-100 rounded-full h-2.5 border border-black overflow-hidden relative">
-                            <div 
-                              className="bg-emerald-550 h-full rounded-full transition-all duration-500"
-                              style={{ width: `${analysisResult.confidenceScore}%` }}
-                            />
-                          </div>
-
-                          {/* Two column lists: Profile extraction + Missing Checklist */}
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            {/* Detected Info Column */}
-                            <div className="border border-neutral-200 rounded-xl p-3.5 space-y-2 bg-neutral-50/50">
-                              <span className="text-[10px] uppercase font-mono font-black text-neutral-500 block">Candidate Profile Found</span>
-                              <div className="space-y-1 text-xs">
-                                <p className="font-bold text-neutral-800 truncate"><span className="text-neutral-500 font-medium">Name:</span> {analysisResult.detectedProfile.fullName || "Not Specified"}</p>
-                                <p className="font-bold text-neutral-800 truncate"><span className="text-neutral-500 font-medium">Email:</span> {analysisResult.detectedProfile.email || "Not Specified"}</p>
-                                <p className="font-bold text-neutral-800 truncate"><span className="text-neutral-500 font-medium">Phone:</span> {analysisResult.detectedProfile.phone || "Not Specified"}</p>
-                                <p className="font-bold text-neutral-800"><span className="text-neutral-500 font-medium">Skills Identified:</span> <span className="px-1.5 py-0.5 bg-neutral-200 text-neutral-800 rounded font-mono text-[10px] font-black">{analysisResult.detectedProfile.skills?.length || 0} items</span></p>
-                              </div>
-                            </div>
-
-                            {/* Missing Standard Items Column */}
-                            <div className="border border-neutral-200 rounded-xl p-3.5 space-y-2 bg-neutral-50/50">
-                              <span className="text-[10px] uppercase font-mono font-black text-neutral-500 block">Section Checklist</span>
-                              <div className="space-y-1.5 scroll-container max-h-32 overflow-y-auto">
-                                {analysisResult.missingItems.length === 0 ? (
-                                  <div className="flex items-center gap-1.5 text-xs text-emerald-600 font-black">
-                                    <Check className="w-4 h-4" />
-                                    <span>All Standard Sections Found</span>
-                                  </div>
-                                ) : (
-                                  analysisResult.missingItems.map((item, idx) => (
-                                    <div key={idx} className="flex items-center gap-1.5 text-xs text-neutral-600 font-semibold font-sans">
-                                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />
-                                      <span>Missing {item}</span>
-                                    </div>
-                                  ))
-                                )}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Recruiter optimization suggestions */}
-                          {analysisResult.actionableImprovements?.length > 0 && (
-                            <div className="border border-neutral-200 rounded-xl p-4 bg-orange-50/20 space-y-2 text-left">
-                              <span className="text-[10px] uppercase font-mono font-black text-neutral-600 tracking-wide block">Recruiter Action Plan</span>
-                              <ul className="space-y-1.5">
-                                {analysisResult.actionableImprovements.slice(0, 3).map((improvement, index) => (
-                                  <li key={index} className="text-xs text-neutral-700 font-semibold flex items-start gap-2 font-sans leading-relaxed">
-                                    <span className="text-blue-500 font-bold mt-0.5 flex-shrink-0">•</span>
-                                    <span>{improvement}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          )}
-                        </div>
-                      )}
+                      </div>
+                      <div className="pt-1.5 flex justify-start">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTempFile(null);
+                            setUploadError(null);
+                            setAnalysisResult(null);
+                          }}
+                          className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition cursor-pointer"
+                        >
+                          Try Another File
+                        </button>
+                      </div>
                     </div>
                   )}
 
-                  {/* Operational Validation Alert Notification */}
-                  {uploadError && !isAnalyzing && (
+                  {/* File format / upload error */}
+                  {uploadError && !isAnalyzing && !showInvalidResumeCard && (
                     <div className="flex items-center gap-2 p-3.5 rounded-xl border-2 border-rose-500 bg-rose-50 text-rose-950 text-xs font-bold animate-fadeIn font-sans">
                       <AlertTriangle className="w-4 h-4 text-rose-500 flex-shrink-0" />
-                      <span>{uploadError}</span>
+                      <span>{formatFriendlyError(uploadError)}</span>
                     </div>
                   )}
 
@@ -2977,21 +4466,7 @@ WORK EXPERIENCE
                       }}
                       className="w-full sm:w-auto px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition duration-150 cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {analysisResult ? "Dismiss" : "Cancel"}
-                    </button>
-
-                    <button
-                      id="btn-continue-upload-popup"
-                      type="button"
-                      disabled={isAnalyzing || !tempFile || (analysisResult !== null && !analysisResult.isResume)}
-                      onClick={handleContinueUpload}
-                      className={`w-full sm:w-auto px-5 py-3 font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition duration-150 border-2 ${
-                        (tempFile && !isAnalyzing && (analysisResult === null || analysisResult.isResume))
-                          ? "bg-[#2563eb] hover:bg-blue-600 text-white cursor-pointer border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
-                          : "bg-neutral-100 text-neutral-400 border-neutral-200 cursor-not-allowed"
-                      }`}
-                    >
-                      {analysisResult ? "Import & Continue 🚀" : "Continue"}
+                      Cancel
                     </button>
                   </div>
                 </div>
@@ -3001,7 +4476,7 @@ WORK EXPERIENCE
         )}
 
         {/* -------------------- STEP 2: PASTE JOB DESCRIPTION & JD SIMPLIFIER -------------------- */}
-        {currentStep === "jd" && (
+        {false && (
           <div id="step-jd-panel" className="max-w-4xl mx-auto space-y-6">
             <div className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 shadow-sm relative">
               <div className="mb-4">
@@ -3192,7 +4667,6 @@ WORK EXPERIENCE
                   <button
                     id="btn-tailwind-go-step-tailor"
                     onClick={() => {
-                      setCurrentStep("tailor");
                       triggerResumeTailor();
                     }}
                     className="py-3 px-6 bg-neutral-950 dark:bg-white hover:opacity-90 text-white dark:text-black text-xs font-bold rounded-xl transition active:scale-[98%] flex inline-flex items-center gap-1 justify-center cursor-pointer shadow-xs"
@@ -3207,7 +4681,7 @@ WORK EXPERIENCE
         )}
 
         {/* -------------------- STEP 3: RESUME TAILORING INTERFACE -------------------- */}
-        {currentStep === "tailor" && (
+        {false && (
           <div id="step-tailor-panel" className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
             {/* Left Column: Interactive Suggestion list & ATS Auditing tool */}
             <div className="lg:col-span-5 space-y-6">
@@ -3494,7 +4968,7 @@ WORK EXPERIENCE
         )}
 
         {/* -------------------- STEP: SAVED COPIES / VERSIONS LIST -------------------- */}
-        {currentStep === "saves" && (
+        {false && (
           <div id="step-versions-panel" className="max-w-4xl mx-auto space-y-6">
             <div className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 shadow-sm relative">
               <div className="mb-6">
@@ -3515,7 +4989,7 @@ WORK EXPERIENCE
                   </p>
                   <button
                     id="btn-return-tailoring"
-                    onClick={() => setCurrentStep("tailor")}
+                    onClick={() => setCurrentStep("dashboard")}
                     className="mt-4 px-4 py-2 bg-neutral-950 dark:bg-white text-white dark:text-black hover:opacity-90 text-xs font-semibold rounded-lg transition cursor-pointer"
                   >
                     Access Customizer Workspace
@@ -3564,7 +5038,7 @@ WORK EXPERIENCE
           </div>
         )}
               {/* Footer Design inside workspace */}
-              {currentStep !== "resume" && (
+              {false && (
                 <footer id="app-footer" className="mt-20 border-t border-neutral-205 dark:border-neutral-800 pt-8 pb-12 text-center text-neutral-500 text-xs print-hide">
                   <p className="font-mono text-[9px] text-neutral-500 dark:text-neutral-400 uppercase tracking-widest font-semibold">Crafted for Future Professionals</p>
                   <p className="text-[11px] text-neutral-600 dark:text-neutral-400 mt-1 max-w-sm mx-auto font-normal">
@@ -3580,7 +5054,7 @@ WORK EXPERIENCE
 
       {/* Standalone hidden print preview container that activates only for window.print() */}
       <div className="hidden print:block print-container">
-        <ResumePreview resume={activeResume} templateStyle={selectedStyle} id="resume-preview-sheet-print" />
+        <ResumePreview resume={printResume || activeResume} templateStyle={selectedStyle} id="resume-preview-sheet-print" />
       </div>
 
       {showNoResumeAlert && (
@@ -3656,15 +5130,40 @@ WORK EXPERIENCE
 
             {/* Body: scrollable preview */}
             <div className="flex-1 overflow-y-auto pr-1 border border-neutral-250 rounded-xl mb-6 bg-neutral-50 p-4">
-              {uploadedPdfBase64 ? (
-                <iframe
-                  src={`data:application/pdf;base64,${uploadedPdfBase64}#toolbar=0&navpanes=0`}
-                  className="w-full h-[550px] border border-neutral-300 rounded-lg"
-                  title="Original Resume PDF"
-                />
-              ) : (
-                <ResumePreview resume={originalResume} templateStyle="two-column" />
-              )}
+              {(() => {
+                const previewResume = savedUserResumes.find(r => r.id === previewResumeId);
+                if (!previewResume) return <p className="text-sm text-neutral-500">No resume selected.</p>;
+                const previewFileType = previewResume.fileType || (previewResume.pdfBase64 ? "pdf" : "manual");
+                const previewFileBase64 = previewResume.fileBase64 || previewResume.pdfBase64;
+
+                if (previewFileType === "pdf" && previewFileBase64) {
+                  return (
+                  <iframe
+                    src={`data:application/pdf;base64,${previewFileBase64}#toolbar=0&navpanes=0`}
+                    className="w-full h-[550px] border border-neutral-300 rounded-lg"
+                    title="Original Resume PDF"
+                  />
+                  );
+                }
+
+                if (previewFileType === "docx") {
+                  return previewResume.extractedText ? (
+                    <article className="bg-white border border-neutral-300 rounded-lg p-5 min-h-[550px] whitespace-pre-wrap text-sm leading-7 text-neutral-850 font-sans">
+                      {previewResume.extractedText}
+                    </article>
+                  ) : (
+                    <div className="bg-white border border-amber-300 rounded-lg p-5 min-h-[220px] text-sm text-neutral-700">
+                      <p className="font-black text-amber-700 uppercase tracking-wide mb-2">DOCX preview unavailable</p>
+                      <p>This DOCX file was uploaded before document-text previews were stored. Re-upload the DOCX to view its full extracted content.</p>
+                      <div className="mt-5">
+                        <ResumePreview resume={previewResume.data} templateStyle="two-column" />
+                      </div>
+                    </div>
+                  );
+                }
+
+                return <ResumePreview resume={previewResume.data} templateStyle="two-column" />;
+              })()}
             </div>
 
             {/* Footer buttons */}
@@ -3672,6 +5171,7 @@ WORK EXPERIENCE
               <button
                 id="btn-preview-popup-delete"
                 onClick={() => {
+                  setResumeToDeleteId(previewResumeId);
                   setShowResumePreviewModal(false);
                   setShowDeleteConfirmModal(true);
                 }}
@@ -3713,7 +5213,10 @@ WORK EXPERIENCE
             <div className="space-y-2">
               <h3 className="text-lg font-black tracking-tight text-black uppercase font-mono">Delete Resume?</h3>
               <p className="text-xs text-neutral-800 leading-relaxed font-bold font-sans">
-                Are you sure you want to delete this resume? This will clear your profile and lock all tailored features.
+                {resumeToDeleteId && savedUserResumes.find(r => r.id === resumeToDeleteId)?.name
+                  ? `Remove "${savedUserResumes.find(r => r.id === resumeToDeleteId)?.name}" from your library?`
+                  : "Are you sure you want to delete this resume?"}
+                {savedUserResumes.length === 1 && " This is your only resume — deleting it will lock the platform."}
               </p>
             </div>
 
@@ -3721,40 +5224,9 @@ WORK EXPERIENCE
               <button
                 id="btn-confirm-delete-yes"
                 onClick={() => {
-                  // Reset states
-                  setHasResume(false);
-                  localStorage.setItem("jd_resume_customizer_has_resume", "false");
-                  setIsUnlocked(false);
-                  sessionStorage.setItem("auralis_platform_unlocked", "false");
-                  
-                  // Clear metadata & files
-                  setUploadedResumeMeta(null);
-                  setUploadedPdfBase64(null);
-                  localStorage.removeItem("jd_resume_customizer_uploaded_resume_meta");
-                  localStorage.removeItem("jd_resume_customizer_uploaded_pdf_base64");
-                  localStorage.removeItem("jd_resume_customizer_resume_created_at");
-                  localStorage.removeItem("jd_resume_customizer_onboarding_done");
-                  sessionStorage.removeItem("auralis_onboarding_dismissed");
-                  
-                  // Reset active & original resume objects
-                  const emptyResume = {
-                    fullName: "",
-                    email: "",
-                    phone: "",
-                    linkedin: "",
-                    website: "",
-                    summary: "",
-                    workExperience: [],
-                    education: [],
-                    skills: []
-                  };
-                  setActiveResume(emptyResume);
-                  setOriginalResume(emptyResume);
-                  localStorage.removeItem("jd_resume_customizer_active_resume");
-                  localStorage.removeItem("jd_resume_customizer_original_resume");
-                  
-                  setShowDeleteConfirmModal(false);
-                  showNotification("Resume deleted successfully. Platform locked.", "info");
+                  if (resumeToDeleteId) {
+                    handleDeleteResumeById(resumeToDeleteId);
+                  }
                 }}
                 className="px-5 py-3 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
               >
@@ -3762,7 +5234,10 @@ WORK EXPERIENCE
               </button>
               <button
                 id="btn-confirm-delete-cancel"
-                onClick={() => setShowDeleteConfirmModal(false)}
+                onClick={() => {
+                  setShowDeleteConfirmModal(false);
+                  setResumeToDeleteId(null);
+                }}
                 className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
               >
                 Cancel
@@ -3877,7 +5352,7 @@ WORK EXPERIENCE
                       <div className="space-y-1.5 text-center max-w-sm">
                         <p className="text-sm font-black text-neutral-800 font-mono uppercase tracking-wide">Scanning structure...</p>
                         <p className="text-[11px] text-neutral-550 font-sans leading-relaxed font-semibold">
-                          We are validating key profile details, scanning contact coordinates, and evaluating ATS keyword readiness.
+                          We are validating key profile details and scanning contact coordinates.
                         </p>
                       </div>
                     </div>
@@ -3924,97 +5399,38 @@ WORK EXPERIENCE
                     </>
                   )}
 
-                  {/* Analysis reports */}
-                  {!isAnalyzing && analysisResult && (
-                    <div className="space-y-5">
-                      {!analysisResult.isResume ? (
-                        <div className="border-2 border-rose-500 bg-rose-50/20 rounded-2xl p-5 space-y-3.5">
-                          <div className="flex items-start gap-3">
-                            <XCircle className="w-5 h-5 text-rose-500 mt-0.5 flex-shrink-0" />
-                            <div>
-                              <p className="text-sm font-black text-rose-950 uppercase font-mono tracking-wide">Document Rejected</p>
-                              <p className="text-[11px] text-neutral-750 font-semibold mt-1 font-sans leading-relaxed">
-                                maybe you uploaded a wrong file. The scanned uploaded document isnt a resume. please check and retry again
-                              </p>
-                            </div>
-                          </div>
-                          <div className="pt-1.5 flex justify-start">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setTempFile(null);
-                                setAnalysisResult(null);
-                              }}
-                              className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition cursor-pointer"
-                            >
-                              Try Another File
-                            </button>
-                          </div>
+                  {/* Invalid resume error */}
+                  {showInvalidResumeCard && (
+                    <div className="border-2 border-rose-500 bg-rose-50/20 rounded-2xl p-5 space-y-3.5">
+                      <div className="flex items-start gap-3">
+                        <XCircle className="w-5 h-5 text-rose-500 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <p className="text-sm font-black text-rose-950 uppercase font-mono tracking-wide">Not a Valid Resume</p>
+                          <p className="text-[11px] text-neutral-700 font-semibold mt-1 font-sans leading-relaxed">
+                            This file does not appear to be a valid resume. Please upload a resume.
+                          </p>
                         </div>
-                      ) : (
-                        <div className="space-y-4">
-                          <div className="border-2 border-emerald-500 bg-emerald-50/20 rounded-2xl p-4 flex items-center justify-between gap-4">
-                            <div className="flex items-center gap-3">
-                              <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
-                              <div className="text-left">
-                                <span className="text-xs uppercase font-mono font-black text-emerald-800 tracking-wide">Verified Format</span>
-                                <p className="text-xs text-neutral-700 font-bold font-sans mt-0.5">
-                                  {tempFile?.name || "Uploaded Resume"}
-                                </p>
-                              </div>
-                            </div>
-                            <div className="text-right flex-shrink-0">
-                              <span className="text-[10px] uppercase font-mono font-black text-neutral-500 font-bold">Completeness</span>
-                              <div className="flex items-baseline gap-0.5 mt-0.5">
-                                <span className="text-2xl font-black text-emerald-700 font-mono">{analysisResult.confidenceScore}</span>
-                                <span className="text-xs font-mono font-black text-neutral-550">/100</span>
-                              </div>
-                            </div>
-                          </div>
-                          <div className="w-full bg-neutral-100 rounded-full h-2.5 border border-black overflow-hidden relative">
-                            <div 
-                              className="bg-emerald-550 h-full rounded-full transition-all duration-500"
-                              style={{ width: `${analysisResult.confidenceScore}%` }}
-                            />
-                          </div>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div className="border border-neutral-200 rounded-xl p-3.5 space-y-2 bg-neutral-50/50">
-                              <span className="text-[10px] uppercase font-mono font-black text-neutral-500 block">Candidate Profile Found</span>
-                              <div className="space-y-1 text-xs">
-                                <p className="font-bold text-neutral-800 truncate"><span className="text-neutral-500 font-medium font-sans">Name:</span> {analysisResult.detectedProfile.fullName || "Not Specified"}</p>
-                                <p className="font-bold text-neutral-800 truncate"><span className="text-neutral-500 font-medium font-sans">Email:</span> {analysisResult.detectedProfile.email || "Not Specified"}</p>
-                                <p className="font-bold text-neutral-800 truncate"><span className="text-neutral-500 font-medium font-sans">Phone:</span> {analysisResult.detectedProfile.phone || "Not Specified"}</p>
-                                <p className="font-bold text-neutral-800"><span className="text-neutral-500 font-medium font-sans">Skills:</span> <span className="px-1.5 py-0.5 bg-neutral-200 text-neutral-800 rounded font-mono text-[10px] font-black">{analysisResult.detectedProfile.skills?.length || 0} items</span></p>
-                              </div>
-                            </div>
-                            <div className="border border-neutral-200 rounded-xl p-3.5 space-y-2 bg-neutral-50/50">
-                              <span className="text-[10px] uppercase font-mono font-black text-neutral-500 block">Section Checklist</span>
-                              <div className="space-y-1.5 scroll-container max-h-32 overflow-y-auto">
-                                {analysisResult.missingItems.length === 0 ? (
-                                  <div className="flex items-center gap-1.5 text-xs text-emerald-600 font-black">
-                                    <Check className="w-4 h-4" />
-                                    <span>All Standard Sections Found</span>
-                                  </div>
-                                ) : (
-                                  analysisResult.missingItems.map((item, idx) => (
-                                    <div key={idx} className="flex items-center gap-1.5 text-xs text-neutral-600 font-semibold font-sans">
-                                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />
-                                      <span>Missing {item}</span>
-                                    </div>
-                                  ))
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      )}
+                      </div>
+                      <div className="pt-1.5 flex justify-start">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTempFile(null);
+                            setUploadError(null);
+                            setAnalysisResult(null);
+                          }}
+                          className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition cursor-pointer"
+                        >
+                          Try Another File
+                        </button>
+                      </div>
                     </div>
                   )}
 
-                  {uploadError && !isAnalyzing && (
+                  {uploadError && !isAnalyzing && !showInvalidResumeCard && (
                     <div className="flex items-center gap-2 p-3.5 rounded-xl border-2 border-rose-500 bg-rose-50 text-rose-950 text-xs font-bold animate-fadeIn font-sans">
                       <AlertTriangle className="w-4 h-4 text-rose-500 flex-shrink-0" />
-                      <span>{uploadError}</span>
+                      <span>{formatFriendlyError(uploadError)}</span>
                     </div>
                   )}
                 </div>
@@ -4053,21 +5469,7 @@ WORK EXPERIENCE
                 Cancel
               </button>
 
-              {choiceModalPathway === "upload" ? (
-                <button
-                  id="btn-choice-modal-import"
-                  type="button"
-                  disabled={isAnalyzing || !tempFile || (analysisResult !== null && !analysisResult.isResume)}
-                  onClick={handleContinueUpload}
-                  className={`w-full sm:w-auto px-5 py-3 font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition duration-150 border-2 ${
-                    (tempFile && !isAnalyzing && (analysisResult === null || analysisResult.isResume))
-                      ? "bg-[#2563eb] hover:bg-blue-600 text-white cursor-pointer border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
-                      : "bg-neutral-100 text-neutral-450 border-neutral-200 cursor-not-allowed"
-                  }`}
-                >
-                  {analysisResult ? "Import & Continue 🚀" : "Continue"}
-                </button>
-              ) : (
+              {choiceModalPathway !== "upload" && (
                 <button
                   id="btn-choice-modal-builder"
                   type="button"
@@ -4100,7 +5502,7 @@ WORK EXPERIENCE
         >
           <div 
             id="tailor-wizard-modal" 
-            className="bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 sm:p-8 w-full max-w-2xl text-left relative animate-scaleIn flex flex-col max-h-[90vh]"
+            className={`bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 sm:p-8 w-full text-left relative animate-scaleIn flex flex-col max-h-[90vh] ${tailorWizardStep === 4 ? "max-w-6xl" : "max-w-2xl"}`}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close button */}
@@ -4119,10 +5521,14 @@ WORK EXPERIENCE
             <div className="mb-4 text-left border-b-2 border-black pb-3">
               <h3 className="text-lg font-black tracking-tight text-black uppercase font-mono">Tailor Resume for Job</h3>
               <p className="text-xs text-neutral-555 font-medium font-sans">
-                {tailorWizardStep === 1 && "Step 1 of 4: Target details"}
-                {tailorWizardStep === 2 && "Step 2 of 4: Job Description"}
-                {tailorWizardStep === 3 && "Step 3 of 4: Match & Gap Analysis"}
-                {tailorWizardStep === 4 && "Step 4 of 4: Results & Download"}
+                {tailorAnalysisError ? "Error Occurred during processing" : (
+                  <>
+                    {tailorWizardStep === 1 && "Step 1 of 4: Target details"}
+                    {tailorWizardStep === 2 && "Step 2 of 4: Job Description"}
+                    {tailorWizardStep === 3 && "Step 3 of 4: Match & Gap Analysis"}
+                    {tailorWizardStep === 4 && "Step 4 of 4: Results & Download"}
+                  </>
+                )}
               </p>
             </div>
 
@@ -4134,16 +5540,83 @@ WORK EXPERIENCE
                 <div className="flex flex-col items-center justify-center py-12 space-y-4 min-h-[300px]">
                   <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
                   <p className="text-sm font-black text-neutral-800 uppercase font-mono tracking-wide">
-                    {tailorWizardStep <= 2 ? "Analyzing job description..." : "Generating tailored resume..."}
+                    {tailorProcessingStage}...
                   </p>
+                  <div className="w-full max-w-md space-y-2">
+                    <div className="h-4 bg-neutral-200 border-2 border-black rounded-full overflow-hidden shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                      <div
+                        className="h-full bg-[#2563eb] transition-all duration-300"
+                        style={{ width: `${tailorProgress}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between text-[10px] font-black font-mono uppercase tracking-wider text-neutral-600">
+                      <span>{tailorProcessingStage}</span>
+                      <span>{tailorProgress}%</span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-5 gap-1.5 w-full max-w-2xl">
+                    {processingStages.map(stage => {
+                      const isDone = tailorProgress >= stage.at;
+                      const isCurrent = tailorProcessingStage === stage.label;
+                      const status = isCurrent ? "Processing" : isDone ? "✓ Complete" : "Waiting";
+                      return (
+                        <div key={stage.label} className={`text-[9px] font-black uppercase tracking-wide rounded-lg border px-2 py-1 text-center ${isCurrent ? "bg-amber-50 border-amber-300 text-amber-800" : isDone ? "bg-blue-50 border-blue-300 text-blue-800" : "bg-white border-neutral-200 text-neutral-400"}`}>
+                          <div>{stage.label}</div>
+                          <div className="text-[8px] mt-0.5">{status}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
                   <p className="text-xs text-neutral-555 text-center max-w-md font-semibold">
-                    We are querying the language model, evaluating keywords, and writing highly tailored, ATS-optimized descriptions.
+                    Target time is 5-15 seconds. If the AI service is slow, Auralis keeps processing and switches to deterministic ATS matching instead of blocking the workflow.
                   </p>
                 </div>
               )}
 
+              {/* Error Screen */}
+              {!tailorIsAnalyzing && tailorAnalysisError && (
+                <div className="flex flex-col items-center justify-center py-12 space-y-6 min-h-[300px] text-center animate-fadeIn">
+                  <div className="p-4 bg-rose-100 border-2 border-black rounded-full shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] animate-bounce">
+                    <XCircle className="w-12 h-12 text-rose-600 animate-pulse" strokeWidth={2.5} />
+                  </div>
+                  <div className="space-y-2 max-w-md">
+                    <h4 className="text-base font-black text-black uppercase font-mono tracking-tight">
+                      Analysis Failed
+                    </h4>
+                    <p className="text-xs text-neutral-600 font-bold leading-relaxed">
+                      {tailorAnalysisError}
+                    </p>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-3 w-full max-w-xs justify-center pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTailorAnalysisError(null);
+                        if (tailorWizardStep <= 2) {
+                          handleAnalyzeJD();
+                        } else {
+                          handleGenerateTailoredResume();
+                        }
+                      }}
+                      className="flex-1 px-4 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                    >
+                      Retry Request
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTailorAnalysisError(null);
+                      }}
+                      className="flex-1 px-4 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                    >
+                      Back to Editing
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* STEP 1: COMPANY NAME & CHOOSE RESUME */}
-              {!tailorIsAnalyzing && tailorWizardStep === 1 && (
+              {!tailorIsAnalyzing && !tailorAnalysisError && tailorWizardStep === 1 && (
                 <div className="space-y-4 text-left py-2 max-w-md mx-auto w-full">
                   <div className="space-y-4">
                     <div className="space-y-1">
@@ -4158,14 +5631,7 @@ WORK EXPERIENCE
                     </div>
                     
                     {/* Choose Resume field */}
-                    {existingResumes.length === 1 ? (
-                      <div className="space-y-1">
-                        <label className="text-xs font-black text-neutral-800 uppercase tracking-wider font-mono">Choose Resume</label>
-                        <div className="w-full bg-neutral-50 border-2 border-dashed border-neutral-350 rounded-xl p-3 text-xs font-semibold text-neutral-600">
-                          {existingResumes[0].label}
-                        </div>
-                      </div>
-                    ) : existingResumes.length >= 2 ? (
+                    {existingResumes.length >= 2 && (
                       <div className="space-y-1">
                         <label className="text-xs font-black text-neutral-800 uppercase tracking-wider font-mono">Choose Resume</label>
                         <select
@@ -4180,148 +5646,37 @@ WORK EXPERIENCE
                           ))}
                         </select>
                       </div>
-                    ) : null}
+                    )}
                   </div>
                 </div>
               )}
 
-              {/* STEP 2: JOB DESCRIPTION INPUT METHOD */}
-              {!tailorIsAnalyzing && tailorWizardStep === 2 && (
+              {/* STEP 2: JOB DESCRIPTION TEXT */}
+              {!tailorIsAnalyzing && !tailorAnalysisError && tailorWizardStep === 2 && (
                 <div className="space-y-4 text-left animate-fadeIn">
-                  {tailorJdMode === null ? (
-                    /* Phase A: Selection Cards */
-                    <div className="space-y-4 py-2">
-                      <div className="text-center mb-2">
-                        <label className="text-xs font-black text-neutral-800 uppercase tracking-wider font-mono block">
-                          How would you like to provide the Job Description?
-                        </label>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        {/* Option 1: Paste JD */}
-                        <button
-                          type="button"
-                          onClick={() => setTailorJdMode("paste")}
-                          className="flex flex-col items-center justify-center p-6 bg-white border-2 border-black rounded-2xl shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all cursor-pointer text-center group"
-                        >
-                          <div className="w-12 h-12 rounded-full border-2 border-black flex items-center justify-center bg-blue-50 mb-3 group-hover:scale-110 transition-transform">
-                            <FileText className="w-6 h-6 text-[#2563eb]" />
-                          </div>
-                          <span className="text-xs font-black uppercase font-mono text-black">Paste Job Description</span>
-                          <span className="text-[10px] text-neutral-500 font-sans font-semibold mt-1">Copy and paste text from the job board</span>
-                        </button>
-
-                        {/* Option 2: Upload Screenshots */}
-                        <button
-                          type="button"
-                          onClick={() => setTailorJdMode("upload")}
-                          className="flex flex-col items-center justify-center p-6 bg-white border-2 border-black rounded-2xl shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition-all cursor-pointer text-center group"
-                        >
-                          <div className="w-12 h-12 rounded-full border-2 border-black flex items-center justify-center bg-blue-50 mb-3 group-hover:scale-110 transition-transform">
-                            <Image className="w-6 h-6 text-[#2563eb]" />
-                          </div>
-                          <span className="text-xs font-black uppercase font-mono text-black">Upload JD Screenshots</span>
-                          <span className="text-[10px] text-neutral-500 font-sans font-semibold mt-1">Upload 1-10 screenshot images of the post</span>
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    /* Phase B: Active Input Area */
-                    <div className="space-y-3 animate-fadeIn">
-                      {/* Method Header indicator */}
-                      <div className="flex justify-between items-center border-b border-neutral-200 pb-2 mb-1">
-                        <div className="flex items-center gap-1.5 text-xs font-black uppercase text-neutral-800 font-mono">
-                          {tailorJdMode === "paste" ? (
-                            <>
-                              <FileText className="w-4 h-4 text-[#2563eb]" />
-                              <span>Pasting Job Description</span>
-                            </>
-                          ) : (
-                            <>
-                              <Image className="w-4 h-4 text-[#2563eb]" />
-                              <span>Uploading Screenshots</span>
-                            </>
-                          )}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setTailorJdMode(null)}
-                          className="text-xs font-black uppercase tracking-wider text-[#2563eb] hover:underline cursor-pointer font-mono"
-                        >
-                          Change Method
-                        </button>
-                      </div>
-
-                      {/* Input container */}
-                      <div className="border-2 border-black rounded-2xl p-4 bg-neutral-50 space-y-4">
-                        {tailorJdMode === "paste" ? (
-                          <div className="space-y-1 text-left animate-fadeIn">
-                            <textarea
-                              placeholder="Paste the full job description text here..."
-                              value={tailorJdText}
-                              onChange={(e) => setTailorJdText(e.target.value)}
-                              className="w-full bg-white border-2 border-black rounded-xl p-3 text-xs font-semibold focus:outline-none h-40 focus:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
-                            />
-                          </div>
-                        ) : (
-                          <div className="space-y-3 text-left animate-fadeIn">
-                            <div className="flex items-center gap-3">
-                              <label className="px-4 py-2.5 bg-white border-2 border-black hover:bg-neutral-50 rounded-xl text-xs font-black uppercase tracking-wider transition cursor-pointer shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[1px_1px_0px_0px_rgba(0,0,0,1)]">
-                                Select Screenshots
-                                <input 
-                                  type="file"
-                                  accept="image/*"
-                                  multiple
-                                  className="hidden"
-                                  onChange={handleTailorImageUpload}
-                                />
-                              </label>
-                              <span className="text-xs text-neutral-550 font-bold font-sans">
-                                {tailorJdImages.length === 0 
-                                  ? "No screenshots uploaded yet (supports PNG, JPEG, WebP)" 
-                                  : `${tailorJdImages.length} / 10 image(s) loaded`}
-                              </span>
-                            </div>
-
-                            {tailorJdImages.length > 0 && (
-                              <div className="border border-neutral-250 rounded-xl bg-white p-3 space-y-2 max-h-40 overflow-y-auto animate-fadeIn">
-                                {tailorJdImages.map((img, idx) => (
-                                  <div key={idx} className="flex items-center justify-between p-2 rounded bg-neutral-50 border border-neutral-200">
-                                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                                      <img src={img} alt={`Screenshot ${idx + 1}`} className="w-8 h-8 object-cover rounded border border-black" />
-                                      <span className="text-xs font-semibold text-neutral-700 truncate">
-                                        {tailorJdImageNames[idx] || `Screenshot_${idx + 1}.png`}
-                                      </span>
-                                    </div>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleRemoveTailorImage(idx)}
-                                      className="text-xs font-bold text-rose-600 hover:text-rose-800 uppercase tracking-wider hover:underline ml-2"
-                                    >
-                                      Remove
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
+                  <div className="space-y-1">
+                    <label className="text-xs font-black text-neutral-800 uppercase tracking-wider font-mono">Job Description Text</label>
+                    <textarea
+                      placeholder="Paste the full job description text here..."
+                      value={tailorJdText}
+                      onChange={(e) => setTailorJdText(e.target.value)}
+                      className="w-full bg-white border-2 border-black rounded-xl p-3 text-xs font-semibold focus:outline-none h-56 focus:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                    />
+                  </div>
                 </div>
               )}
 
               {/* STEP 3: DISPLAY ANALYSIS & GAPS */}
-              {!tailorIsAnalyzing && tailorWizardStep === 3 && tailorAnalysisResult && (
+              {!tailorIsAnalyzing && !tailorAnalysisError && tailorWizardStep === 3 && tailorAnalysisResult && (
                 <div className="space-y-5 text-left animate-fadeIn">
                   {/* Grid showing Matches and Gaps */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     {/* Matches */}
                     <div className="border-2 border-emerald-500 bg-emerald-50/10 rounded-2xl p-4 space-y-2.5">
                       <h4 className="text-xs font-black text-emerald-800 uppercase tracking-wider font-mono flex items-center gap-1.5">
-                        <CheckCircle2 className="w-4 h-4" /> Matched Skills & Keywords
+                        <CheckCircle2 className="w-4 h-4" /> Matched Skills
                       </h4>
-                      <div className="flex flex-wrap gap-1.5">
+                      <div className="flex flex-wrap gap-1.5 animate-fadeIn">
                         {tailorAnalysisResult.matchedKeywords.map((kw, i) => (
                           <span key={i} className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded text-[10px] font-bold">
                             {kw}
@@ -4330,15 +5685,29 @@ WORK EXPERIENCE
                       </div>
                     </div>
 
-                    {/* Missing */}
+                    {/* Missing Keywords */}
                     <div className="border-2 border-rose-500 bg-rose-50/10 rounded-2xl p-4 space-y-2.5">
                       <h4 className="text-xs font-black text-rose-800 uppercase tracking-wider font-mono flex items-center gap-1.5">
-                        <XCircle className="w-4 h-4" strokeWidth={2.5} /> Missing Keywords (ATS Gaps)
+                        <XCircle className="w-4 h-4" strokeWidth={2.5} /> Missing Keywords
                       </h4>
-                      <div className="flex flex-wrap gap-1.5">
+                      <div className="flex flex-wrap gap-1.5 animate-fadeIn">
                         {tailorAnalysisResult.missingKeywords.map((kw, i) => (
                           <span key={i} className="px-2 py-0.5 bg-rose-100 text-rose-800 rounded text-[10px] font-bold">
                             {kw}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Missing Qualifications */}
+                    <div className="border-2 border-indigo-500 bg-indigo-50/10 rounded-2xl p-4 space-y-2.5">
+                      <h4 className="text-xs font-black text-indigo-800 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                        <BookOpen className="w-4 h-4" /> Missing Qualifications
+                      </h4>
+                      <div className="flex flex-wrap gap-1.5 animate-fadeIn">
+                        {tailorAnalysisResult.missingQualifications.map((qual, i) => (
+                          <span key={i} className="px-2 py-0.5 bg-indigo-100 text-indigo-800 rounded text-[10px] font-bold">
+                            {qual}
                           </span>
                         ))}
                       </div>
@@ -4359,132 +5728,255 @@ WORK EXPERIENCE
                 </div>
               )}
 
-              {/* STEP 4: RESULTS (ATS SCORE & DOWNLOAD) */}
-              {!tailorIsAnalyzing && tailorWizardStep === 4 && (
-                <div className="space-y-6 text-center py-4 animate-fadeIn">
-                  {/* Radial/Card Score Display */}
-                  <div className="max-w-xs mx-auto border-4 border-black rounded-3xl p-6 bg-white shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] space-y-4">
-                    <span className="text-[10px] font-black text-neutral-500 uppercase tracking-widest font-mono">Tailored ATS Score</span>
-                    <div className="flex items-center justify-center">
-                      <div className="w-24 h-24 rounded-full border-4 border-black flex items-center justify-center bg-emerald-50 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
-                        <span className="text-3xl font-black text-emerald-800 font-mono">{tailoredAtsScore}%</span>
+              {/* STEP 4: CHANGES SUMMARY + SIDE-BY-SIDE COMPARISON */}
+              {!tailorIsAnalyzing && !tailorAnalysisError && tailorWizardStep === 4 && (
+                (() => {
+                  const originalResume = getResumeToTailor();
+                  const tailoredResume = tailoredResultResume;
+                  const resultVersion = tailoredResultVersion;
+                  const insights = getTailoredResultInsights(originalResume, tailoredResume, resultVersion);
+                  const metricCards = [
+                    { label: "ATS Before", value: `${tailorAnalysisResult?.originalAtsScore ?? 0}/100`, color: "text-neutral-800" },
+                    { label: "ATS After", value: `${resultVersion?.atsScore ?? tailoredAtsScore ?? 0}/100`, color: "text-blue-600" },
+                    { label: "Match", value: `${resultVersion?.matchPercentage ?? tailorAnalysisResult?.originalMatchPct ?? 0}%`, color: "text-emerald-600" },
+                  ];
+
+                  return (
+                    <div className="space-y-6 text-left py-2 animate-fadeIn font-sans">
+                      <div className="text-center space-y-2">
+                        <h3 className="text-lg font-black uppercase tracking-tight text-black font-mono">Review Tailored Changes</h3>
+                        <p className="text-xs text-neutral-600 max-w-2xl mx-auto">
+                          Here is your original resume beside the tailored version. Changes are highlighted so you can see exactly what improved for <strong>{tailorCompany}</strong> before saving or downloading.
+                        </p>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        {metricCards.map(card => (
+                          <div key={card.label} className="bg-white border-2 border-black p-4 rounded-2xl text-center shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
+                            <span className="text-[10px] uppercase font-black tracking-wider text-neutral-555 font-mono">{card.label}</span>
+                            <div className={`text-3xl font-black mt-1 ${card.color}`}>{card.value}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="border-2 border-blue-300 bg-blue-50/30 rounded-2xl p-4">
+                          <p className="text-[10px] font-black uppercase tracking-wider text-blue-700 font-mono">Skills Added</p>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {(insights.skillsAdded.length ? insights.skillsAdded : ["No new skills added"]).slice(0, 10).map(skill => (
+                              <span key={skill} className="px-2 py-1 rounded-lg bg-blue-100 border border-blue-300 text-[10px] font-bold text-blue-900">{skill}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="border-2 border-yellow-300 bg-yellow-50/40 rounded-2xl p-4">
+                          <p className="text-[10px] font-black uppercase tracking-wider text-yellow-800 font-mono">Keywords Added</p>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {(insights.keywordsAdded.length ? insights.keywordsAdded : tailorAnalysisResult?.matchedKeywords || ["General alignment"]).slice(0, 10).map(keyword => (
+                              <span key={keyword} className="px-2 py-1 rounded-lg bg-yellow-100 border border-yellow-300 text-[10px] font-bold text-yellow-900">{keyword}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="border-2 border-emerald-300 bg-emerald-50/30 rounded-2xl p-4">
+                          <p className="text-[10px] font-black uppercase tracking-wider text-emerald-700 font-mono">Sections Improved</p>
+                          <ul className="mt-2 list-disc pl-4 text-xs font-bold text-neutral-700 space-y-1">
+                            {(insights.sectionsImproved.length ? insights.sectionsImproved : ["No major section rewrite detected"]).map(section => <li key={section}>{section}</li>)}
+                          </ul>
+                        </div>
+                        <div className="border-2 border-rose-300 bg-rose-50/30 rounded-2xl p-4">
+                          <p className="text-[10px] font-black uppercase tracking-wider text-rose-700 font-mono">Missing Requirements Found</p>
+                          <ul className="mt-2 list-disc pl-4 text-xs font-bold text-neutral-700 space-y-1">
+                            {(insights.missingRequirements || []).filter(req => !String(req).includes("No missing")).slice(0, 5).length > 0
+                              ? (insights.missingRequirements || []).filter(req => !String(req).includes("No missing")).slice(0, 5).map(req => <li key={req}>{req}</li>)
+                              : <li>No critical missing requirements found.</li>}
+                          </ul>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-wide">
+                        <span className="px-2 py-1 rounded-lg bg-yellow-100 border border-yellow-300">Yellow: New keywords</span>
+                        <span className="px-2 py-1 rounded-lg bg-blue-100 border border-blue-300">Blue: New skills</span>
+                        <span className="px-2 py-1 rounded-lg bg-emerald-100 border border-emerald-300">Green: Improved bullets</span>
+                        <span className="px-2 py-1 rounded-lg bg-purple-100 border border-purple-300">Purple: Modified summary</span>
+                      </div>
+
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                        {[{ title: "Original Resume", resume: originalResume, side: "original" }, { title: "Tailored Resume", resume: tailoredResume, side: "tailored" }].map(panel => (
+                          <div key={panel.title} className="border-2 border-black rounded-2xl overflow-hidden bg-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
+                            <div className="bg-black text-white px-4 py-2 text-xs font-black uppercase tracking-wider font-mono">{panel.title}</div>
+                            <div className="p-4 max-h-[520px] overflow-y-auto space-y-4 text-xs leading-relaxed">
+                              <section className={`border rounded-xl p-3 ${panel.side === "tailored" ? getHighlightClass("summary", originalResume?.summary, tailoredResume?.summary) : "border-neutral-200"}`}>
+                                <h4 className="text-[10px] font-black uppercase font-mono text-neutral-500 mb-1">Summary</h4>
+                                <p className="font-semibold text-neutral-800">{panel.resume?.summary || "No summary provided."}</p>
+                              </section>
+
+                              <section className="border border-neutral-200 rounded-xl p-3">
+                                <h4 className="text-[10px] font-black uppercase font-mono text-neutral-500 mb-2">Skills</h4>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {(panel.resume?.skills || []).map(skill => (
+                                    <span key={`${panel.title}-${skill}`} className={`px-2 py-1 rounded-lg border text-[10px] font-bold ${panel.side === "tailored" ? getHighlightClass("skills", originalResume?.skills, tailoredResume?.skills, skill) || "bg-white border-neutral-200" : "bg-white border-neutral-200"}`}>{skill}</span>
+                                  ))}
+                                </div>
+                              </section>
+
+                              <section className="border border-neutral-200 rounded-xl p-3">
+                                <h4 className="text-[10px] font-black uppercase font-mono text-neutral-500 mb-2">Experience</h4>
+                                <div className="space-y-3">
+                                  {(panel.resume?.workExperience || []).map((exp, idx) => (
+                                    <div key={`${panel.title}-exp-${exp.id || idx}`} className="space-y-1">
+                                      <p className="font-black text-neutral-900">{exp.role} @ {exp.company}</p>
+                                      {(exp.description || []).map((bullet, bulletIdx) => (
+                                        <p key={bulletIdx} className={`border rounded-lg px-2 py-1.5 ${panel.side === "tailored" ? getHighlightClass("experience", originalResume?.workExperience?.[idx]?.description?.[bulletIdx], bullet) || "border-neutral-200" : "border-neutral-200"}`}>• {bullet}</p>
+                                      ))}
+                                    </div>
+                                  ))}
+                                </div>
+                              </section>
+
+                              <section className="border border-neutral-200 rounded-xl p-3">
+                                <h4 className="text-[10px] font-black uppercase font-mono text-neutral-500 mb-2">Projects / Education</h4>
+                                {(panel.resume?.projects || []).map((project, idx) => (
+                                  <div key={`${panel.title}-project-${project.id || idx}`} className={`mb-2 border rounded-lg p-2 ${panel.side === "tailored" ? getHighlightClass("projects", originalResume?.projects?.[idx], project) || "border-neutral-200" : "border-neutral-200"}`}>
+                                    <p className="font-black">{project.name}</p>
+                                    <p>{(project.description || []).join(" ")}</p>
+                                  </div>
+                                ))}
+                                {(panel.resume?.education || []).map((edu, idx) => (
+                                  <p key={`${panel.title}-edu-${edu.id || idx}`} className="text-neutral-700">• {edu.degree} — {edu.school} ({edu.duration})</p>
+                                ))}
+                              </section>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="border-2 border-black rounded-2xl p-4 bg-neutral-50">
+                        <p className="text-xs font-black uppercase tracking-wider font-mono mb-2">Integrity Check</p>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs font-semibold">
+                          <div className="bg-white border border-neutral-200 rounded-lg p-2">Unchanged: {(insights.unchanged || []).slice(0, 3).join(", ") || "Core identity/contact retained"}</div>
+                          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2">Modified: {(insights.modified || []).slice(0, 3).join(", ") || "No major rewrites"}</div>
+                          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-2">Added: {(insights.added || []).slice(0, 3).join(", ") || "No new sections added"}</div>
+                        </div>
                       </div>
                     </div>
-                    <div className="space-y-1">
-                      <h4 className="text-xs font-black uppercase text-neutral-800 font-mono">ATS Screen Ready 🚀</h4>
-                      <p className="text-[10px] text-neutral-500 font-sans font-medium">Your resume now includes all required high-priority keywords and fits corporate screening criteria.</p>
-                    </div>
-                  </div>
-
-                  <p className="text-xs text-neutral-600 font-sans max-w-md mx-auto leading-relaxed font-semibold">
-                    The tailored copy is fully updated and saved as a new card on your **Tailored Resumes** dashboard. You can download the text-format resume immediately below.
-                  </p>
-                </div>
+                  );
+                })()
               )}
 
             </div>
 
             {/* Modal Footer */}
-            <div className="flex flex-col sm:flex-row gap-3 pt-3 border-t border-neutral-100 mt-4 justify-end font-sans">
-              {!tailorIsAnalyzing && (
-                <>
-                  {tailorWizardStep === 1 && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => setIsTailorWizardOpen(false)}
-                        className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!tailorCompany.trim()) {
-                            showNotification("Please enter the company name.", "error");
-                            return;
-                          }
-                          setTailorWizardStep(2);
-                        }}
-                        className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
-                      >
-                        Continue
-                      </button>
-                    </>
-                  )}
+            {!tailorIsAnalyzing && !tailorAnalysisError && (
+              <div className="flex flex-col sm:flex-row gap-3 pt-3 border-t border-neutral-100 mt-4 justify-end font-sans">
+                {tailorWizardStep === 1 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setIsTailorWizardOpen(false)}
+                      className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!tailorCompany.trim()) {
+                          showNotification("Please enter the company name.", "error");
+                          return;
+                        }
+                        setTailorWizardStep(2);
+                      }}
+                      className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                    >
+                      Continue
+                    </button>
+                  </>
+                )}
 
-                  {tailorWizardStep === 2 && (
-                    <>
-                      {tailorJdMode === null ? (
-                        <button
-                          type="button"
-                          onClick={() => setTailorWizardStep(1)}
-                          className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
-                        >
-                          Back
-                        </button>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => setTailorJdMode(null)}
-                            className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
-                          >
-                            Back
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleAnalyzeJD}
-                            className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
-                          >
-                            Scan & Analyze JD
-                          </button>
-                        </>
-                      )}
-                    </>
-                  )}
+                {tailorWizardStep === 2 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setTailorWizardStep(1)}
+                      className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleAnalyzeJD}
+                      className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                    >
+                      Scan & Analyze JD
+                    </button>
+                  </>
+                )}
 
-                  {tailorWizardStep === 3 && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => setTailorWizardStep(2)}
-                        className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
-                      >
-                        Back
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleGenerateTailoredResume}
-                        className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
-                      >
-                        Generate Tailored Resume
-                      </button>
-                    </>
-                  )}
+                {tailorWizardStep === 3 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setTailorWizardStep(2)}
+                      className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleGenerateTailoredResume}
+                      className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                    >
+                      Generate Tailored Resume
+                    </button>
+                  </>
+                )}
 
-                  {tailorWizardStep === 4 && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={handleDownloadTailoredResume}
-                        className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 flex items-center justify-center gap-1.5"
-                      >
-                        <Download className="w-4 h-4" />
-                        <span>Download Tailored Resume</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setIsTailorWizardOpen(false)}
-                        className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
-                      >
-                        Done
-                      </button>
-                    </>
-                  )}
-                </>
-              )}
-            </div>
+                {tailorWizardStep === 4 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (tailoredResultResume) {
+                          handlePrintOrSavePDF(tailoredResultResume, getResumeToTailor(), tailorRole);
+                        }
+                      }}
+                      className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 flex items-center justify-center gap-1.5"
+                    >
+                      <FileText className="w-4 h-4 text-blue-600" />
+                      <span>Download PDF</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (tailoredResultResume) {
+                          downloadResumeAsDocx(
+                            tailoredResultResume,
+                            `${tailorCompany.replace(/\s+/g, "_")}_Tailored_Resume`,
+                            getResumeToTailor(),
+                            tailorRole
+                          );
+                        }
+                      }}
+                      className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 flex items-center justify-center gap-1.5"
+                    >
+                      <Download className="w-4 h-4 text-emerald-600" />
+                      <span>Download DOCX</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsTailorWizardOpen(false);
+                        setCurrentStep("dashboard");
+                      }}
+                      className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                    >
+                      Back to Tailored Resumes
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
 
           </div>
         </div>
@@ -4499,7 +5991,7 @@ WORK EXPERIENCE
         >
           <div 
             id="saved-version-preview-modal"
-            className="bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 sm:p-8 w-full max-w-2xl text-left relative animate-scaleIn flex flex-col max-h-[90vh]"
+            className="bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 sm:p-8 w-full max-w-5xl text-left relative animate-scaleIn flex flex-col max-h-[90vh]"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close button */}
@@ -4520,9 +6012,170 @@ WORK EXPERIENCE
               </p>
             </div>
 
-            {/* Body: scrollable preview */}
-            <div className="flex-1 overflow-y-auto pr-1 border border-neutral-250 rounded-xl mb-6 bg-neutral-50 p-4">
-              <ResumePreview resume={selectedSavedVersion.resumeData} templateStyle="two-column" />
+            {/* Body: Two columns layout */}
+            <div className="flex-1 flex flex-col md:flex-row gap-6 overflow-y-auto mb-6 pr-1">
+              {/* Left Column: Metrics & Gaps & Diff Log */}
+              <div className="w-full md:w-5/12 flex flex-col gap-4 font-sans text-left max-h-[600px] overflow-y-auto pr-1">
+                
+                {/* Score Row */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-white border-2 border-black p-4 rounded-2xl text-center shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
+                    <span className="text-[10px] uppercase font-black tracking-wider text-neutral-500 font-mono">ATS SCORE</span>
+                    <div className="text-3xl font-black text-blue-600 mt-1">
+                      {selectedSavedVersion.atsScore ?? 75}/100
+                    </div>
+                  </div>
+                  <div className="bg-white border-2 border-black p-4 rounded-2xl text-center shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
+                    <span className="text-[10px] uppercase font-black tracking-wider text-neutral-500 font-mono">JD MATCH</span>
+                    <div className="text-3xl font-black text-emerald-600 mt-1">
+                      {selectedSavedVersion.matchPercentage ?? 70}%
+                    </div>
+                  </div>
+                </div>
+
+                {/* Gaps/Missing Skills */}
+                <div className="bg-rose-50/20 border-2 border-black p-4 rounded-2xl shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-600" />
+                    <span className="text-[11px] font-black uppercase text-rose-800 font-mono tracking-wider">Remaining Gaps</span>
+                  </div>
+                  {selectedSavedVersion.missingRequirements && selectedSavedVersion.missingRequirements.filter(r => !r.includes("No missing")).length > 0 ? (
+                    <ul className="list-disc pl-4 text-xs font-bold text-neutral-700 space-y-1.5">
+                      {selectedSavedVersion.missingRequirements.filter(r => !r.includes("No missing")).slice(0, 5).map((req, idx) => (
+                        <li key={idx}>{req}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-neutral-555 font-bold">No remaining critical gaps!</p>
+                  )}
+                </div>
+
+                {/* Missing Qualifications */}
+                <div className="bg-indigo-50/20 border-2 border-black p-4 rounded-2xl shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <BookOpen className="w-4 h-4 text-indigo-600" />
+                    <span className="text-[11px] font-black uppercase text-indigo-800 font-mono tracking-wider">Missing Qualifications</span>
+                  </div>
+                  {selectedSavedVersion.missingQualifications && selectedSavedVersion.missingQualifications.filter(q => !q.includes("No critical")).length > 0 ? (
+                    <ul className="list-disc pl-4 text-xs font-bold text-neutral-700 space-y-1.5">
+                      {selectedSavedVersion.missingQualifications.filter(q => !q.includes("No critical")).slice(0, 5).map((qual, idx) => (
+                        <li key={idx}>{qual}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-neutral-555 font-bold">All qualifications satisfied!</p>
+                  )}
+                </div>
+
+                {/* Applied Improvements */}
+                <div className="bg-blue-50/20 border-2 border-black p-4 rounded-2xl shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] font-sans">
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <Sparkles className="w-4 h-4 text-blue-600" />
+                    <span className="text-[11px] font-black uppercase text-blue-800 font-mono tracking-wider">Improvements Made</span>
+                  </div>
+                  {selectedSavedVersion.improvements && selectedSavedVersion.improvements.length > 0 ? (
+                    <ul className="list-disc pl-4 text-xs font-bold text-neutral-700 space-y-1.5">
+                      {selectedSavedVersion.improvements.map((imp, idx) => (
+                        <li key={idx}>{imp}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-neutral-550 font-bold">Aligned professional summary and keyword matching.</p>
+                  )}
+                </div>
+
+                {/* Visual Resume Diff Log */}
+                <div className="border-2 border-black rounded-2xl p-4 bg-neutral-50 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b-2 border-black pb-2 gap-2">
+                    <span className="text-xs font-black uppercase tracking-wider text-black font-mono">Resume Diff Log</span>
+                    <div className="flex border border-black rounded-lg overflow-hidden text-[9px] font-bold">
+                      <button
+                        type="button"
+                        onClick={() => setDiffTab("added")}
+                        className={`px-2 py-0.5 border-r border-black transition ${diffTab === "added" ? "bg-emerald-500 text-white font-extrabold" : "bg-white text-black hover:bg-neutral-100"}`}
+                      >
+                        Added ({selectedSavedVersion.diffAdded?.length || 0})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDiffTab("modified")}
+                        className={`px-2 py-0.5 border-r border-black transition ${diffTab === "modified" ? "bg-amber-500 text-white font-extrabold" : "bg-white text-black hover:bg-neutral-100"}`}
+                      >
+                        Mod ({selectedSavedVersion.diffModified?.length || 0})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDiffTab("unchanged")}
+                        className={`px-2 py-0.5 transition ${diffTab === "unchanged" ? "bg-neutral-500 text-white font-extrabold" : "bg-white text-black hover:bg-neutral-100"}`}
+                      >
+                        Unch ({selectedSavedVersion.diffUnchanged?.length || 0})
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="max-h-32 overflow-y-auto pr-1 text-[11px] space-y-1.5 font-semibold font-mono">
+                    {diffTab === "added" && (
+                      (selectedSavedVersion.diffAdded || []).length > 0 ? (
+                        (selectedSavedVersion.diffAdded || []).map((item, i) => (
+                          <div key={i} className="text-emerald-700 bg-emerald-50/50 border border-emerald-200 p-1.5 rounded-lg flex items-start gap-1 leading-relaxed animate-fadeIn">
+                            <span className="font-black text-xs text-emerald-600 flex-shrink-0">+</span>
+                            <span>{item}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-neutral-500 italic p-1">No items added.</p>
+                      )
+                    )}
+
+                    {diffTab === "modified" && (
+                      (selectedSavedVersion.diffModified || []).length > 0 ? (
+                        (selectedSavedVersion.diffModified || []).map((item, i) => (
+                          <div key={i} className="text-amber-700 bg-amber-50/50 border border-amber-200 p-1.5 rounded-lg flex items-start gap-1 leading-relaxed animate-fadeIn">
+                            <span className="font-black text-xs text-amber-600 flex-shrink-0">~</span>
+                            <span>{item}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-neutral-500 italic p-1">No modifications logged.</p>
+                      )
+                    )}
+
+                    {diffTab === "unchanged" && (
+                      (selectedSavedVersion.diffUnchanged || []).length > 0 ? (
+                        (selectedSavedVersion.diffUnchanged || []).map((item, i) => (
+                          <div key={i} className="text-neutral-600 bg-white border border-neutral-200 p-1.5 rounded-lg flex items-start gap-1 leading-relaxed animate-fadeIn">
+                            <span className="font-black text-neutral-400 flex-shrink-0">=</span>
+                            <span>{item}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-neutral-500 italic p-1">No unchanged items logged.</p>
+                      )
+                    )}
+                  </div>
+                </div>
+
+                <div className="border-2 border-black rounded-2xl p-4 bg-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] space-y-2">
+                  <div className="flex items-center gap-1.5 border-b-2 border-black pb-2">
+                    <FileText className="w-4 h-4 text-neutral-800" />
+                    <span className="text-[11px] font-black uppercase text-black font-mono tracking-wider">Original Job Description</span>
+                  </div>
+                  <div className="max-h-44 overflow-y-auto whitespace-pre-wrap text-[11px] leading-relaxed font-semibold text-neutral-700 bg-neutral-50 border border-neutral-200 rounded-xl p-3">
+                    {selectedSavedVersion.originalJobDescription || "Original job description was not stored for this older tailored resume."}
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Column: Resume Preview */}
+              <div className="w-full md:w-7/12 flex flex-col border-2 border-black rounded-2xl overflow-hidden bg-neutral-100 max-h-[500px] md:max-h-none">
+                <div className="bg-neutral-800 text-white px-4 py-2 text-xs font-black uppercase tracking-wider font-mono border-b-2 border-black flex justify-between items-center">
+                  <span>Resume Preview</span>
+                  <span className="text-[10px] text-neutral-400">Pure print output preview</span>
+                </div>
+                <div className="flex-1 overflow-y-auto p-4 bg-neutral-50 scrollbar-thin">
+                  <ResumePreview resume={selectedSavedVersion.resumeData} templateStyle="two-column" />
+                </div>
+              </div>
             </div>
 
             {/* Footer buttons */}
@@ -4530,29 +6183,41 @@ WORK EXPERIENCE
               <button
                 type="button"
                 onClick={() => {
+                  handlePrintOrSavePDF(selectedSavedVersion.resumeData, selectedSavedVersion.originalResumeData, selectedSavedVersion.jobTitle);
+                }}
+                className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center gap-1.5"
+              >
+                <FileText className="w-4 h-4 text-blue-600" />
+                <span>Download PDF</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  downloadResumeAsDocx(
+                    selectedSavedVersion.resumeData,
+                    `${selectedSavedVersion.companyName.replace(/\s+/g, "_")}_Tailored_Resume`,
+                    selectedSavedVersion.originalResumeData,
+                    selectedSavedVersion.jobTitle
+                  );
+                }}
+                className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center gap-1.5"
+              >
+                <Download className="w-4 h-4 text-emerald-600" />
+                <span>Download DOCX</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
                   handleDownloadSpecificResume(selectedSavedVersion);
                 }}
                 className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center gap-1.5"
               >
-                <Download className="w-4 h-4" />
+                <Download className="w-4 h-4 text-neutral-600" />
                 <span>Download TXT</span>
               </button>
               
-              <button
-                type="button"
-                onClick={() => {
-                  const prevActive = activeResume;
-                  setActiveResume(selectedSavedVersion.resumeData);
-                  setTimeout(() => {
-                    window.print();
-                    setActiveResume(prevActive);
-                  }, 100);
-                }}
-                className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
-              >
-                Print / Save PDF
-              </button>
-
               <button
                 type="button"
                 onClick={() => {
@@ -4596,7 +6261,15 @@ WORK EXPERIENCE
                 id="btn-confirm-delete-version-yes"
                 onClick={() => {
                   if (versionToDeleteId) {
-                    setSavedVersions(prev => prev.filter(v => v.id !== versionToDeleteId));
+                    setSavedVersions(prev => {
+                      const updated = prev.filter(v => v.id !== versionToDeleteId);
+                      localStorage.setItem("jd_resume_customizer_versions", JSON.stringify(updated));
+                      return updated;
+                    });
+                    if (selectedSavedVersion?.id === versionToDeleteId) {
+                      setSelectedSavedVersion(null);
+                      setShowSavedVersionPreviewModal(false);
+                    }
                     showNotification("Tailored resume deleted successfully.", "info");
                   }
                   setShowDeleteSavedVersionConfirmModal(false);

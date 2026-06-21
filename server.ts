@@ -36,13 +36,295 @@ function getAI(): GoogleGenAI {
   return aiClient;
 }
 
+function cleanErrorMessage(error: any): string {
+  const errMsg = error.message || "";
+  
+  // Try to parse if it is a JSON string containing an error payload
+  try {
+    if (errMsg.trim().startsWith("{")) {
+      const parsed = JSON.parse(errMsg.trim());
+      if (parsed.error && parsed.error.message) {
+        return parsed.error.message;
+      }
+      if (parsed.message) {
+        return parsed.message;
+      }
+    }
+  } catch (e) {
+    // Ignore JSON parsing error
+  }
+
+  // Check common error keywords/status codes
+  const errStr = String(error.stack || error.message || error);
+  if (
+    errStr.includes("experiencing high demand") || 
+    errStr.includes("UNAVAILABLE") || 
+    errStr.includes("503") ||
+    errStr.includes("Resource has been exhausted") ||
+    errStr.includes("429")
+  ) {
+    return "The AI model is currently experiencing high demand. Please try again in a few moments.";
+  }
+  
+  if (errStr.includes("API key not valid") || errStr.includes("API_KEY_INVALID") || errStr.includes("403")) {
+    return "The AI API key configuration is invalid. Please contact support or check settings.";
+  }
+  
+  if (errStr.includes("safety") || errStr.includes("blocked by safety")) {
+    return "The request was flagged by the AI safety filters. Please review the content.";
+  }
+  
+  return error.message || "An unexpected error occurred.";
+}
+
+function normalizeWhitespace(text: string): string {
+  return text.replace(/\r/g, "\n").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function detectUploadedResumeType(fileName = "", fileType = ""): "pdf" | "docx" | null {
+  const lowerName = fileName.toLowerCase();
+  if (fileType === "application/pdf" || lowerName.endsWith(".pdf")) return "pdf";
+  if (
+    fileType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    lowerName.endsWith(".docx")
+  ) {
+    return "docx";
+  }
+  return null;
+}
+
+function validationLog(fileName: string, message: string, details: Record<string, unknown> = {}) {
+  console.log(`[Resume Validation] ${message}`, { fileName, ...details });
+}
+
+function parseResumeHeuristically(text: string, fileName: string) {
+  const cleanText = normalizeWhitespace(text);
+  if (!cleanText) {
+    return { isResume: false, detectedProfile: null, indicators: [], reason: "No readable text was extracted from the document." };
+  }
+
+  // Heuristic indicator detection
+  const lines = cleanText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  
+  // 1. Name: first short line that looks like a person, not a generic document title.
+  let name = "";
+  for (const line of lines) {
+    const wordCount = line.split(/\s+/).length;
+    const looksLikePersonName =
+      line.length > 2 &&
+      line.length < 60 &&
+      wordCount >= 2 &&
+      wordCount <= 5 &&
+      /^[A-Za-z][A-Za-z'-]+(?:\s+[A-Za-z][A-Za-z'-]+)+$/.test(line) &&
+      line.split(/\s+/).every(word => word === word.toUpperCase() || /^[A-Z][A-Za-z'-]*$/.test(word)) &&
+      !/invoice|statement|receipt|bill|account|transaction|notes|agenda|education|experience|skills|projects|resume|cv|curriculum|email|phone|contact|certificate/i.test(line);
+
+    if (looksLikePersonName) {
+      name = line;
+      break;
+    }
+  }
+
+  // 2. Contact Information: Email and Phone regexes
+  const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
+  const phoneRegex = /\+?\(?[0-9]{1,4}\)?[-.\s]?[0-9]{3,4}[-.\s]?[0-9]{3,4}/;
+  
+  const emailMatch = cleanText.match(emailRegex);
+  const phoneMatch = cleanText.match(phoneRegex);
+  
+  const email = emailMatch ? emailMatch[0] : "";
+  const phone = phoneMatch ? phoneMatch[0] : "";
+  const hasContact = !!(email || phone);
+
+  // 3. Section checks using regex
+  const hasEducation = /\b(education|university|college|school|degree|bachelor|master|phd|gpa|coursework|academic)\b/i.test(cleanText);
+  const hasExperience = /\b(experience|work history|employment|internship|responsibilities|achievements|professional experience)\b/i.test(cleanText);
+  const hasSkills = /\b(skills|technical skills|technologies|tools|competencies|expertise|programming languages)\b/i.test(cleanText);
+  const hasProjects = /\b(projects|portfolio|personal projects|academic projects|repositories|github)\b/i.test(cleanText);
+  const hasCertifications = /\b(certifications?|licenses?|awards?|credentials?)\b/i.test(cleanText);
+  const hasResumeKeyword = /\b(resume|curriculum vitae|cv)\b/i.test(cleanText);
+  const hasNonResumeDocumentSignal = /\b(invoice|receipt|bank statement|statement of account|transaction|balance|amount due|payment|vendor|chapter|session agenda|session kickoff|lecture notes|meeting notes|minutes of meeting)\b/i.test(cleanText);
+
+  const indicators = [
+    name ? "name" : null,
+    hasContact ? "contact" : null,
+    hasEducation ? "education" : null,
+    hasExperience ? "experience" : null,
+    hasSkills ? "skills" : null,
+    hasProjects ? "projects" : null,
+    hasCertifications ? "certifications" : null,
+    hasResumeKeyword ? "resume-keyword" : null,
+  ].filter(Boolean) as string[];
+
+  const sectionIndicators = [hasEducation, hasExperience, hasSkills, hasProjects, hasCertifications].filter(Boolean).length;
+  const hasContactBackedResume = hasContact && sectionIndicators >= 2 && indicators.length >= 3;
+  const hasStrongSectionOnlyResume = !hasContact && !!name && sectionIndicators >= 3 && (hasExperience || hasEducation) && indicators.length >= 4;
+  const isResume = !hasNonResumeDocumentSignal && (hasContactBackedResume || hasStrongSectionOnlyResume);
+  const reason = isResume
+    ? `Detected ${indicators.length} resume indicators: ${indicators.join(", ")}.`
+    : hasNonResumeDocumentSignal
+      ? "Document contains non-resume signals such as invoice, statement, agenda, or notes terminology."
+      : `Only detected ${indicators.length} resume indicator(s). Requires contact plus at least 2 resume sections, or name plus at least 3 strong resume sections.`;
+
+  if (!isResume) {
+    return { isResume: false, detectedProfile: null, indicators, reason };
+  }
+
+  // Let's build a basic profile so the front-end has something to render / save
+  const skillsList: string[] = [];
+  const educationList: any[] = [];
+  const experienceList: any[] = [];
+  const projectsList: any[] = [];
+
+  // Simple section parser:
+  let currentSection = "";
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lowerLine = line.toLowerCase();
+    
+    if (/skills|technologies|tools/i.test(lowerLine) && line.length < 25) {
+      currentSection = "skills";
+      continue;
+    } else if (/education|university|college/i.test(lowerLine) && line.length < 25) {
+      currentSection = "education";
+      continue;
+    } else if (/experience|work|employment|history/i.test(lowerLine) && line.length < 25) {
+      currentSection = "experience";
+      continue;
+    } else if (/projects/i.test(lowerLine) && line.length < 25) {
+      currentSection = "projects";
+      continue;
+    } else if (line.length < 25 && /summary|objective/i.test(lowerLine)) {
+      currentSection = "summary";
+      continue;
+    }
+
+    if (currentSection === "skills") {
+      // Split by commas, semicolons or bullets
+      const parts = line.split(/[,;\u2022|\t]/).map(p => p.trim()).filter(p => p.length > 1 && p.length < 35);
+      skillsList.push(...parts);
+    } else if (currentSection === "education") {
+      if (educationList.length < 4 && line.length > 5 && line.length < 100) {
+        educationList.push({
+          degree: line,
+          school: lines[i+1] || "Unknown Institution",
+          duration: "Present",
+          gpa: ""
+        });
+        i++; // skip next line
+      }
+    } else if (currentSection === "experience") {
+      if (experienceList.length < 4 && line.length > 5 && line.length < 100) {
+        experienceList.push({
+          role: line,
+          company: lines[i+1] || "Company",
+          duration: "Present",
+          description: [lines[i+2] || "Duties and responsibilities."]
+        });
+        i += 2; // skip used lines
+      }
+    } else if (currentSection === "projects") {
+      if (projectsList.length < 4 && line.length > 5 && line.length < 100) {
+        projectsList.push({
+          name: line,
+          description: [lines[i+1] || "Project details."]
+        });
+        i++; // skip used lines
+      }
+    }
+  }
+
+  // Deduplicate and limit skills
+  const uniqueSkills = Array.from(new Set(skillsList)).slice(0, 15);
+
+  const detectedProfile = {
+    fullName: name || fileName.replace(/\.[^/.]+$/, ""),
+    email: email,
+    phone: phone,
+    summary: lines.slice(0, 8).join(" ").substring(0, 300),
+    skills: uniqueSkills.length > 0 ? uniqueSkills : ["Communication", "Problem Solving"],
+    languages: ["English"],
+    workExperience: experienceList.length > 0 ? experienceList : [
+      { role: "Professional", company: "Various Companies", duration: "Present", description: ["Responsible for executing business operations."] }
+    ],
+    education: educationList.length > 0 ? educationList : [
+      { degree: "High School Diploma / Degree", school: "Educational Institution", duration: "Graduate" }
+    ],
+    projects: projectsList.length > 0 ? projectsList : [
+      { name: "Academic Portfolio", description: ["Completed academic/personal project work."] }
+    ],
+    certifications: []
+  };
+
+  return { isResume, detectedProfile, indicators, reason };
+}
+
+async function generateContentWithRetry(ai: GoogleGenAI, options: any, maxRetries = 3): Promise<any> {
+  let delay = 1000; // start with 1 second delay
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await ai.models.generateContent(options);
+    } catch (error: any) {
+      const errStr = String(error.stack || error.message || error);
+      const isRetryable = 
+        errStr.includes("experiencing high demand") || 
+        errStr.includes("UNAVAILABLE") || 
+        errStr.includes("503") ||
+        errStr.includes("Resource has been exhausted") ||
+        errStr.includes("429");
+        
+      if (isRetryable && attempt < maxRetries) {
+        console.warn(`Gemini API busy (attempt ${attempt}/${maxRetries}). Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        delay *= 2; // exponential backoff
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 // 1. Simplify Job Description API
 app.post("/api/simplify-jd", async (req, res) => {
   try {
-    const { jdText, jdImageBase64, jdImagesBase64 } = req.body;
+    let { jdText, jdImageBase64, jdImagesBase64, fileBase64, fileName, fileType } = req.body;
+
+    if (fileBase64) {
+      let isPdf = false;
+      let isDocx = false;
+      if (fileType === "application/pdf" || (fileName && fileName.toLowerCase().endsWith(".pdf"))) {
+        isPdf = true;
+      } else if (fileType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || (fileName && fileName.toLowerCase().endsWith(".docx"))) {
+        isDocx = true;
+      }
+
+      if (isPdf) {
+        try {
+          const buffer = Buffer.from(fileBase64, "base64");
+          const parser = new pdf.PDFParse({ data: buffer });
+          const parsed = await parser.getText();
+          jdText = parsed.text || "";
+        } catch (err: any) {
+          console.error("PDF text extraction failed for JD:", err);
+          res.status(500).json({ error: "Failed to extract text from PDF job description." });
+          return;
+        }
+      } else if (isDocx) {
+        try {
+          const buffer = Buffer.from(fileBase64, "base64");
+          const extractResult = await mammoth.extractRawText({ buffer });
+          jdText = extractResult.value || "";
+        } catch (err: any) {
+          console.error("Mammoth extraction failed for JD:", err);
+          res.status(500).json({ error: "Failed to extract text from DOCX job description." });
+          return;
+        }
+      }
+    }
+
     const hasImages = (jdImagesBase64 && jdImagesBase64.length > 0) || jdImageBase64;
     if (!jdText && !hasImages) {
-      res.status(400).json({ error: "Either job description text or screenshot images are required" });
+      res.status(400).json({ error: "Either job description text, document, or screenshot images are required" });
       return;
     }
 
@@ -86,6 +368,9 @@ Format your response strictly as JSON with this schema:
   ],
   "keywordsToTarget": [
     "Recommended exact keywords to include in their resume to pass filters (5-8 items)"
+  ],
+  "requiredQualifications": [
+    "Academic degrees, certifications, or minimum years of experience requested by the JD (e.g. Bachelor's in CS, 1+ years React experience)"
   ]
 }
 `
@@ -117,6 +402,9 @@ Format your response strictly as JSON with this schema:
   ],
   "keywordsToTarget": [
     "Recommended exact keywords to include in their resume to pass filters (5-8 items)"
+  ],
+  "requiredQualifications": [
+    "Academic degrees, certifications, or minimum years of experience requested by the JD (e.g. Bachelor's in CS, 1+ years React experience)"
   ]
 }
 `
@@ -124,7 +412,7 @@ Format your response strictly as JSON with this schema:
       ];
     }
 
-    const response = await ai.models.generateContent({
+    const response = await generateContentWithRetry(ai, {
       model: "gemini-3.5-flash",
       contents: contents,
       config: {
@@ -156,9 +444,13 @@ Format your response strictly as JSON with this schema:
             keywordsToTarget: {
               type: Type.ARRAY,
               items: { type: Type.STRING }
+            },
+            requiredQualifications: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING }
             }
           },
-          required: ["jobTitle", "companyPitch", "requiredSkills", "keyResponsibilities", "candidateExpectations", "keywordsToTarget"]
+          required: ["jobTitle", "companyPitch", "requiredSkills", "keyResponsibilities", "candidateExpectations", "keywordsToTarget", "requiredQualifications"]
         }
       }
     });
@@ -171,7 +463,7 @@ Format your response strictly as JSON with this schema:
     res.json(JSON.parse(resultText.trim()));
   } catch (error: any) {
     console.error("Error in simplify-jd:", error);
-    res.status(500).json({ error: error.message || "An error occurred while simplifying the JD" });
+    res.status(500).json({ error: cleanErrorMessage(error) });
   }
 });
 
@@ -196,14 +488,15 @@ ${jdText}
 """
 
 Instructions:
-1. Examine each bullet point in Resume.workExperience. Rewrite them to emphasize accomplishments using the STAR method, injecting high-priority skills and keywords from the Job Description. Keep the exact same company name, job duration, title, etc. Do not invent new jobs.
+1. Examine each bullet point in Resume.workExperience. Rewrite them to emphasize accomplishments using the STAR method, injecting high-priority skills and keywords from the Job Description. Keep the exact same company name, job duration, title, etc. Do not invent new jobs or fake experiences.
 2. Examine each project in Resume.projects (if any). Rewrite project descriptions/bullets to emphasize achievements and target keywords. Keep the exact same project name. Do not invent new projects.
 3. Update the Professional Summary (Resume.summary) so it directly presents the candidate as a highly relevant fit for this specific job context.
-4. Keep the education section factual but clarify or format it perfectly.
+4. Keep the education section factual but clarify or format it perfectly. Do not alter dates or school names.
 5. Keep the certifications section (if any) factual and intact. Do not remove or alter actual certifications.
-6. Suggest adding missing candidate skills to Resume.skills that directly map to the JD's requirements, provided they make sense for a graduate.
+6. Suggest adding missing candidate skills to Resume.skills that directly map to the JD's requirements, provided they make sense for a graduate. Do NOT simply stuff all JD keywords into the Skills section. Add keywords naturally where relevant across Professional Summary, Experience bullet points, and Projects descriptions.
 7. Provide a list of "suggestions" with clear reasons why they were made and how they improve the resume.
-8. IMPORTANT: You MUST process and include ALL work experiences, projects, education history, certifications, and skills from the original resume in the output tailoredResume. Do not truncate, omit, or ignore any jobs, projects, certifications, or education entries from any page. If there are 3 work experiences, you must return all 3. If there are projects, return them all. If certifications are present, return them all. If the original resume has no projects or certifications, return an empty array [] for these fields.
+8. IMPORTANT - DATA INTEGRITY: You MUST process and include ALL work experiences, projects, education history, certifications, and skills from the original resume in the output tailoredResume. Do not truncate, omit, or ignore any jobs, projects, certifications, or education entries. If there are 3 work experiences, you must return all 3. If there are projects, return them all. If certifications are present, return them all. If the original resume has no projects or certifications, return an empty array [] for these fields.
+9. IMPORTANT - NO PLACEHOLDERS: Do NOT output placeholders like "Present", "Unknown Institution", "Unknown Degree", "Undefined", or null fields. If a date, school name, or degree is already defined, keep it exactly as-is. Do not invent details.
 
 Format your response strictly as JSON matching this schema:
 {
@@ -256,7 +549,7 @@ Format your response strictly as JSON matching this schema:
 }
 `;
 
-    const response = await ai.models.generateContent({
+    const response = await generateContentWithRetry(ai, {
       model: "gemini-3.5-flash",
       contents: prompt,
       config: {
@@ -360,7 +653,7 @@ Format your response strictly as JSON matching this schema:
     res.json(JSON.parse(resultText.trim()));
   } catch (error: any) {
     console.error("Error in tailor-resume:", error);
-    res.status(500).json({ error: error.message || "An error occurred while tailoring the resume" });
+    res.status(500).json({ error: cleanErrorMessage(error) });
   }
 });
 
@@ -408,7 +701,7 @@ Format your response strictly as JSON matching this schema:
 }
 `;
 
-    const response = await ai.models.generateContent({
+    const response = await generateContentWithRetry(ai, {
       model: "gemini-3.5-flash",
       contents: prompt,
       config: {
@@ -446,451 +739,84 @@ Format your response strictly as JSON matching this schema:
     res.json(JSON.parse(resultText.trim()));
   } catch (error: any) {
     console.error("Error in ats-audit:", error);
-    res.status(500).json({ error: error.message || "An error occurred while scanning the resume" });
+    res.status(500).json({ error: cleanErrorMessage(error) });
   }
 });
 
-// 4. Analyze Uploaded Resume API (supports PDF direct ingestion and DOCX text extraction)
 app.post("/api/analyze-uploaded-resume", async (req, res) => {
   try {
     const { fileName, fileType, base64Data } = req.body;
+    validationLog(fileName || "unknown-file", "Validation Started", { fileType });
     if (!base64Data) {
+      validationLog(fileName || "unknown-file", "Validation Failed", { reason: "Base64 file data is required." });
       res.status(400).json({ error: "Base64 file data is required" });
       return;
     }
 
-    const ai = getAI();
-    let isPdf = false;
-    if (fileType === "application/pdf" || (fileName && fileName.toLowerCase().endsWith(".pdf"))) {
-      isPdf = true;
+    const detectedFileType = detectUploadedResumeType(fileName, fileType);
+
+    if (!detectedFileType) {
+      const reason = "Unsupported file type. Only PDF and DOCX files can be validated.";
+      validationLog(fileName || "unknown-file", "Validation Failed", { reason });
+      res.json({ isResume: false, fileType: "unsupported", extractedText: "", indicators: [], reason });
+      return;
     }
 
-    let parsedResponseText = "";
+    const extractText = async () => {
+      const buffer = Buffer.from(base64Data, "base64");
+      if (detectedFileType === "pdf") {
+        const parser = new pdf.PDFParse({ data: buffer });
+        const parsed = await parser.getText();
+        return parsed.text || "";
+      }
+      const extractResult = await mammoth.extractRawText({ buffer });
+      return extractResult.value || "";
+    };
 
-    if (isPdf) {
-      let pdfText = "";
-      try {
-        const buffer = Buffer.from(base64Data, "base64");
-        const pdfData = await pdf(buffer);
-        pdfText = pdfData.text || "";
-      } catch (err: any) {
-        console.error("PDF text extraction failed, falling back to multimodal upload:", err);
-      }
-
-      if (pdfText.trim().length > 0) {
-        // High-speed text-based scanning path (takes less than 2 seconds)
-        const response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: `You are an expert recruiter and applicant tracking system (ATS) scanner.
-Analyze the following resume text extracted from a PDF document and deliver an evaluation strictly in JSON.
-IMPORTANT: This is a multi-page resume document. You MUST process the entire text from all pages. Do not truncate, omit, or ignore any work experiences, projects, education entries, or skills from any page. If the resume has 2 pages, extract 2 pages of info. If it has 3 pages, extract 3 pages of info. Every single work experience and education history entry must be extracted and returned in the detectedProfile.
-
-First, verify if this text is actually from a professional resume. (A cover letter, template with placeholder names, food recipe, empty text, or random non-resume text counts as isResume: false).
-Identify if any critical standard resume sections or standard contact info are missing.
-Extract key candidate profile information if available. Ensure detectedProfile includes all found experiences, skills, education, and languages.
-
-Resume Text:
-"""
-${pdfText}
-"""
-
-Return a JSON payload with exactly this schema:
-{
-  "isResume": boolean,
-  "confidenceScore": number, // 0 to 100 on how complete and professional the resume is
-  "missingItems": string[], // e.g. ["Professional Summary", "LinkedIn profile link", "Dates for work experiences", "Education details"]
-  "actionableImprovements": string[], // List of 3-5 specific bullet points for the candidate to improve their resume
-  "detectedProfile": {
-    "fullName": string,
-    "email": string,
-    "phone": string,
-    "summary": string,
-    "skills": string[],
-    "languages": string[], // array of languages (e.g. ["English", "Hindi"])
-    "workExperience": [
-      {
-        "role": string,
-        "company": string,
-        "duration": string,
-        "description": string[] // list of bullet points
-      }
-    ],
-    "education": [
-      {
-        "degree": string,
-        "school": string,
-        "duration": string,
-        "gpa": string // e.g. "3.8/4.0" or "9.0 CGPA" or leave blank if not specified
-      }
-    ],
-    "projects": [
-      {
-        "name": string,
-        "description": string[] // list of project details or bullet points
-      }
-    ],
-    "certifications": string[] // list of certification names
-  },
-  "explanation": string
-}`,
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                isResume: { type: Type.BOOLEAN },
-                confidenceScore: { type: Type.INTEGER },
-                missingItems: { type: Type.ARRAY, items: { type: Type.STRING } },
-                actionableImprovements: { type: Type.ARRAY, items: { type: Type.STRING } },
-                detectedProfile: {
-                  type: Type.OBJECT,
-                  properties: {
-                    fullName: { type: Type.STRING },
-                    email: { type: Type.STRING },
-                    phone: { type: Type.STRING },
-                    summary: { type: Type.STRING },
-                    skills: { type: Type.ARRAY, items: { type: Type.STRING } },
-                    languages: { type: Type.ARRAY, items: { type: Type.STRING } },
-                    workExperience: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          role: { type: Type.STRING },
-                          company: { type: Type.STRING },
-                          duration: { type: Type.STRING },
-                          description: { type: Type.ARRAY, items: { type: Type.STRING } }
-                        },
-                        required: ["role", "company", "duration", "description"]
-                      }
-                    },
-                    education: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          degree: { type: Type.STRING },
-                          school: { type: Type.STRING },
-                          duration: { type: Type.STRING },
-                          gpa: { type: Type.STRING }
-                        },
-                        required: ["degree", "school", "duration"]
-                      }
-                    },
-                    projects: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          name: { type: Type.STRING },
-                          description: { type: Type.ARRAY, items: { type: Type.STRING } }
-                        },
-                        required: ["name", "description"]
-                      }
-                    },
-                    certifications: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING }
-                    }
-                  },
-                  required: ["fullName", "email", "phone", "summary", "skills", "languages", "workExperience", "education", "projects", "certifications"]
-                },
-                explanation: { type: Type.STRING }
-              },
-              required: ["isResume", "confidenceScore", "missingItems", "actionableImprovements", "detectedProfile", "explanation"]
-            }
-          }
-        });
-        parsedResponseText = response.text || "";
-      } else {
-        // Fallback: Multimodal parsing path if PDF is image-only/scanned
-        const pdfPart = {
-          inlineData: {
-            mimeType: "application/pdf",
-            data: base64Data
-          }
-        };
-        const response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: [
-            pdfPart,
-            {
-              text: `You are an expert recruiter and applicant tracking system (ATS) scanner.
-Analyze the attached resume and deliver an evaluation strictly in JSON.
-IMPORTANT: This is a multi-page resume document. You MUST process the entire document from all pages. Do not truncate, omit, or ignore any work experiences, projects, education entries, or skills from any page. If the resume has 2 pages, extract 2 pages of info. If it has 3 pages, extract 3 pages of info. Every single work experience and education history entry must be extracted and returned in the detectedProfile.
-
-First, verify if this document is actually a professional resume. (A cover letter, template with placeholder names, food recipe, empty text, or random non-resume file counts as isResume: false).
-Identify if any critical standard resume sections or standard contact info are missing.
-Extract key candidate profile information if available. Ensure detectedProfile includes all found experiences, skills, education, and languages.
-
-Return a JSON payload with exactly this schema:
-{
-  "isResume": boolean,
-  "confidenceScore": number, // 0 to 100 on how complete and professional the resume is
-  "missingItems": string[], // e.g. ["Professional Summary", "LinkedIn profile link", "Dates for work experiences", "Education details"]
-  "actionableImprovements": string[], // List of 3-5 specific bullet points for the candidate to improve their resume
-  "detectedProfile": {
-    "fullName": string,
-    "email": string,
-    "phone": string,
-    "summary": string,
-    "skills": string[],
-    "languages": string[], // array of languages (e.g. ["English", "Hindi"])
-    "workExperience": [
-      {
-        "role": string,
-        "company": string,
-        "duration": string,
-        "description": string[] // list of bullet points
-      }
-    ],
-    "education": [
-      {
-        "degree": string,
-        "school": string,
-        "duration": string,
-        "gpa": string // e.g. "3.8/4.0" or "9.0 CGPA" or leave blank if not specified
-      }
-    ],
-    "projects": [
-      {
-        "name": string,
-        "description": string[] // list of project details or bullet points
-      }
-    ],
-    "certifications": string[] // list of certification names
-  },
-  "explanation": string
-}`
-            }
-          ],
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                isResume: { type: Type.BOOLEAN },
-                confidenceScore: { type: Type.INTEGER },
-                missingItems: { type: Type.ARRAY, items: { type: Type.STRING } },
-                actionableImprovements: { type: Type.ARRAY, items: { type: Type.STRING } },
-                detectedProfile: {
-                  type: Type.OBJECT,
-                  properties: {
-                    fullName: { type: Type.STRING },
-                    email: { type: Type.STRING },
-                    phone: { type: Type.STRING },
-                    summary: { type: Type.STRING },
-                    skills: { type: Type.ARRAY, items: { type: Type.STRING } },
-                    languages: { type: Type.ARRAY, items: { type: Type.STRING } },
-                    workExperience: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          role: { type: Type.STRING },
-                          company: { type: Type.STRING },
-                          duration: { type: Type.STRING },
-                          description: { type: Type.ARRAY, items: { type: Type.STRING } }
-                        },
-                        required: ["role", "company", "duration", "description"]
-                      }
-                    },
-                    education: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          degree: { type: Type.STRING },
-                          school: { type: Type.STRING },
-                          duration: { type: Type.STRING },
-                          gpa: { type: Type.STRING }
-                        },
-                        required: ["degree", "school", "duration"]
-                      }
-                    },
-                    projects: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          name: { type: Type.STRING },
-                          description: { type: Type.ARRAY, items: { type: Type.STRING } }
-                        },
-                        required: ["name", "description"]
-                      }
-                    },
-                    certifications: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING }
-                    }
-                  },
-                  required: ["fullName", "email", "phone", "summary", "skills", "languages", "workExperience", "education", "projects", "certifications"]
-                },
-                explanation: { type: Type.STRING }
-              },
-              required: ["isResume", "confidenceScore", "missingItems", "actionableImprovements", "detectedProfile", "explanation"]
-            }
-          }
-        });
-        parsedResponseText = response.text || "";
-      }
-    } else {
-      // It's a DOCX/Word document or other file
-      // Extract text using mammoth
-      let docText = "";
-      try {
-        const buffer = Buffer.from(base64Data, "base64");
-        const extractResult = await mammoth.extractRawText({ buffer });
-        docText = extractResult.value || "";
-      } catch (err: any) {
-        console.error("Mammoth extraction error:", err);
-        throw new Error("Failed to read text from Word document. Please ensure it is not password-protected.");
-      }
-
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: `You are an expert recruiter and applicant tracking system (ATS) scanner.
-Analyze the following resume text extracted from a Word document and deliver an evaluation strictly in JSON.
-IMPORTANT: This is a multi-page resume document. You MUST process the entire text from all pages. Do not truncate, omit, or ignore any work experiences, projects, education entries, or skills from any page. If the resume has 2 pages, extract 2 pages of info. If it has 3 pages, extract 3 pages of info. Every single work experience and education history entry must be extracted and returned in the detectedProfile.
-
-First, verify if this text is actually from a professional resume. (A cover letter, template with placeholder names, food recipe, empty text, or random non-resume text counts as isResume: false).
-Identify if any critical standard resume sections or standard contact info are missing.
-Extract key candidate profile information if available. Ensure detectedProfile includes all found experiences, skills, education, and languages.
-
-Resume Text:
-"""
-${docText}
-"""
-
-Return a JSON payload with exactly this schema:
-{
-  "isResume": boolean,
-  "confidenceScore": number, // 0 to 100 on how complete and professional the resume is
-  "missingItems": string[], // e.g. ["Professional Summary", "LinkedIn profile link", "Dates for work experiences", "Education details"]
-  "actionableImprovements": string[], // List of 3-5 specific bullet points for the candidate to improve their resume
-  "detectedProfile": {
-    "fullName": string,
-    "email": string,
-    "phone": string,
-    "summary": string,
-    "skills": string[],
-    "languages": string[], // array of languages (e.g. ["English", "Hindi"])
-    "workExperience": [
-      {
-        "role": string,
-        "company": string,
-        "duration": string,
-        "description": string[] // list of bullet points
-      }
-    ],
-    "education": [
-      {
-        "degree": string,
-        "school": string,
-        "duration": string,
-        "gpa": string // e.g. "3.8/4.0" or "9.0 CGPA" or leave blank if not specified
-      }
-    ],
-    "projects": [
-      {
-        "name": string,
-        "description": string[] // list of project details or bullet points
-      }
-    ],
-    "certifications": string[] // list of certification names
-  },
-  "explanation": string
-}`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              isResume: { type: Type.BOOLEAN },
-              confidenceScore: { type: Type.INTEGER },
-              missingItems: { type: Type.ARRAY, items: { type: Type.STRING } },
-              actionableImprovements: { type: Type.ARRAY, items: { type: Type.STRING } },
-              detectedProfile: {
-                type: Type.OBJECT,
-                properties: {
-                  fullName: { type: Type.STRING },
-                  email: { type: Type.STRING },
-                  phone: { type: Type.STRING },
-                  summary: { type: Type.STRING },
-                  skills: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  languages: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  workExperience: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        role: { type: Type.STRING },
-                        company: { type: Type.STRING },
-                        duration: { type: Type.STRING },
-                        description: { type: Type.ARRAY, items: { type: Type.STRING } }
-                      },
-                      required: ["role", "company", "duration", "description"]
-                    }
-                  },
-                  education: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        degree: { type: Type.STRING },
-                        school: { type: Type.STRING },
-                        duration: { type: Type.STRING },
-                        gpa: { type: Type.STRING }
-                      },
-                      required: ["degree", "school", "duration"]
-                    }
-                  },
-                  projects: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        name: { type: Type.STRING },
-                        description: { type: Type.ARRAY, items: { type: Type.STRING } }
-                      },
-                      required: ["name", "description"]
-                    }
-                  },
-                  certifications: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING }
-                  }
-                },
-                required: ["fullName", "email", "phone", "summary", "skills", "languages", "workExperience", "education", "projects", "certifications"]
-              },
-              explanation: { type: Type.STRING }
-            },
-            required: ["isResume", "confidenceScore", "missingItems", "actionableImprovements", "detectedProfile", "explanation"]
-          }
-        }
+    let extractedText = "";
+    try {
+      extractedText = await Promise.race([
+        extractText(),
+        new Promise<string>((_, reject) => setTimeout(() => reject(new Error("Resume validation timed out.")), 9000))
+      ]);
+      validationLog(fileName || "unknown-file", "Document Parsed", {
+        detectedFileType,
+        charactersExtracted: normalizeWhitespace(extractedText).length
       });
-      parsedResponseText = response.text || "";
+    } catch (err: any) {
+      console.error(`${detectedFileType.toUpperCase()} text extraction failed:`, err);
+      const reason = "This file could not be read for resume validation.";
+      validationLog(fileName || "unknown-file", "Validation Failed", { reason });
+      res.json({
+        isResume: false,
+        fileType: detectedFileType,
+        extractedText: "",
+        indicators: [],
+        reason,
+        error: reason
+      });
+      return;
     }
 
-    if (!parsedResponseText) {
-      throw new Error("No response from AI analyzer.");
-    }
-
-    const result = JSON.parse(parsedResponseText.trim());
-    if (result.isResume) {
-      const dp = result.detectedProfile;
-      if (!dp || !dp.fullName || ((!dp.workExperience || dp.workExperience.length === 0) && (!dp.education || dp.education.length === 0))) {
-        res.status(422).json({ error: "The uploaded resume could not be fully processed. Please make sure it is not corrupted and contains extractable work experiences/education details." });
-        return;
-      }
-    }
-
-    res.json(result);
+    const validationResult = parseResumeHeuristically(extractedText, fileName);
+    validationLog(fileName || "unknown-file", "Sections Found", {
+      indicators: validationResult.indicators,
+      reason: validationResult.reason
+    });
+    validationLog(fileName || "unknown-file", validationResult.isResume ? "Validation Passed" : "Validation Failed", {
+      reason: validationResult.reason
+    });
+    res.json({
+      ...validationResult,
+      fileType: detectedFileType,
+      extractedText: normalizeWhitespace(extractedText)
+    });
   } catch (error: any) {
     console.error("Error in analyze-uploaded-resume:", error);
-    res.status(500).json({ error: error.message || "An error occurred while analyzing the resume file." });
+    res.status(500).json({ error: error.message || "Failed to process the uploaded resume." });
   }
 });
+
 
 // Setup Vite Dev server or static files
 async function startServer() {

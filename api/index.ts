@@ -440,7 +440,7 @@ function heuristicResumeValidation(cleanText: string, fileName: string, original
       
       if (hasDate && !isBullet && workExperience.length < 6) {
         let role = line;
-        let company = 'Company';
+        let company = '';
         let duration = '';
         const dateMatch = line.match(/\b(19|20)\d{2}\s*-\s*(present|\b(19|20)\d{2})\b/i) || line.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(19|20)\d{2}/i);
         if (dateMatch) {
@@ -451,7 +451,7 @@ function heuristicResumeValidation(cleanText: string, fileName: string, original
           id: `exp-${Date.now()}-${workExperience.length}`,
           role: role.slice(0, 50),
           company: company,
-          duration: duration || 'Timeline',
+          duration: duration || '',
           description: []
         });
       } else if (workExperience.length > 0) {
@@ -460,9 +460,9 @@ function heuristicResumeValidation(cleanText: string, fileName: string, original
       } else {
         workExperience.push({
           id: `exp-${Date.now()}-0`,
-          role: 'Professional Experience',
-          company: 'Company',
-          duration: 'Timeline',
+          role: '',
+          company: '',
+          duration: '',
           description: [line.replace(/^[-*•o▪\d+\.]\s*/, '').trim()]
         });
       }
@@ -480,7 +480,7 @@ function heuristicResumeValidation(cleanText: string, fileName: string, original
       } else {
         projects.push({
           id: `proj-${Date.now()}-0`,
-          name: 'Project',
+          name: '',
           description: [line.replace(/^[-*•o▪\d+\.]\s*/, '').trim()],
           duration: ''
         });
@@ -489,7 +489,7 @@ function heuristicResumeValidation(cleanText: string, fileName: string, original
       const hasDate = /\b(19|20)\d{2}\b/i.test(line);
       if (education.length < 4) {
         let degree = line;
-        let school = 'University / School';
+        let school = '';
         let duration = '';
         let gpa = '';
         const gpaMatch = line.match(/gpa\s*:\s*\d+(\.\d+)?/i) || line.match(/\b\d\.\d{1,2}\b/);
@@ -501,7 +501,7 @@ function heuristicResumeValidation(cleanText: string, fileName: string, original
           id: `edu-${Date.now()}-${education.length}`,
           degree: degree.slice(0, 60),
           school: school,
-          duration: hasDate ? line.match(/\b(19|20)\d{2}\b/g)?.join(' - ') || 'Timeline' : 'Timeline',
+          duration: hasDate ? line.match(/\b(19|20)\d{2}\b/g)?.join(' - ') || '' : '',
           gpa: gpa
         });
       }
@@ -509,13 +509,8 @@ function heuristicResumeValidation(cleanText: string, fileName: string, original
   }
 
   if (workExperience.length === 0) {
-    workExperience.push({
-      id: `exp-${Date.now()}-0`,
-      role: 'Candidate Profile',
-      company: 'Experience Record',
-      duration: 'Timeline',
-      description: ['Extracted resume detail and information.']
-    });
+    // DO NOT invent a fake "Experience Record" section per user requirements.
+    // If we couldn't heuristically find work experience, it remains empty.
   }
 
   const indicators: string[] = [];
@@ -538,12 +533,12 @@ function heuristicResumeValidation(cleanText: string, fileName: string, original
       linkedin: '',
       website: '',
       location: '',
-      summary: summary || 'Professional Resume Profile',
+      summary: summary || '',
       workExperience,
       education,
       projects,
       certifications,
-      skills: skills.length > 0 ? [...new Set(skills)] : ['Professional Skills'],
+      skills: skills.length > 0 ? [...new Set(skills)] : [],
       languages,
       achievements
     },

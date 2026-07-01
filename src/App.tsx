@@ -5625,34 +5625,6 @@ WORK EXPERIENCE
               {(() => {
                 const previewResume = savedUserResumes.find(r => r.id === previewResumeId);
                 if (!previewResume) return <p className="text-sm text-neutral-500">No resume selected.</p>;
-                const previewFileType = previewResume.fileType || (previewResume.pdfBase64 ? "pdf" : "manual");
-                const previewFileBase64 = previewResume.fileBase64 || previewResume.pdfBase64;
-
-                if (previewFileType === "pdf" && previewFileBase64) {
-                  return (
-                  <iframe
-                    src={`data:application/pdf;base64,${previewFileBase64}#toolbar=0&navpanes=0`}
-                    className="w-full h-[550px] border border-neutral-300 rounded-lg"
-                    title="Original Resume PDF"
-                  />
-                  );
-                }
-
-                if (previewFileType === "docx") {
-                  return previewResume.extractedText ? (
-                    <article className="bg-white border border-neutral-300 rounded-lg p-5 min-h-[550px] whitespace-pre-wrap text-sm leading-7 text-neutral-850 font-sans">
-                      {previewResume.extractedText}
-                    </article>
-                  ) : (
-                    <div className="bg-white border border-amber-300 rounded-lg p-5 min-h-[220px] text-sm text-neutral-700">
-                      <p className="font-black text-amber-700 uppercase tracking-wide mb-2">DOCX preview unavailable</p>
-                      <p>This DOCX file was uploaded before document-text previews were stored. Re-upload the DOCX to view its full extracted content.</p>
-                      <div className="mt-5">
-                        <ResumePreview resume={previewResume.data} templateStyle="two-column" />
-                      </div>
-                    </div>
-                  );
-                }
 
                 return <ResumePreview resume={previewResume.data} templateStyle="two-column" />;
               })()}

@@ -72,7 +72,9 @@ export default function App() {
   // User Authentication
   const [currentUser, setCurrentUser] = useState<AppUser | null>(() => {
     const guest = sessionStorage.getItem("jd_resume_customizer_guest_user");
-    if (guest) return JSON.parse(guest);
+    if (guest) {
+      try { return JSON.parse(guest); } catch { sessionStorage.removeItem("jd_resume_customizer_guest_user"); }
+    }
     const saved = localStorage.getItem("jd_resume_customizer_user");
     if (saved) {
       try {
@@ -195,7 +197,7 @@ export default function App() {
   const [selectedStyle, setSelectedStyle] = useState<"classic" | "tech" | "executive" | "two-column">("tech");
   const [savedVersions, setSavedVersions] = useState<SavedResumeVersion[]>(() => {
     const saved = localStorage.getItem("jd_resume_customizer_versions");
-    return saved ? JSON.parse(saved) : [];
+    try { return saved ? JSON.parse(saved) : []; } catch { return []; }
   });
   const isDarkMode = false;
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -439,7 +441,7 @@ export default function App() {
   const [tempFile, setTempFile] = useState<File | null>(null);
   const [uploadedResumeMeta, setUploadedResumeMeta] = useState<{ name: string; size: number; uploadedAt: string } | null>(() => {
     const saved = localStorage.getItem("jd_resume_customizer_uploaded_resume_meta");
-    return saved ? JSON.parse(saved) : null;
+    try { return saved ? JSON.parse(saved) : null; } catch { return null; }
   });
 
   // Resume upload/validation states

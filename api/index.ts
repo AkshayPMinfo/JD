@@ -111,9 +111,10 @@ Rules:
 3. Preserve all company names, job titles, roles, durations, and description bullet points exactly as they are described in the resume. Do not change their phrasing during parsing.
 4. Preserve all projects, education details (degree, school, duration, gpa), and certifications exactly as described.
 5. In workExperience, education, and projects, generate a unique string "id" for each entry (e.g., "exp-1", "exp-2", "edu-1", "proj-1").
-6. Verify if this document is actually a professional resume. (A cover letter, template with placeholder names, food recipe, empty text, or random non-resume file counts as isResume: false).
-   - A document is a resume (isResume: true) if it has a person's name and at least some sections like experience, education, or skills.
-   - If the document is not a resume (isResume: false), explain why in the "reason" field.
+6. STRICTLY verify if this document is actually a professional resume or curriculum vitae (CV).
+   - A valid resume MUST clearly be a candidate's professional profile used for job applications, containing structured sections like Experience, Education, and Skills.
+   - REJECT (isResume: false) documents that are: reports, brochures, articles, presentations, meeting notes, invoices, recipes, cover letters, random text, or general biographies.
+   - If the document is NOT a resume (isResume: false), explain why in the "reason" field and return empty/null for detectedProfile.
 7. ABSOLUTE FIDELITY: You must extract EVERY section, EVERY work experience, EVERY project, EVERY educational degree, EVERY certification, EVERY language, and EVERY single bullet point or description line. Do NOT summarize, truncate, shorten, rewrite, or simplify any descriptions. Keep all sentences, bullets, dates, names, achievements, and technical details EXACTLY as they are written in the original raw text. The parsed profile must be a 100% complete factual mirror of the candidate's uploaded resume.
 
 Raw Resume Text:
@@ -299,9 +300,9 @@ function checkTextAgainstStrictResumeCriteria(text: string): { isResume: boolean
     return { isResume: false, reason: "This document appears to be a financial record or invoice, not a resume." };
   }
   
-  // Academic research papers
-  if (/\b(abstract|references|bibliography|literature review|concluding remarks|fig\.\s*\d+|table\s*\d+)\b/i.test(cleanText) && /\b(introduction|methodology|discussion|results)\b/i.test(cleanText)) {
-    return { isResume: false, reason: "This document appears to be an academic paper or journal article, not a resume." };
+  // Academic research papers / Reports / Books
+  if (/\b(abstract|references|bibliography|literature review|concluding remarks|fig\.\s*\d+|table\s*\d+|table of contents|chapter \d+|index|glossary|appendix)\b/i.test(cleanText) && /\b(introduction|methodology|discussion|results)\b/i.test(cleanText)) {
+    return { isResume: false, reason: "This document appears to be an academic paper, book, or report, not a resume." };
   }
 
   // Presentations / Slides / Meeting notes
@@ -310,8 +311,8 @@ function checkTextAgainstStrictResumeCriteria(text: string): { isResume: boolean
   }
 
   // Marketing/Brochures/Articles/Recipes
-  if (/\b(ingredients|instructions|recipe|servings|prep time|cook time|tablespoon|teaspoon)\b/i.test(cleanText)) {
-    return { isResume: false, reason: "This document appears to be a food recipe, not a resume." };
+  if (/\b(ingredients|instructions|recipe|servings|prep time|cook time|tablespoon|teaspoon|published on|read time|subscribe|author:|written by|leave a comment|share this)\b/i.test(cleanText)) {
+    return { isResume: false, reason: "This document appears to be an article, recipe, or brochure, not a resume." };
   }
 
   // Cover Letters (specifically standalone letters without resume sections)
@@ -327,16 +328,18 @@ function checkTextAgainstStrictResumeCriteria(text: string): { isResume: boolean
   }
 
   // 4. Typical Section Keywords.
-  const hasExperience = /\b(experience|work history|employment|career|professional experience|internship|intern|worked as)\b/i.test(cleanText);
-  const hasEducation = /\b(education|academic|university|college|school|degree|bachelor|master|phd|diploma)\b/i.test(cleanText);
-  const hasSkills = /\b(skills|technical skills|technologies|programming|languages|expertise|competencies|tools)\b/i.test(cleanText);
-  const hasProjects = /\b(projects|portfolio|personal projects|academic projects|repositories|github)\b/i.test(cleanText);
-  const hasCertifications = /\b(certifications?|licenses?|credentials?)\b/i.test(cleanText);
+  const hasExperience = /\b(experience|employment|work history|career)\b/i.test(cleanText);
+  const hasEducation = /\b(education|university|college|degree|bachelor|master|phd|b\.s\.|b\.a\.)\b/i.test(cleanText);
+  const hasSkills = /\b(skills|technologies|programming|expertise|competencies|tools)\b/i.test(cleanText);
+  
+  // Resumes almost always contain multiple years/dates for employment and education
+  const dateMatches = cleanText.match(/\b(19\d{2}|20\d{2})\b/g);
+  const hasDates = dateMatches && dateMatches.length >= 2;
 
-  // A valid resume must match at least 2 of these key sections: Experience, Education, Skills, Projects, Certifications.
-  const sectionScore = [hasExperience, hasEducation, hasSkills, hasProjects, hasCertifications].filter(Boolean).length;
-  if (sectionScore < 2) {
-    return { isResume: false, reason: "This document does not contain typical resume sections (such as Experience, Education, or Skills)." };
+  // A valid resume must match at least 3 of these critical indicators (Exp, Edu, Skills, Dates).
+  const sectionScore = [hasExperience, hasEducation, hasSkills, hasDates].filter(Boolean).length;
+  if (sectionScore < 3) {
+    return { isResume: false, reason: "This document does not contain enough typical resume indicators (such as structured Experience, Education, Skills, and Dates)." };
   }
 
   // If it has cover letter markers but NO experience section, it's just a cover letter.

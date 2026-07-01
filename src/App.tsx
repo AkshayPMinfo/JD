@@ -6298,12 +6298,35 @@ WORK EXPERIENCE
                           <div key={panel.title} className="border-2 border-black rounded-2xl overflow-hidden bg-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
                             <div className="bg-black text-white px-4 py-2 text-xs font-black uppercase tracking-wider font-mono">{panel.title}</div>
                             <div className="p-4 bg-neutral-50 border-t border-black">
-                              <ResumePreview
-                                resume={panel.resume}
-                                templateStyle={selectedStyle}
-                                id={`step-4-preview-${panel.side}`}
-                                originalResume={panel.side === "tailored" ? originalResume : undefined}
-                              />
+                              {panel.side === "original" ? (() => {
+                                const savedOriginal = savedUserResumes.find(r => r.id === tailorSelectedResumeKey);
+                                const isPdf = savedOriginal?.fileType === 'pdf' || !!savedOriginal?.pdfBase64;
+                                const base64Data = savedOriginal?.fileBase64 || savedOriginal?.pdfBase64;
+                                
+                                if (isPdf && base64Data) {
+                                  return (
+                                    <iframe
+                                      src={`data:application/pdf;base64,${base64Data}#toolbar=0&navpanes=0`}
+                                      className="w-full h-full min-h-[550px] border border-neutral-300 rounded-lg bg-white"
+                                      title="Original Uploaded Resume"
+                                    />
+                                  );
+                                }
+                                return (
+                                  <ResumePreview
+                                    resume={panel.resume}
+                                    templateStyle={selectedStyle}
+                                    id={`step-4-preview-${panel.side}`}
+                                  />
+                                );
+                              })() : (
+                                <ResumePreview
+                                  resume={panel.resume}
+                                  templateStyle={selectedStyle}
+                                  id={`step-4-preview-${panel.side}`}
+                                  originalResume={originalResume}
+                                />
+                              )}
                             </div>
                           </div>
                         ))}

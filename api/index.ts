@@ -169,7 +169,7 @@ Format your response strictly as JSON matching this schema:
 `;
 
     const response = await generateContentWithRetry(ai, {
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -465,7 +465,7 @@ Format your response strictly as JSON with this schema:
     }
 
     const response = await generateContentWithRetry(ai, {
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: contents,
       config: {
         responseMimeType: "application/json",
@@ -610,7 +610,7 @@ Format your response strictly as JSON matching this schema:
 `;
 
     const response = await generateContentWithRetry(ai, {
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -773,7 +773,7 @@ Format your response strictly as JSON matching this schema:
 `;
 
     const response = await generateContentWithRetry(ai, {
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: {
         responseMimeType: "application/json",

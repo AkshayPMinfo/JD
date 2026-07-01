@@ -128,36 +128,36 @@ Format your response strictly as JSON matching this schema:
   "confidenceScore": number, // 0 to 100 on how complete and professional the resume is
   "reason": "Brief explanation of the validation or indicator flags detected",
   "detectedProfile": {
-    "fullName": "Full Name",
+    "fullName": "Candidate full name",
     "email": "Email Address",
     "phone": "Phone Number",
     "linkedin": "LinkedIn profile link or empty string if not found",
     "website": "Personal website or portfolio link or empty string if not found",
     "location": "Location (city, state, country) or empty string if not found",
-    "summary": "Professional Summary or Profile section or empty string if not found",
+    "summary": "The extracted summary text or empty string if not found",
     "workExperience": [
       {
         "id": "exp-1",
-        "role": "Job Title / Role",
-        "company": "Company Name",
-        "duration": "Duration (e.g., June 2021 - Present)",
-        "description": ["Action-oriented bullet points from the resume describing the work"]
+        "role": "The job title",
+        "company": "The employer company",
+        "duration": "Employment duration",
+        "description": ["Action-oriented bullet points extracted exactly as they appear"]
       }
     ],
     "education": [
       {
         "id": "edu-1",
-        "degree": "Degree / Major",
-        "school": "School / University Name",
-        "duration": "Duration (e.g., 2017 - 2021)",
+        "degree": "The academic degree",
+        "school": "The educational institution",
+        "duration": "Study duration",
         "gpa": "GPA if mentioned, or empty string"
       }
     ],
     "projects": [
       {
         "id": "proj-1",
-        "name": "Project Name",
-        "description": ["Action-oriented bullet points describing the project work and technologies used"],
+        "name": "The project name",
+        "description": ["Action-oriented bullet points extracted exactly as they appear"],
         "duration": "Project duration if mentioned, or empty string"
       }
     ],

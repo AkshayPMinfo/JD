@@ -129,11 +129,15 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
           {/* Left Column - Summary & Experience */}
           <div className="md:col-span-8 space-y-6">
             {summary && (
-              <div className={getHighlightStyle("summary", summary)}>
+              <div>
                 <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-2 font-sans">
                   Professional Summary
                 </h2>
-                <p className="text-xs text-neutral-700 leading-relaxed font-serif">{summary}</p>
+                <p className="text-xs text-neutral-700 leading-relaxed font-serif">
+                  {originalResume && originalResume.summary 
+                    ? renderInlineDiff(summary, [originalResume.summary])
+                    : summary}
+                </p>
               </div>
             )}
 

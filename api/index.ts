@@ -3,7 +3,7 @@ import path from "path";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import mammoth from "mammoth";
-import pdf from "pdf-parse";
+import { getDocumentProxy, extractText } from "unpdf";
 
 dotenv.config();
 dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });
@@ -298,7 +298,8 @@ app.post("/api/simplify-jd", async (req, res) => {
       if (isPdf) {
         try {
           const buffer = Buffer.from(fileBase64, "base64");
-          const parsed = await pdf(buffer);
+          const pdfData = await getDocumentProxy(new Uint8Array(buffer));
+          const parsed = await extractText(pdfData, { mergePages: true });
           jdText = parsed.text || "";
         } catch (err: any) {
           console.error("PDF text extraction failed for JD:", err);
@@ -761,7 +762,8 @@ app.post("/api/analyze-uploaded-resume", async (req, res) => {
     const extractText = async () => {
       const buffer = Buffer.from(base64Data, "base64");
       if (detectedFileType === "pdf") {
-        const parsed = await pdf(buffer);
+        const pdfData = await getDocumentProxy(new Uint8Array(buffer));
+        const parsed = await extractText(pdfData, { mergePages: true });
         return parsed.text || "";
       }
       const extractResult = await mammoth.extractRawText({ buffer });

@@ -759,7 +759,7 @@ app.post("/api/analyze-uploaded-resume", async (req, res) => {
       return;
     }
 
-    const extractText = async () => {
+    const performTextExtraction = async () => {
       const buffer = Buffer.from(base64Data, "base64");
       if (detectedFileType === "pdf") {
         const pdfData = await getDocumentProxy(new Uint8Array(buffer));
@@ -773,7 +773,7 @@ app.post("/api/analyze-uploaded-resume", async (req, res) => {
     let extractedText = "";
     try {
       extractedText = await Promise.race([
-        extractText(),
+        performTextExtraction(),
         new Promise<string>((_, reject) => setTimeout(() => reject(new Error("Resume validation timed out.")), 9000))
       ]);
       validationLog(fileName || "unknown-file", "Document Parsed", {

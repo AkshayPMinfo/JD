@@ -3155,17 +3155,6 @@ WORK EXPERIENCE
               <a className="text-xl font-bold tracking-tighter text-black cursor-pointer" href="#" onClick={(e) => e.preventDefault()}>
                 Auralis <span className="text-xs font-normal tracking-tight px-2 py-0.5 rounded-full border border-neutral-300 text-neutral-700 bg-neutral-100 whitespace-nowrap">Resumes</span>
               </a>
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={handleGuestAccess}
-                  disabled={isAuthSubmitting}
-                  className={`bg-neutral-950 text-white font-medium text-xs px-5 py-2.5 rounded-full hover:opacity-90 active:scale-95 duration-200 ${
-                    isAuthSubmitting ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
-                  }`}
-                >
-                  Continue as Guest
-                </button>
-              </div>
             </div>
           </nav>
 
@@ -5498,10 +5487,12 @@ WORK EXPERIENCE
         </div>
       )}
 
-      {/* Standalone hidden print preview container that activates only for window.print() */}
-      <div className="hidden print:block print-container">
-        <ResumePreview resume={printResume || activeResume} templateStyle={selectedStyle} id="resume-preview-sheet-print" />
-      </div>
+      {/* Standalone hidden print preview container — only rendered after authentication to prevent demo data leaking on login page */}
+      {currentStep !== "auth" && (
+        <div className="hidden print:block print-container">
+          <ResumePreview resume={printResume || activeResume} templateStyle={selectedStyle} id="resume-preview-sheet-print" />
+        </div>
+      )}
 
       {showNoResumeAlert && (
         <div 

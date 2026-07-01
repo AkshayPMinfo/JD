@@ -115,6 +115,14 @@ export default function App() {
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [resetCooldownSeconds, setResetCooldownSeconds] = useState(0);
 
+  useEffect(() => {
+    if (isSignUp) {
+      setAuthEmail("");
+      setAuthPassword("");
+      setAuthConfirmPassword("");
+    }
+  }, [isSignUp]);
+
   // Resume Setup
   const [hasResume, setHasResume] = useState<boolean>(() => {
     return localStorage.getItem("jd_resume_customizer_has_resume") === "true";
@@ -812,9 +820,8 @@ export default function App() {
       });
       await loadPersistedSupabaseData(session);
       setCurrentUser(userObj);
-      // New accounts (sign-up) have no resumes yet — send them to Resume Setup.
-      // Returning accounts (sign-in) already have persisted data — send to dashboard.
-      setCurrentStep(isSignUp ? "resume" : "dashboard");
+      // Always land on Resume Setup first after login
+      setCurrentStep("resume");
       setAuthMessage(null);
       showNotification(isSignUp ? "Account created successfully." : `Welcome, ${name}! Your resume dashboard is ready.`, "success");
     } catch (error: any) {
@@ -3221,7 +3228,7 @@ WORK EXPERIENCE
                     <div className="relative flex py-1 items-center">
                       <div className="flex-grow border-t border-neutral-300"></div>
                       <span className="flex-shrink mx-4 text-neutral-500 text-[10px] uppercase font-mono font-bold tracking-widest">
-                        {isResetPassword ? "reset password" : isForgotPassword ? "forgot password" : isSignUp ? "create account" : "sign in"}
+                        OR
                       </span>
                       <div className="flex-grow border-t border-neutral-300"></div>
                     </div>
@@ -4318,7 +4325,7 @@ WORK EXPERIENCE
                         </div>
                         <h3 className="text-xl font-black tracking-tight text-black uppercase font-mono">No Resumes Setup</h3>
                         <p className="text-sm text-neutral-650 mt-3 max-w-sm leading-relaxed font-semibold">
-                          Please click on 'Create New' to upload or create your resume. Once your resume is ready, you'll unlock all Auralis features.
+                          Click on the 'Create New' button to upload your resume.
                         </p>
                       </div>
                     </div>

@@ -5,8 +5,8 @@ import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import mammoth from "mammoth";
 import { createRequire } from "module";
-const require = createRequire(import.meta.url);
-const pdf = require("pdf-parse");
+const customRequire = typeof require !== "undefined" ? require : createRequire(import.meta.url);
+const pdf = customRequire("pdf-parse");
 
 dotenv.config();
 dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });

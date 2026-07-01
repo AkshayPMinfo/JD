@@ -176,10 +176,14 @@ export const supabaseAuth = {
 
   async sendPasswordReset(email: string, redirectTo: string): Promise<SupabaseDiagnosticResponse> {
     assertSupabaseConfigured();
-    const response = await fetch(`${SUPABASE_URL}/auth/v1/recover?redirect_to=${encodeURIComponent(redirectTo)}`, {
+    const response = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
       method: "POST",
       headers: authHeaders(),
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({
+        email,
+        redirectTo,
+        redirect_to: redirectTo,
+      }),
     }).catch(() => {
       console.error("Supabase Password Reset Network Failure", {
         email,

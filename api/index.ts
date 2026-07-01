@@ -265,19 +265,122 @@ Format your response strictly as JSON matching this schema:
       };
     }
   } catch (error: any) {
-    console.error("Gemini resume parsing failed:", error);
+    // Gemini API failed (timeout, overload, 503, etc.).
+    // Fall back to heuristic validation so a genuine resume is not rejected
+    // just because the AI service was temporarily unavailable.
+    console.error("Gemini resume parsing failed, attempting heuristic fallback:", error);
+    return heuristicResumeValidation(cleanText, fileName, error);
+  }
+
+  // Should not reach here, but guard against empty response
+  return heuristicResumeValidation(cleanText, fileName, new Error("Empty response from Gemini"));
+}
+
+/**
+ * Heuristic fallback for when Gemini is unavailable.
+ * Accepts a document as a resume if the extracted text contains at least a name-like
+ * pattern and one section (experience, education, or skills). Parses what it can
+ * from the raw text so the upload still succeeds.
+ */
+function heuristicResumeValidation(cleanText: string, fileName: string, originalError: any) {
+  const text = cleanText.toLowerCase();
+
+  // Hard-reject obvious non-resume documents
+  if (/\b(invoice|receipt|bank statement|transaction history|amount due|payment due|vendor invoice|balance sheet)\b/i.test(cleanText)) {
     return {
       isResume: false,
       confidenceScore: 0,
-      reason: `Resume parsing failed: ${error.message || String(error)}`,
+      reason: "Document appears to be a financial record, not a resume.",
       detectedProfile: null,
       indicators: []
     };
   }
+
+  // Count resume section indicators
+  const sectionMatches = [
+    /\b(education|university|college|school|degree|bachelor|master|phd|gpa)\b/i.test(cleanText),
+    /\b(experience|internship|employment|worked at|working at|professional experience)\b/i.test(cleanText),
+    /\b(skills|technical skills|technologies|tools|programming|competencies)\b/i.test(cleanText),
+    /\b(projects|portfolio|repositories|github)\b/i.test(cleanText),
+    /\b(certifications?|licenses?|awards?|achievements?)\b/i.test(cleanText),
+    /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(cleanText),
+    /\+?\(?[0-9]{1,4}\)?[-.\s]?[0-9]{3,4}[-.\s]?[0-9]{3,4}/.test(cleanText),
+  ].filter(Boolean).length;
+
+  // If fewer than 2 resume indicators, reject
+  if (sectionMatches < 2) {
+    return {
+      isResume: false,
+      confidenceScore: 0,
+      reason: `Gemini API unavailable (${originalError?.message || 'unknown error'}) and document does not appear to be a resume (insufficient section indicators).`,
+      detectedProfile: null,
+      indicators: []
+    };
+  }
+
+  // Extract what we can heuristically
+  const lines = cleanText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  
+  // Best-effort name extraction: first non-empty line that looks like a name (2-4 words, no digits, not a URL)
+  let fullName = fileName.replace(/\.[^/.]+$/, '').replace(/[_-]+/g, ' ').trim();
+  for (const line of lines.slice(0, 5)) {
+    const words = line.split(/\s+/);
+    if (words.length >= 2 && words.length <= 4 && !/[0-9@:/]/.test(line) && line.length < 60) {
+      fullName = line;
+      break;
+    }
+  }
+
+  // Best-effort email extraction
+  const emailMatch = cleanText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+  const email = emailMatch ? emailMatch[0] : '';
+
+  // Best-effort phone extraction
+  const phoneMatch = cleanText.match(/\+?\(?[0-9]{1,4}\)?[-.\s]?[0-9]{3,4}[-.\s]?[0-9]{3,4}[-.\s]?[0-9]{3,4}/);
+  const phone = phoneMatch ? phoneMatch[0] : '';
+
+  // Skills: look for comma-separated lists near skill keywords
+  const skillsMatch = cleanText.match(/(?:skills?|technologies|tools|competencies)[^\n]*\n([^\n]+(?:\n[^\n]+){0,5})/i);
+  const skills: string[] = [];
+  if (skillsMatch) {
+    skillsMatch[1].split(/[,•|·\n]/).map(s => s.trim()).filter(s => s.length > 1 && s.length < 50).forEach(s => skills.push(s));
+  }
+
+  const indicators: string[] = [];
+  if (fullName) indicators.push('name');
+  if (email || phone) indicators.push('contact');
+  if (/\b(education|university|college|school|degree|bachelor|master|phd)\b/i.test(cleanText)) indicators.push('education');
+  if (/\b(experience|internship|employment|worked)\b/i.test(cleanText)) indicators.push('experience');
+  if (skills.length > 0 || /\bskills?\b/i.test(cleanText)) indicators.push('skills');
+
+  console.log(`[Heuristic Resume Validation] Accepted "${fileName}" with ${sectionMatches} section indicators. Gemini error: ${originalError?.message}`);
+
+  return {
+    isResume: true,
+    confidenceScore: 40, // lower confidence since it's heuristic-parsed
+    reason: `Parsed heuristically (Gemini temporarily unavailable: ${originalError?.message || 'unknown'}). Resume sections detected: ${indicators.join(', ')}.`,
+    detectedProfile: {
+      fullName,
+      email,
+      phone,
+      linkedin: '',
+      website: '',
+      location: '',
+      summary: '',
+      workExperience: [],
+      education: [],
+      projects: [],
+      certifications: [],
+      skills,
+      languages: [],
+      achievements: []
+    },
+    indicators
+  };
 }
 
-async function generateContentWithRetry(ai: GoogleGenAI, options: any, maxRetries = 3): Promise<any> {
-  let delay = 1000; // start with 1 second delay
+async function generateContentWithRetry(ai: GoogleGenAI, options: any, maxRetries = 2): Promise<any> {
+  let delay = 500; // start with 500ms to stay within Vercel 60s budget
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       return await ai.models.generateContent(options);
@@ -293,7 +396,7 @@ async function generateContentWithRetry(ai: GoogleGenAI, options: any, maxRetrie
       if (isRetryable && attempt < maxRetries) {
         console.warn(`Gemini API busy (attempt ${attempt}/${maxRetries}). Retrying in ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
-        delay *= 2; // exponential backoff
+        delay *= 2; // exponential backoff: 500ms -> 1000ms
         continue;
       }
       throw error;
@@ -833,17 +936,15 @@ app.post("/api/analyze-uploaded-resume", async (req, res) => {
 
     let extractedText = "";
     try {
-      extractedText = await Promise.race([
-        performTextExtraction(),
-        new Promise<string>((_, reject) => setTimeout(() => reject(new Error("Resume validation timed out.")), 9000))
-      ]);
+      // No hard timeout on extraction — large PDFs can take a few seconds and we have 60s total budget
+      extractedText = await performTextExtraction();
       validationLog(fileName || "unknown-file", "Document Parsed", {
         detectedFileType,
         charactersExtracted: normalizeWhitespace(extractedText).length
       });
     } catch (err: any) {
       console.error(`${detectedFileType.toUpperCase()} text extraction failed:`, err);
-      const reason = "This file could not be read for resume validation.";
+      const reason = "This file could not be read. It may be password-protected, corrupted, or an unsupported PDF variant.";
       validationLog(fileName || "unknown-file", "Validation Failed", { reason });
       res.json({
         isResume: false,

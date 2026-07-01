@@ -812,7 +812,9 @@ export default function App() {
       });
       await loadPersistedSupabaseData(session);
       setCurrentUser(userObj);
-      setCurrentStep("dashboard");
+      // New accounts (sign-up) have no resumes yet — send them to Resume Setup.
+      // Returning accounts (sign-in) already have persisted data — send to dashboard.
+      setCurrentStep(isSignUp ? "resume" : "dashboard");
       setAuthMessage(null);
       showNotification(isSignUp ? "Account created successfully." : `Welcome, ${name}! Your resume dashboard is ready.`, "success");
     } catch (error: any) {
@@ -1899,7 +1901,7 @@ WORK EXPERIENCE
       });
       const userObj = { email, name, isGuest: true };
       setCurrentUser(userObj);
-      setCurrentStep("dashboard");
+      setCurrentStep("resume");
       showNotification("Continuing as Guest.", "success");
     } catch (error: any) {
       showNotification(error.message || "Guest login failed. Please try again.", "error");
@@ -3391,6 +3393,7 @@ WORK EXPERIENCE
                             } else {
                               setIsSignUp(!isSignUp);
                             }
+                            setAuthEmail("");
                             setAuthPassword("");
                             setAuthConfirmPassword("");
                             setAuthMessage(null);

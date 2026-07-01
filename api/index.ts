@@ -277,42 +277,87 @@ Format your response strictly as JSON matching this schema:
 }
 
 /**
- * Heuristic fallback for when Gemini is unavailable.
- * Accepts a document as a resume if the extracted text contains at least a name-like
- * pattern and one section (experience, education, or skills). Parses what it can
- * from the raw text so the upload still succeeds.
+ * Strict rules-based check to determine if a document is actually a resume.
+ * Ensures a document is a resume, has contact details, has standard sections,
+ * and is not an invoice, recipe, paper, cover letter, or presentation.
  */
-function heuristicResumeValidation(cleanText: string, fileName: string, originalError: any) {
-  const text = cleanText.toLowerCase();
-
-  // Hard-reject obvious non-resume documents
-  if (/\b(invoice|receipt|bank statement|transaction history|amount due|payment due|vendor invoice|balance sheet)\b/i.test(cleanText)) {
-    return {
-      isResume: false,
-      confidenceScore: 0,
-      reason: "Document appears to be a financial record, not a resume.",
-      detectedProfile: null,
-      indicators: []
-    };
+function checkTextAgainstStrictResumeCriteria(text: string): { isResume: boolean; reason: string } {
+  const cleanText = text.toLowerCase();
+  
+  // 1. Minimum and Maximum word count check.
+  const words = cleanText.split(/\s+/).filter(Boolean);
+  if (words.length < 50) {
+    return { isResume: false, reason: "The document is too short to be a valid resume." };
+  }
+  if (words.length > 3000) {
+    return { isResume: false, reason: "The document is too long to be a valid resume (typically resumes are under 3,000 words)." };
   }
 
-  // Count resume section indicators
-  const sectionMatches = [
-    /\b(education|university|college|school|degree|bachelor|master|phd|gpa)\b/i.test(cleanText),
-    /\b(experience|internship|employment|worked at|working at|professional experience)\b/i.test(cleanText),
-    /\b(skills|technical skills|technologies|tools|programming|competencies)\b/i.test(cleanText),
-    /\b(projects|portfolio|repositories|github)\b/i.test(cleanText),
-    /\b(certifications?|licenses?|awards?|achievements?)\b/i.test(cleanText),
-    /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(cleanText),
-    /\+?\(?[0-9]{1,4}\)?[-.\s]?[0-9]{3,4}[-.\s]?[0-9]{3,4}/.test(cleanText),
-  ].filter(Boolean).length;
+  // 2. Strong non-resume markers.
+  // Financial/Invoices/Receipts
+  if (/\b(invoice|receipt|bank statement|transaction history|amount due|payment due|billing statement|balance sheet|payment receipt)\b/i.test(cleanText)) {
+    return { isResume: false, reason: "This document appears to be a financial record or invoice, not a resume." };
+  }
+  
+  // Academic research papers
+  if (/\b(abstract|references|bibliography|literature review|concluding remarks|fig\.\s*\d+|table\s*\d+)\b/i.test(cleanText) && /\b(introduction|methodology|discussion|results)\b/i.test(cleanText)) {
+    return { isResume: false, reason: "This document appears to be an academic paper or journal article, not a resume." };
+  }
 
-  // If fewer than 2 resume indicators, reject
-  if (sectionMatches < 2) {
+  // Presentations / Slides / Meeting notes
+  if (/\b(agenda|meeting minutes|slide \d+|presentation agenda|kickoff agenda|notes from meeting)\b/i.test(cleanText)) {
+    return { isResume: false, reason: "This document appears to be a presentation deck, agenda, or meeting notes, not a resume." };
+  }
+
+  // Marketing/Brochures/Articles/Recipes
+  if (/\b(ingredients|instructions|recipe|servings|prep time|cook time|tablespoon|teaspoon)\b/i.test(cleanText)) {
+    return { isResume: false, reason: "This document appears to be a food recipe, not a resume." };
+  }
+
+  // Cover Letters (specifically standalone letters without resume sections)
+  const isCoverLetterHeader = /\b(dear hiring manager|to whom it may concern|dear recruiter|dear mr\.|dear ms\.)\b/i.test(cleanText);
+  const hasSignOff = /\b(sincerely|best regards|respectfully yours|warm regards)\b/i.test(cleanText);
+  
+  // 3. Contact Info Presence.
+  const hasEmail = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(cleanText);
+  const hasPhone = /\+?\(?[0-9]{1,4}\)?[-.\s]?[0-9]{3,4}[-.\s]?[0-9]{3,4}[-.\s]?[0-9]{3,4}/.test(cleanText) || /\b\d{3}[-.\s]??\d{3}[-.\s]??\d{4}\b/.test(cleanText);
+  
+  if (!hasEmail && !hasPhone) {
+    return { isResume: false, reason: "Resumes must contain contact information (email address or phone number)." };
+  }
+
+  // 4. Typical Section Keywords.
+  const hasExperience = /\b(experience|work history|employment|career|professional experience|internship|intern|worked as)\b/i.test(cleanText);
+  const hasEducation = /\b(education|academic|university|college|school|degree|bachelor|master|phd|diploma)\b/i.test(cleanText);
+  const hasSkills = /\b(skills|technical skills|technologies|programming|languages|expertise|competencies|tools)\b/i.test(cleanText);
+  const hasProjects = /\b(projects|portfolio|personal projects|academic projects|repositories|github)\b/i.test(cleanText);
+  const hasCertifications = /\b(certifications?|licenses?|credentials?)\b/i.test(cleanText);
+
+  // A valid resume must match at least 2 of these key sections: Experience, Education, Skills, Projects, Certifications.
+  const sectionScore = [hasExperience, hasEducation, hasSkills, hasProjects, hasCertifications].filter(Boolean).length;
+  if (sectionScore < 2) {
+    return { isResume: false, reason: "This document does not contain typical resume sections (such as Experience, Education, or Skills)." };
+  }
+
+  // If it has cover letter markers but NO experience section, it's just a cover letter.
+  if (isCoverLetterHeader && hasSignOff && !hasExperience) {
+    return { isResume: false, reason: "This document appears to be a Cover Letter, not a resume." };
+  }
+
+  return { isResume: true, reason: "" };
+}
+
+/**
+ * Heuristic fallback for when Gemini is unavailable.
+ * Uses strict rules-based validation to accept or reject the resume.
+ */
+function heuristicResumeValidation(cleanText: string, fileName: string, originalError: any) {
+  const strictValidation = checkTextAgainstStrictResumeCriteria(cleanText);
+  if (!strictValidation.isResume) {
     return {
       isResume: false,
       confidenceScore: 0,
-      reason: `Gemini API unavailable (${originalError?.message || 'unknown error'}) and document does not appear to be a resume (insufficient section indicators).`,
+      reason: `Gemini API unavailable (${originalError?.message || 'unknown error'}) and document validation failed: ${strictValidation.reason}`,
       detectedProfile: null,
       indicators: []
     };
@@ -477,7 +522,7 @@ function heuristicResumeValidation(cleanText: string, fileName: string, original
   if (education.length > 0) indicators.push('education');
   if (skills.length > 0) indicators.push('skills');
 
-  console.log(`[Heuristic Resume Validation] Accepted "${fileName}" with ${sectionMatches} section indicators. Gemini error: ${originalError?.message}`);
+  console.log(`[Heuristic Resume Validation] Accepted "${fileName}" with sections: ${indicators.join(', ')}. Gemini error: ${originalError?.message}`);
 
   return {
     isResume: true,
@@ -1082,6 +1127,17 @@ app.post("/api/analyze-uploaded-resume", async (req, res) => {
     }
 
     const validationResult = await parseResumeWithGemini(extractedText, fileName);
+    
+    // Double-guard: enforce strict rules-based validation on the extracted text.
+    const strictValidation = checkTextAgainstStrictResumeCriteria(extractedText);
+    if (validationResult.isResume && !strictValidation.isResume) {
+      validationResult.isResume = false;
+      validationResult.reason = strictValidation.reason;
+      validationResult.confidenceScore = 0;
+      validationResult.detectedProfile = null;
+      validationResult.indicators = [];
+    }
+
     validationLog(fileName || "unknown-file", "Sections Found", {
       indicators: validationResult.indicators,
       reason: validationResult.reason

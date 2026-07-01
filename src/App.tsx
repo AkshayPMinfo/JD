@@ -6332,6 +6332,22 @@ WORK EXPERIENCE
                         ))}
                       </div>
 
+                      {/* Mockup Legend */}
+                      <div className="flex items-center justify-center gap-6 p-4 bg-gray-50 border border-gray-200 rounded-xl text-xs font-sans font-semibold text-gray-600 mb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 bg-[#FEF08A] rounded-sm"></div>
+                          <span>Modified / Improved</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 bg-[#BAE6FD] rounded-sm"></div>
+                          <span>Added / New</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 bg-white border border-gray-300 rounded-sm"></div>
+                          <span>Unchanged</span>
+                        </div>
+                      </div>
+
                       <div className="border-2 border-black rounded-2xl p-4 bg-neutral-50">
                         <p className="text-xs font-black uppercase tracking-wider font-mono mb-2">Integrity Check</p>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs font-semibold">

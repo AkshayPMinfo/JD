@@ -1,6 +1,8 @@
 import React from "react";
 import { ResumeStructure } from "../types";
-import { Mail, Phone, Linkedin, Globe } from "lucide-react";
+import { Mail, Phone, Linkedin, Globe, MapPin } from "lucide-react";
+import { findBestMatch } from "../utils/diffUtils";
+import { diffWords } from "diff";
 
 interface ResumePreviewProps {
   resume: ResumeStructure;
@@ -13,29 +15,71 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
   const { fullName, email, phone, linkedin, website, summary, workExperience, education, skills } = resume;
 
   // Custom highlights helper
+
   const getHighlightStyle = (section: "summary" | "skills" | "experience-bullet" | "project-bullet", value: string): string => {
     if (!originalResume) return "";
-    
     if (section === "summary") {
       return originalResume.summary !== resume.summary ? "bg-yellow-100 dark:bg-yellow-950/45 text-yellow-900 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-800 px-1.5 py-0.5 rounded print:bg-transparent print:text-black print:border-none print:p-0" : "";
     }
-    
     if (section === "skills") {
       const originalSkills = (originalResume.skills || []).map(s => s.toLowerCase());
       return !originalSkills.includes(value.toLowerCase()) ? "bg-blue-100 dark:bg-blue-950/45 text-blue-900 dark:text-blue-300 border border-blue-300 dark:border-blue-800 px-2 py-0.5 rounded print:bg-transparent print:text-black print:border-none print:p-0" : "";
     }
-    
-    if (section === "experience-bullet") {
-      const allOriginalBullets = (originalResume.workExperience || []).flatMap(exp => exp.description || []).map(b => b.trim().toLowerCase());
+    if (section === "experience-bullet" || section === "project-bullet") {
+      const allOriginalBullets = (originalResume.workExperience || []).flatMap(exp => exp.description || []).concat((originalResume.projects || []).flatMap(proj => proj.description || [])).map(b => b.trim().toLowerCase());
       return !allOriginalBullets.includes(value.trim().toLowerCase()) ? "bg-yellow-100 dark:bg-yellow-950/45 text-yellow-900 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-800 px-1.5 py-0.5 rounded print:bg-transparent print:text-black print:border-none print:p-0 block" : "";
     }
-    
-    if (section === "project-bullet") {
-      const allOriginalBullets = (originalResume.projects || []).flatMap(proj => proj.description || []).map(b => b.trim().toLowerCase());
-      return !allOriginalBullets.includes(value.trim().toLowerCase()) ? "bg-yellow-100 dark:bg-yellow-950/45 text-yellow-900 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-800 px-1.5 py-0.5 rounded print:bg-transparent print:text-black print:border-none print:p-0 block" : "";
-    }
-    
     return "";
+  };
+
+  const getSkillHighlight = (skill: string): string => {
+
+    if (!originalResume) return "";
+    const originalSkills = (originalResume.skills || []).map(s => s.toLowerCase());
+    const lowerSkill = skill.toLowerCase();
+    
+    if (originalSkills.includes(lowerSkill)) return ""; // Unchanged
+
+    let maxSim = 0;
+    for (const os of originalSkills) {
+      let match = 0;
+      for (let i = 0; i < Math.min(os.length, lowerSkill.length); i++) {
+        if (os[i] === lowerSkill[i]) match++;
+      }
+      const sim = match / Math.max(os.length, lowerSkill.length);
+      if (sim > maxSim) maxSim = sim;
+    }
+
+    if (maxSim > 0.5) return "bg-[#FEF08A] px-1.5 py-0.5 rounded"; // Modified
+    return "bg-[#BAE6FD] px-1.5 py-0.5 rounded"; // New
+  };
+
+  const renderInlineDiff = (value: string, originalCandidates: string[]) => {
+    if (!originalResume || !originalCandidates || originalCandidates.length === 0) {
+      return <span className="bg-[#BAE6FD] print:bg-transparent">{value}</span>;
+    }
+
+    const { match, similarity } = findBestMatch(value, originalCandidates);
+    if (similarity < 0.2 || !match) {
+      return <span className="bg-[#BAE6FD] print:bg-transparent">{value}</span>;
+    }
+
+    const changes = diffWords(match, value);
+    return (
+      <>
+        {changes.map((part, index) => {
+          if (part.removed) return null;
+          if (part.added) {
+            return (
+              <span key={index} className="bg-[#FEF08A] print:bg-transparent">
+                {part.value}
+              </span>
+            );
+          }
+          return <span key={index}>{part.value}</span>;
+        })}
+      </>
+    );
   };
 
   // Render different styles based on template
@@ -52,11 +96,31 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
               {fullName || "Your Name"}
             </h1>
           </div>
-          <div className="text-right text-xs text-black font-sans space-y-1 font-bold">
-            {phone && <p>{phone}</p>}
-            {email && <p className="break-all max-w-[240px]">{email}</p>}
-            {linkedin && <p>{linkedin.replace(/https?:\/\/(www\.)?/, "")}</p>}
-            {website && <p>{website.replace(/https?:\/\/(www\.)?/, "")}</p>}
+          <div className="text-left text-xs text-black font-sans space-y-1.5 font-bold">
+            {phone && (
+              <div className="flex items-center gap-2 justify-end">
+                <Phone size={14} className="text-black shrink-0" />
+                <span>{phone}</span>
+              </div>
+            )}
+            {email && (
+              <div className="flex items-center gap-2 justify-end">
+                <Mail size={14} className="text-black shrink-0" />
+                <span className="break-all">{email}</span>
+              </div>
+            )}
+            {linkedin && (
+              <div className="flex items-center gap-2 justify-end">
+                <Linkedin size={14} className="text-black shrink-0" />
+                <span>{linkedin.replace(/https?:\/\/(www\.)?/, "")}</span>
+              </div>
+            )}
+            {website && (
+              <div className="flex items-center gap-2 justify-end">
+                <Globe size={14} className="text-black shrink-0" />
+                <span>{website.replace(/https?:\/\/(www\.)?/, "")}</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -88,11 +152,16 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                       </h3>
                       <p className="text-[11px] text-neutral-500 font-semibold font-sans mt-0.5">{exp.duration}</p>
                       <ul className="list-disc pl-5 mt-2 space-y-1 text-xs text-neutral-700 leading-relaxed font-serif">
-                        {exp.description.map((bullet, idx) => (
-                          <li key={idx} className={getHighlightStyle("experience-bullet", bullet)}>
-                            <span className="text-neutral-700">{bullet}</span>
-                          </li>
-                        ))}
+                        {exp.description.map((bullet, idx) => {
+                          const originalCandidates = originalResume?.workExperience?.find(e => e.id === exp.id)?.description || [];
+                          return (
+                            <li key={idx} className="print:bg-transparent">
+                              <span className="text-neutral-700 leading-relaxed">
+                                {renderInlineDiff(bullet, originalCandidates)}
+                              </span>
+                            </li>
+                          );
+                        })}
                       </ul>
                     </div>
                   ))}
@@ -110,11 +179,16 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                     <div key={proj.id} className="font-serif">
                       <h3 className="font-bold text-black text-sm">{proj.name}</h3>
                       <ul className="list-disc pl-5 mt-1.5 space-y-1 text-xs text-neutral-700 leading-relaxed font-serif">
-                        {proj.description.map((bullet, idx) => (
-                          <li key={idx} className={getHighlightStyle("project-bullet", bullet)}>
-                            <span className="text-neutral-700">{bullet}</span>
-                          </li>
-                        ))}
+                        {proj.description.map((bullet, idx) => {
+                          const originalCandidates = originalResume?.projects?.find(p => p.id === proj.id)?.description || [];
+                          return (
+                            <li key={idx} className="print:bg-transparent">
+                              <span className="text-neutral-700 leading-relaxed">
+                                {renderInlineDiff(bullet, originalCandidates)}
+                              </span>
+                            </li>
+                          );
+                        })}
                       </ul>
                     </div>
                   ))}
@@ -162,9 +236,13 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                 <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
                   Skills
                 </h2>
-                <ul className="list-none space-y-2 text-xs text-neutral-700 font-sans font-semibold">
+                <ul className="list-none space-y-2.5 text-xs text-neutral-700 font-sans font-semibold">
                   {skills.map((skill, index) => (
-                    <li key={index} className={getHighlightStyle("skills", skill)}>{skill}</li>
+                    <li key={index}>
+                      <span className={getSkillHighlight(skill) || ""}>
+                        {skill}
+                      </span>
+                    </li>
                   ))}
                 </ul>
               </div>

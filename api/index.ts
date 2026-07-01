@@ -159,9 +159,10 @@ Format your response strictly as JSON matching this schema:
         "duration": "Project duration if mentioned, or empty string"
       }
     ],
-    "certifications": ["List of certification/license/award names, or empty array if none"],
+    "certifications": ["List of certification/license names, or empty array if none"],
     "skills": ["List of technical/soft skills mentioned in the resume"],
-    "languages": ["List of languages mentioned in the resume, or empty array if none"]
+    "languages": ["List of languages mentioned in the resume, or empty array if none"],
+    "achievements": ["List of key achievements, honors, or awards mentioned in the resume, or empty array if none"]
   }
 }
 `;
@@ -230,7 +231,8 @@ Format your response strictly as JSON matching this schema:
                 },
                 certifications: { type: Type.ARRAY, items: { type: Type.STRING } },
                 skills: { type: Type.ARRAY, items: { type: Type.STRING } },
-                languages: { type: Type.ARRAY, items: { type: Type.STRING } }
+                languages: { type: Type.ARRAY, items: { type: Type.STRING } },
+                achievements: { type: Type.ARRAY, items: { type: Type.STRING } }
               },
               required: ["fullName", "email", "phone", "summary", "workExperience", "education", "skills", "projects", "certifications"]
             }
@@ -546,9 +548,9 @@ Instructions:
 5. Keep the certifications section (if any) factual and intact. Do not remove or alter actual certifications.
 6. Suggest adding missing candidate skills to Resume.skills that directly map to the JD's requirements, provided they make sense for a graduate. Do NOT simply stuff all JD keywords into the Skills section. Add keywords naturally where relevant across Professional Summary, Experience bullet points, and Projects descriptions.
 7. Provide a list of "suggestions" with clear reasons why they were made and how they improve the resume.
-8. IMPORTANT - DATA INTEGRITY: You MUST process and include ALL work experiences, projects, education history, certifications, and skills from the original resume in the output tailoredResume. Do not truncate, omit, or ignore any jobs, projects, certifications, or education entries. If there are 3 work experiences, you must return all 3. If there are projects, return them all. If certifications are present, return them all. If the original resume has no projects or certifications, return an empty array [] for these fields.
+8. IMPORTANT - DATA INTEGRITY: You MUST process and include ALL work experiences, projects, education history, certifications, languages, achievements, and skills from the original resume in the output tailoredResume. Do not truncate, omit, or ignore any jobs, projects, certifications, languages, achievements, or education entries. If there are 3 work experiences, you must return all 3. If there are projects, return them all. If certifications are present, return them all. If the original resume has no projects or certifications, return an empty array [] for these fields.
 9. IMPORTANT - NO PLACEHOLDERS: Do NOT output placeholders like "Present", "Unknown Institution", "Unknown Degree", "Undefined", or null fields. If a date, school name, or degree is already defined, keep it exactly as-is. Do not invent details.
-10. DATA PRESERVATION: Do NOT replace the user's actual resume content, companies, titles, degree names, or schools with generic placeholder names (e.g. "Professional @ Various Companies", "Academic Portfolio", "High School Diploma / Degree"). You must preserve the candidate's original factual details exactly, and only rewrite description bullet points and professional summaries to customize and improve them.
+10. STRICT DATA PRESERVATION: You MUST preserve the candidate's original factual details exactly (including names, locations, contact info, companies, job titles, dates, schools, degrees, GPAs, project names, certification names, languages, achievements, and layout/ordering). Do NOT replace them with generic or placeholder content (e.g. "Professional @ Various Companies", "Academic Portfolio", "High School Diploma / Degree"). You may ONLY customize/improve the experience/project description bullet points, rewrite the professional summary narrative, and append relevant matching skills to the skills array. All other fields must remain identical.
 
 Format your response strictly as JSON matching this schema:
 {
@@ -600,7 +602,8 @@ Format your response strictly as JSON matching this schema:
     ],
     "certifications": ["List of certification names"],
     "skills": ["Updated list of skills containing original skills + high-impact JD matches"],
-    "languages": ["List of languages from original"]
+    "languages": ["List of languages from original"],
+    "achievements": ["List of achievements from original"]
   }
 }
 `;
@@ -696,6 +699,10 @@ Format your response strictly as JSON matching this schema:
                   items: { type: Type.STRING }
                 },
                 languages: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+                },
+                achievements: {
                   type: Type.ARRAY,
                   items: { type: Type.STRING }
                 }

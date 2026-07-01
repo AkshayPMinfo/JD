@@ -1339,9 +1339,10 @@ export default function App() {
       };
     });
 
-    // 5. Preserve certifications and languages exactly.
+    // 5. Preserve certifications, languages, and achievements exactly.
     sanitized.certifications = original.certifications || [];
     sanitized.languages = original.languages || [];
+    sanitized.achievements = original.achievements || [];
 
     return sanitized;
   };
@@ -2201,7 +2202,8 @@ WORK EXPERIENCE
           workExperience: mappedExperience,
           education: mappedEducation,
           projects: mappedProjects,
-          certifications: dp.certifications || []
+          certifications: dp.certifications || [],
+          achievements: dp.achievements || []
         };
 
         const newId = `resume-${Date.now()}`;
@@ -3037,6 +3039,10 @@ WORK EXPERIENCE
           if (edu.duration) body += metaLine(edu.duration);
           if (edu.gpa) body += paragraph(`GPA: ${edu.gpa}`);
         });
+      }
+      if (exportResume.achievements?.length) {
+        body += heading("Key Achievements");
+        exportResume.achievements.forEach(ach => { body += bullet(ach); });
       }
       if (exportResume.certifications?.length) {
         body += heading("Certifications");
@@ -6141,10 +6147,15 @@ WORK EXPERIENCE
                   const tailoredResume = tailoredResultResume;
                   const resultVersion = tailoredResultVersion;
                   const insights = getTailoredResultInsights(originalResume, tailoredResume, resultVersion);
+
+                  if (!originalResume || !tailoredResume) return null;
+
+                  const originalEval = calculateRealisticAtsScore(originalResume, tailorAnalysisResult?.simplifiedJdObject || { companyPitch: "", requiredSkills: [], keyResponsibilities: [], candidateExpectations: [], keywordsToTarget: [] });
+                  const tailoredEval = calculateRealisticAtsScore(tailoredResume, tailorAnalysisResult?.simplifiedJdObject || { companyPitch: "", requiredSkills: [], keyResponsibilities: [], candidateExpectations: [], keywordsToTarget: [] });
+
                   const metricCards = [
-                    { label: "ATS Before", value: `${tailorAnalysisResult?.originalAtsScore ?? 0}/100`, color: "text-neutral-800" },
-                    { label: "ATS After", value: `${resultVersion?.atsScore ?? tailoredAtsScore ?? 0}/100`, color: "text-blue-600" },
-                    { label: "Match", value: `${resultVersion?.matchPercentage ?? tailorAnalysisResult?.originalMatchPct ?? 0}%`, color: "text-emerald-600" },
+                    { label: "ATS Score Progression", before: `${originalEval.score}/100`, after: `${tailoredEval.score}/100`, color: "text-blue-600" },
+                    { label: "Keyword Match Progression", before: `${originalEval.matchPercentage}%`, after: `${tailoredEval.matchPercentage}%`, color: "text-emerald-600" },
                   ];
 
                   return (
@@ -6156,30 +6167,29 @@ WORK EXPERIENCE
                         </p>
                       </div>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         {metricCards.map(card => (
                           <div key={card.label} className="bg-white border-2 border-black p-4 rounded-2xl text-center shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
-                            <span className="text-[10px] uppercase font-black tracking-wider text-neutral-555 font-mono">{card.label}</span>
-                            <div className={`text-3xl font-black mt-1 ${card.color}`}>{card.value}</div>
+                            <span className="text-[10px] uppercase font-black tracking-wider text-neutral-500 font-mono">{card.label}</span>
+                            <div className="flex justify-center items-center gap-4 mt-2">
+                              <div className="text-neutral-400 text-sm line-through font-bold">{card.before}</div>
+                              <div className="text-black font-black">➔</div>
+                              <div className={`text-2xl font-black ${card.color}`}>{card.after}</div>
+                            </div>
                           </div>
                         ))}
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div className="border-2 border-blue-300 bg-blue-50/30 rounded-2xl p-4">
-                          <p className="text-[10px] font-black uppercase tracking-wider text-blue-700 font-mono">Skills Added</p>
+                          <p className="text-[10px] font-black uppercase tracking-wider text-blue-700 font-mono">Keywords & Skills Injected</p>
                           <div className="mt-2 flex flex-wrap gap-1.5">
-                            {(insights.skillsAdded.length ? insights.skillsAdded : ["No new skills added"]).slice(0, 10).map(skill => (
-                              <span key={skill} className="px-2 py-1 rounded-lg bg-blue-100 border border-blue-300 text-[10px] font-bold text-blue-900">{skill}</span>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="border-2 border-yellow-300 bg-yellow-50/40 rounded-2xl p-4">
-                          <p className="text-[10px] font-black uppercase tracking-wider text-yellow-800 font-mono">Keywords Added</p>
-                          <div className="mt-2 flex flex-wrap gap-1.5">
-                            {(insights.keywordsAdded.length ? insights.keywordsAdded : tailorAnalysisResult?.matchedKeywords || ["General alignment"]).slice(0, 10).map(keyword => (
-                              <span key={keyword} className="px-2 py-1 rounded-lg bg-yellow-100 border border-yellow-300 text-[10px] font-bold text-yellow-900">{keyword}</span>
-                            ))}
+                            {(() => {
+                              const combined = [...new Set([...insights.skillsAdded, ...insights.keywordsAdded])].filter(Boolean);
+                              return (combined.length ? combined : ["No new keywords/skills injected"]).slice(0, 15).map(item => (
+                                <span key={item} className="px-2 py-1 rounded-lg bg-blue-100 border border-blue-300 text-[10px] font-bold text-blue-900">{item}</span>
+                              ));
+                            })()}
                           </div>
                         </div>
                         <div className="border-2 border-emerald-300 bg-emerald-50/30 rounded-2xl p-4">
@@ -6189,7 +6199,7 @@ WORK EXPERIENCE
                           </ul>
                         </div>
                         <div className="border-2 border-rose-300 bg-rose-50/30 rounded-2xl p-4">
-                          <p className="text-[10px] font-black uppercase tracking-wider text-rose-700 font-mono">Missing Requirements Found</p>
+                          <p className="text-[10px] font-black uppercase tracking-wider text-rose-700 font-mono">Missing Requirements Remaining</p>
                           <ul className="mt-2 list-disc pl-4 text-xs font-bold text-neutral-700 space-y-1">
                             {(insights.missingRequirements || []).filter(req => !String(req).includes("No missing")).slice(0, 5).length > 0
                               ? (insights.missingRequirements || []).filter(req => !String(req).includes("No missing")).slice(0, 5).map(req => <li key={req}>{req}</li>)

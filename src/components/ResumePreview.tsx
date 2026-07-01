@@ -138,6 +138,21 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                 </div>
               </div>
             )}
+
+            {resume.achievements && resume.achievements.length > 0 && (
+              <div className="mt-6">
+                <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
+                  Achievements & Awards
+                </h2>
+                <ul className="list-disc pl-5 space-y-1.5 text-xs text-neutral-700 leading-relaxed font-serif">
+                  {resume.achievements.map((ach, index) => (
+                    <li key={index}>
+                      <span>{ach}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
 
           {/* Right Column - Skills & Languages */}
@@ -199,7 +214,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
             {fullName || "Your Name"}
           </h1>
           <p className="text-xs text-gray-400 mt-1 uppercase tracking-widest">
-            {summary ? "Candidate / Profile Optimized" : "Entry Level Graduate Resume"}
+            {workExperience?.[0]?.role || "Resume Profile"}
           </p>
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs text-gray-400 print:text-gray-700">
             {email && (
@@ -229,7 +244,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
         {summary && (
           <div className="mb-6">
             <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-2 print:text-black">
-              // PROFILE SUMMARY
+              // SUMMARY
             </h2>
             <p className={`text-xs leading-relaxed text-gray-300 print:text-gray-800 ${getHighlightStyle("summary", summary)}`}>{summary}</p>
           </div>
@@ -239,7 +254,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
         {skills && skills.length > 0 && (
           <div className="mb-6">
             <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-2 print:text-black">
-              // CORE STACK
+              // SKILLS
             </h2>
             <div className="flex flex-wrap gap-2">
               {skills.map((skill, index) => (
@@ -359,6 +374,22 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                 <li key={index} className="flex items-start gap-1">
                   <span className="text-green-500 select-none">&#62;</span>
                   <span>{lang}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {resume.achievements && resume.achievements.length > 0 && (
+          <div className="mb-4">
+            <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-3 print:text-black">
+              // ACHIEVEMENTS
+            </h2>
+            <ul className="list-none space-y-1.5 text-xs text-gray-300 print:text-gray-800">
+              {resume.achievements.map((ach, index) => (
+                <li key={index} className="flex items-start gap-1">
+                  <span className="text-green-500 select-none">&#62;</span>
+                  <span>{ach}</span>
                 </li>
               ))}
             </ul>
@@ -536,6 +567,20 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
             </div>
           </div>
         )}
+        {resume.achievements && resume.achievements.length > 0 && (
+          <div className="mb-4">
+            <h2 className="text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-3 print:text-black">
+              Key Achievements
+            </h2>
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {resume.achievements.map((ach, index) => (
+                <span key={index} className="bg-gray-50 text-gray-700 border border-gray-200 px-2.5 py-1 rounded text-xs font-semibold print:bg-gray-100 print:text-black">
+                  {ach}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -681,6 +726,18 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
           </h2>
           <p className="text-xs text-gray-700 leading-relaxed">
             {resume.languages.join(", ")}
+          </p>
+        </div>
+      )}
+
+      {/* Achievements Section */}
+      {resume.achievements && resume.achievements.length > 0 && (
+        <div className="mb-4 font-sans">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-2 border-b border-gray-300 pb-0.5">
+            Key Achievements
+          </h2>
+          <p className="text-xs text-gray-700 leading-relaxed">
+            {resume.achievements.join(", ")}
           </p>
         </div>
       )}

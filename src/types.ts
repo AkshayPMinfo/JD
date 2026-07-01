@@ -39,6 +39,7 @@ export interface ResumeStructure {
   languages?: string[]; // List of languages
   projects?: ResumeProject[];
   certifications?: string[];
+  achievements?: string[];
 }
 
 export interface SimplifiedJD {

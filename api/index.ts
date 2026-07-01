@@ -1,6 +1,5 @@
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import mammoth from "mammoth";
@@ -820,6 +819,7 @@ app.post("/api/analyze-uploaded-resume", async (req, res) => {
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     console.log("Starting server in development mode with Vite HMR middleware...");
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",

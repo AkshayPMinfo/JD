@@ -181,6 +181,10 @@ export default function App() {
         return "auth";
       }
     }
+    const savedStep = localStorage.getItem("jd_resume_customizer_current_step") as "resume" | "dashboard" | null;
+    if (savedStep && (savedStep === "resume" || savedStep === "dashboard")) {
+      return savedStep;
+    }
     const hasRes = localStorage.getItem("jd_resume_customizer_has_resume") === "true";
     return hasRes ? "dashboard" : "resume";
   });
@@ -606,6 +610,9 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.remove("dark");
     localStorage.setItem("jd_resume_customizer_theme", "light");
+    if (currentStep !== "auth") {
+      localStorage.setItem("jd_resume_customizer_current_step", currentStep);
+    }
   }, [currentStep]);
 
   useEffect(() => {
@@ -867,7 +874,7 @@ export default function App() {
       const [resumeRows, tailoredRows] = await Promise.all([
         supabaseData.listResumes(session.accessToken).catch((error) => {
           console.warn("Supabase resume load failed:", error);
-          return [];
+          return null; // null = network/auth failure, distinct from [] (no records)
         }),
         supabaseData.listTailoredResumes(session.accessToken).catch((error) => {
           console.warn("Supabase tailored resume load failed:", error);
@@ -875,16 +882,82 @@ export default function App() {
         }),
       ]);
 
-      const resumes: SavedResume[] = (resumeRows || []).map((row: any) => ({
-        id: row.id,
-        name: row.name,
-        data: row.resume_data,
-        fileBase64: row.file_base64 || undefined,
-        originalFileName: row.original_file_name || undefined,
-        fileType: row.file_type || undefined,
-        extractedText: row.extracted_text || undefined,
-        uploadedAt: row.uploaded_at || row.created_at,
-      }));
+      // resumeRows===null means Supabase call failed. Keep whatever is in localStorage.
+      // resumeRows===[] means Supabase is reachable but user has no records there yet.
+      if (resumeRows !== null) {
+        const supabaseResumes: SavedResume[] = (resumeRows || []).map((row: any) => ({
+          id: row.id,
+          name: row.name,
+          data: row.resume_data,
+          fileBase64: row.file_base64 || undefined,
+          originalFileName: row.original_file_name || undefined,
+          fileType: row.file_type || undefined,
+          extractedText: row.extracted_text || undefined,
+          uploadedAt: row.uploaded_at || row.created_at,
+        }));
+
+        if (supabaseResumes.length > 0) {
+          // Supabase has records — use as authoritative source
+          setSavedUserResumes(supabaseResumes);
+          const nextActiveId = (() => {
+            // Check if activeResumeId (restored from localStorage) still exists in the fetched list
+            const stillExists = supabaseResumes.some(r => r.id === activeResumeId);
+            return stillExists ? activeResumeId : supabaseResumes[0].id;
+          })();
+          setActiveResumeId(nextActiveId);
+          const found = supabaseResumes.find(r => r.id === nextActiveId) || supabaseResumes[0];
+          if (found) {
+            setActiveResume(found.data);
+            setOriginalResume(found.data);
+          }
+          setIsUnlocked(true);
+          sessionStorage.setItem("auralis_platform_unlocked", "true");
+          localStorage.setItem("jd_resume_customizer_has_resume", "true");
+        } else {
+          // Supabase returned 0. Check localStorage before wiping state.
+          const localRaw = localStorage.getItem("jd_resume_customizer_saved_resumes");
+          let localResumes: SavedResume[] = [];
+          try { localResumes = localRaw ? JSON.parse(localRaw) : []; } catch { localResumes = []; }
+
+          if (localResumes.length > 0) {
+            // localStorage has resumes that never synced to Supabase — keep and sync them now
+            console.info("[Persistence] Supabase empty, but localStorage has resumes — keeping and re-syncing to Supabase.");
+            setSavedUserResumes(localResumes);
+            const nextActiveId = (() => {
+              const stillExists = localResumes.some(r => r.id === activeResumeId);
+              return stillExists ? activeResumeId : localResumes[0].id;
+            })();
+            setActiveResumeId(nextActiveId);
+            const found = localResumes.find(r => r.id === nextActiveId) || localResumes[0];
+            if (found) {
+              setActiveResume(found.data);
+              setOriginalResume(found.data);
+            }
+            setIsUnlocked(true);
+            sessionStorage.setItem("auralis_platform_unlocked", "true");
+            localStorage.setItem("jd_resume_customizer_has_resume", "true");
+            // Re-sync each localStorage resume to Supabase
+            localResumes.forEach((resume) => {
+              supabaseData.upsertResume(session.accessToken, {
+                id: resume.id,
+                user_id: session.user.id,
+                name: resume.name,
+                data: resume.data,
+                fileBase64: resume.fileBase64 || resume.pdfBase64,
+                originalFileName: resume.originalFileName,
+                fileType: resume.fileType,
+                extractedText: resume.extractedText,
+                uploadedAt: resume.uploadedAt || new Date().toISOString(),
+              }).catch((err) => console.warn("Supabase re-sync failed:", err));
+            });
+          } else {
+            // Both Supabase and localStorage are empty — truly no resumes
+            setSavedUserResumes([]);
+            localStorage.setItem("jd_resume_customizer_has_resume", "false");
+          }
+        }
+      }
+      // If resumeRows===null (Supabase failed), localStorage-initialized state is preserved
 
       const versions: SavedResumeVersion[] = (tailoredRows || []).map((row: any) => ({
         id: row.id,
@@ -904,24 +977,15 @@ export default function App() {
         diffModified: row.diff_modified || [],
         diffUnchanged: row.diff_unchanged || [],
       }));
-
-      if (resumes.length > 0) {
-        setSavedUserResumes(resumes);
-        setActiveResumeId(resumes[0].id);
-        setActiveResume(resumes[0].data);
-        setOriginalResume(resumes[0].data);
-        setIsUnlocked(true);
-        sessionStorage.setItem("auralis_platform_unlocked", "true");
-        localStorage.setItem("jd_resume_customizer_has_resume", "true");
-      } else {
-        setSavedUserResumes([]);
-        localStorage.setItem("jd_resume_customizer_has_resume", "false");
+      if (versions.length > 0) {
+        setSavedVersions(versions);
       }
-      setSavedVersions(versions);
     } catch (error) {
       console.warn("Supabase data restore failed:", error);
+      // On complete failure, localStorage-initialized state is preserved
     }
   }
+
 
   useEffect(() => {
     if (!currentUser || currentUser.isGuest) return;

@@ -318,7 +318,7 @@ function heuristicResumeValidation(cleanText: string, fileName: string, original
     };
   }
 
-  // Extract what we can heuristically
+  // Extract what we can heuristically using a robust rules-based parser
   const lines = cleanText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
   
   // Best-effort name extraction: first non-empty line that looks like a name (2-4 words, no digits, not a URL)
@@ -339,25 +339,149 @@ function heuristicResumeValidation(cleanText: string, fileName: string, original
   const phoneMatch = cleanText.match(/\+?\(?[0-9]{1,4}\)?[-.\s]?[0-9]{3,4}[-.\s]?[0-9]{3,4}[-.\s]?[0-9]{3,4}/);
   const phone = phoneMatch ? phoneMatch[0] : '';
 
-  // Skills: look for comma-separated lists near skill keywords
-  const skillsMatch = cleanText.match(/(?:skills?|technologies|tools|competencies)[^\n]*\n([^\n]+(?:\n[^\n]+){0,5})/i);
+  // Classify sections and parse lines rules-based
+  let currentSection = 'summary';
+  const workExperience: any[] = [];
+  const education: any[] = [];
+  const projects: any[] = [];
   const skills: string[] = [];
-  if (skillsMatch) {
-    skillsMatch[1].split(/[,•|·\n]/).map(s => s.trim()).filter(s => s.length > 1 && s.length < 50).forEach(s => skills.push(s));
+  const certifications: string[] = [];
+  const languages: string[] = [];
+  const achievements: string[] = [];
+  let summary = '';
+
+  const sectionHeaders = {
+    experience: /\b(experience|work history|employment|career|professional experience)\b/i,
+    education: /\b(education|academic|university|college|school)\b/i,
+    projects: /\b(projects|personal projects|academic projects|key projects)\b/i,
+    skills: /\b(skills|technical skills|technologies|tools|competencies|expertise)\b/i,
+    certifications: /\b(certifications?|licenses?|credentials?)\b/i,
+    languages: /\b(languages)\b/i,
+    achievements: /\b(achievements|awards|honors)\b/i,
+    summary: /\b(summary|objective|profile|about me)\b/i
+  };
+
+  for (const line of lines) {
+    let headerMatched = false;
+    for (const [sec, regex] of Object.entries(sectionHeaders)) {
+      if (line.length < 40 && regex.test(line) && !line.includes(':')) {
+        currentSection = sec;
+        headerMatched = true;
+        break;
+      }
+    }
+    if (headerMatched) continue;
+
+    // Process section line
+    if (currentSection === 'summary') {
+      if (summary.length < 500) {
+        summary += (summary ? ' ' : '') + line;
+      }
+    } else if (currentSection === 'skills') {
+      const parts = line.split(/[,•|·\t]/).map(s => s.trim()).filter(s => s.length > 1 && s.length < 50);
+      skills.push(...parts);
+    } else if (currentSection === 'certifications') {
+      certifications.push(line);
+    } else if (currentSection === 'languages') {
+      languages.push(line);
+    } else if (currentSection === 'achievements') {
+      achievements.push(line);
+    } else if (currentSection === 'experience') {
+      const hasDate = /\b(19|20)\d{2}\b/i.test(line) || /\b(present|current|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\b/i.test(line.toLowerCase());
+      const isBullet = /^[-*•o▪\d+\.]/.test(line);
+      
+      if (hasDate && !isBullet && workExperience.length < 6) {
+        let role = line;
+        let company = 'Company';
+        let duration = '';
+        const dateMatch = line.match(/\b(19|20)\d{2}\s*-\s*(present|\b(19|20)\d{2})\b/i) || line.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s*(19|20)\d{2}/i);
+        if (dateMatch) {
+          duration = dateMatch[0];
+          role = line.replace(duration, '').trim();
+        }
+        workExperience.push({
+          id: `exp-${Date.now()}-${workExperience.length}`,
+          role: role.slice(0, 50),
+          company: company,
+          duration: duration || 'Timeline',
+          description: []
+        });
+      } else if (workExperience.length > 0) {
+        const cleanBullet = line.replace(/^[-*•o▪\d+\.]\s*/, '').trim();
+        workExperience[workExperience.length - 1].description.push(cleanBullet);
+      } else {
+        workExperience.push({
+          id: `exp-${Date.now()}-0`,
+          role: 'Professional Experience',
+          company: 'Company',
+          duration: 'Timeline',
+          description: [line.replace(/^[-*•o▪\d+\.]\s*/, '').trim()]
+        });
+      }
+    } else if (currentSection === 'projects') {
+      const isBullet = /^[-*•o▪\d+\.]/.test(line);
+      if (!isBullet && projects.length < 6) {
+        projects.push({
+          id: `proj-${Date.now()}-${projects.length}`,
+          name: line.slice(0, 50),
+          description: [],
+          duration: ''
+        });
+      } else if (projects.length > 0) {
+        projects[projects.length - 1].description.push(line.replace(/^[-*•o▪\d+\.]\s*/, '').trim());
+      } else {
+        projects.push({
+          id: `proj-${Date.now()}-0`,
+          name: 'Project',
+          description: [line.replace(/^[-*•o▪\d+\.]\s*/, '').trim()],
+          duration: ''
+        });
+      }
+    } else if (currentSection === 'education') {
+      const hasDate = /\b(19|20)\d{2}\b/i.test(line);
+      if (education.length < 4) {
+        let degree = line;
+        let school = 'University / School';
+        let duration = '';
+        let gpa = '';
+        const gpaMatch = line.match(/gpa\s*:\s*\d+(\.\d+)?/i) || line.match(/\b\d\.\d{1,2}\b/);
+        if (gpaMatch) {
+          gpa = gpaMatch[0];
+          degree = degree.replace(gpaMatch[0], '').trim();
+        }
+        education.push({
+          id: `edu-${Date.now()}-${education.length}`,
+          degree: degree.slice(0, 60),
+          school: school,
+          duration: hasDate ? line.match(/\b(19|20)\d{2}\b/g)?.join(' - ') || 'Timeline' : 'Timeline',
+          gpa: gpa
+        });
+      }
+    }
+  }
+
+  if (workExperience.length === 0) {
+    workExperience.push({
+      id: `exp-${Date.now()}-0`,
+      role: 'Candidate Profile',
+      company: 'Experience Record',
+      duration: 'Timeline',
+      description: ['Extracted resume detail and information.']
+    });
   }
 
   const indicators: string[] = [];
   if (fullName) indicators.push('name');
   if (email || phone) indicators.push('contact');
-  if (/\b(education|university|college|school|degree|bachelor|master|phd)\b/i.test(cleanText)) indicators.push('education');
-  if (/\b(experience|internship|employment|worked)\b/i.test(cleanText)) indicators.push('experience');
-  if (skills.length > 0 || /\bskills?\b/i.test(cleanText)) indicators.push('skills');
+  if (workExperience.length > 0) indicators.push('experience');
+  if (education.length > 0) indicators.push('education');
+  if (skills.length > 0) indicators.push('skills');
 
   console.log(`[Heuristic Resume Validation] Accepted "${fileName}" with ${sectionMatches} section indicators. Gemini error: ${originalError?.message}`);
 
   return {
     isResume: true,
-    confidenceScore: 40, // lower confidence since it's heuristic-parsed
+    confidenceScore: 40,
     reason: `Parsed heuristically (Gemini temporarily unavailable: ${originalError?.message || 'unknown'}). Resume sections detected: ${indicators.join(', ')}.`,
     detectedProfile: {
       fullName,
@@ -366,14 +490,14 @@ function heuristicResumeValidation(cleanText: string, fileName: string, original
       linkedin: '',
       website: '',
       location: '',
-      summary: '',
-      workExperience: [],
-      education: [],
-      projects: [],
-      certifications: [],
-      skills,
-      languages: [],
-      achievements: []
+      summary: summary || 'Professional Resume Profile',
+      workExperience,
+      education,
+      projects,
+      certifications,
+      skills: skills.length > 0 ? [...new Set(skills)] : ['Professional Skills'],
+      languages,
+      achievements
     },
     indicators
   };

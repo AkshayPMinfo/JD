@@ -202,7 +202,7 @@ export default function App() {
   const [atsResult, setAtsResult] = useState<ATSCheckResult | null>(null);
 
   // UI Customizations
-  const [selectedStyle, setSelectedStyle] = useState<"classic" | "tech" | "executive" | "two-column">("classic");
+  const [selectedStyle, setSelectedStyle] = useState<"classic" | "tech" | "executive" | "two-column">("two-column");
   const [savedVersions, setSavedVersions] = useState<SavedResumeVersion[]>(() => {
     const saved = localStorage.getItem("jd_resume_customizer_versions");
     try { return saved ? JSON.parse(saved) : []; } catch { return []; }

@@ -60,6 +60,10 @@ import { DEMO_RESUMES, DEMO_JDS } from "./demoData";
 import ResumePreview from "./components/ResumePreview";
 import { supabaseAuth, supabaseData } from "./lib/supabase";
 
+const SUPABASE_SESSION_STORAGE_KEY = "jd_resume_customizer_supabase_session";
+const PASSWORD_MIN_LENGTH = 8;
+const PASSWORD_RESET_COOLDOWN_SECONDS = 60;
+
 export default function App() {
   const onboardingFileInputRef = useRef<HTMLInputElement>(null);
   type AppUser = { email: string; name: string; isGuest?: boolean };
@@ -108,9 +112,6 @@ export default function App() {
   const [authMessage, setAuthMessage] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [resetCooldownSeconds, setResetCooldownSeconds] = useState(0);
-  const SUPABASE_SESSION_STORAGE_KEY = "jd_resume_customizer_supabase_session";
-  const PASSWORD_MIN_LENGTH = 8;
-  const PASSWORD_RESET_COOLDOWN_SECONDS = 60;
 
   // Resume Setup
   const [hasResume, setHasResume] = useState<boolean>(() => {

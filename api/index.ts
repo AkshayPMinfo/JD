@@ -264,29 +264,16 @@ Format your response strictly as JSON matching this schema:
         indicators
       };
     }
-  } catch (error) {
+  } catch (error: any) {
     console.error("Gemini resume parsing failed:", error);
+    return {
+      isResume: false,
+      confidenceScore: 0,
+      reason: `Resume parsing failed: ${error.message || String(error)}`,
+      detectedProfile: null,
+      indicators: []
+    };
   }
-
-  // Fallback to minimal profile if Gemini parsing fails entirely
-  return {
-    isResume: true,
-    confidenceScore: 50,
-    reason: "Heuristics fallback due to parse exception.",
-    indicators: ["name"],
-    detectedProfile: {
-      fullName: fileName.replace(/\.[^/.]+$/, ""),
-      email: "",
-      phone: "",
-      summary: "",
-      skills: [],
-      languages: [],
-      workExperience: [],
-      education: [],
-      projects: [],
-      certifications: []
-    }
-  };
 }
 
 async function generateContentWithRetry(ai: GoogleGenAI, options: any, maxRetries = 3): Promise<any> {

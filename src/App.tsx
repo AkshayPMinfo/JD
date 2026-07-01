@@ -2168,7 +2168,7 @@ WORK EXPERIENCE
       if (!result.isResume) {
         setAnalysisResult({ isResume: false });
         setTempFile(null);
-        setUploadError(null);
+        setUploadError(result.reason || "This document does not look like a professional resume.");
         return;
       }
 

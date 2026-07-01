@@ -254,28 +254,39 @@ export default function App() {
     return [];
   });
 
-  const isDuplicateResume = (name: string, fileBase64?: string, data?: ResumeStructure): boolean => {
+  const isDuplicateResume = (fileBase64?: string, extractedText?: string, data?: ResumeStructure): boolean => {
     return savedUserResumes.some(r => {
-      // 1. Compare uploaded file base64 if both have it (legacy pdfBase64 included)
-      const existingFileBase64 = r.fileBase64 || r.pdfBase64;
-      if (fileBase64 && existingFileBase64 && existingFileBase64 === fileBase64) {
+      const existingBase64 = r.fileBase64 || r.pdfBase64;
+      if (fileBase64 && existingBase64 && fileBase64 === existingBase64) {
         return true;
       }
-      // 2. Compare file names
-      if (r.name.toLowerCase() === name.toLowerCase()) {
+      if (extractedText && r.extractedText && extractedText.trim() === r.extractedText.trim()) {
         return true;
       }
-      // 3. Compare JSON data structure (fullName + email + phone) if data is provided
-      if (data && r.data && data.fullName && data.email) {
-        const nameMatch = r.data.fullName.trim().toLowerCase() === data.fullName.trim().toLowerCase();
-        const emailMatch = r.data.email.trim().toLowerCase() === data.email.trim().toLowerCase();
-        const phoneMatch = (r.data.phone || "").trim() === (data.phone || "").trim();
-        if (nameMatch && emailMatch && phoneMatch) {
+      if (data && r.data) {
+        const nameMatch = (r.data.fullName || "").trim().toLowerCase() === (data.fullName || "").trim().toLowerCase();
+        const emailMatch = (r.data.email || "").trim().toLowerCase() === (data.email || "").trim().toLowerCase();
+        const expMatch = JSON.stringify(r.data.workExperience || []) === JSON.stringify(data.workExperience || []);
+        if (nameMatch && emailMatch && expMatch) {
           return true;
         }
       }
       return false;
     });
+  };
+
+  const generateUniqueResumeName = (fullName: string): string => {
+    const baseName = (fullName || "Candidate").trim();
+    const existingCount = savedUserResumes.filter(r => {
+      const n = (r.name || "").trim();
+      return n === baseName || n.startsWith(`${baseName} `);
+    }).length;
+    
+    if (existingCount === 0) {
+      return baseName;
+    } else {
+      return `${baseName} ${existingCount}`;
+    }
   };
 
   const isStoredUploadedResumeObviouslyInvalid = (resume: SavedResume): boolean => {
@@ -352,16 +363,13 @@ export default function App() {
     const name = value?.trim();
     if (!name) return false;
     if (name.length < 2 || name.length > 70) return false;
-    if (/[.!?]/.test(name)) return false;
-    if (/\b(customer|needs|summary|experience|education|skills|projects|resume|invoice|statement|chapter|agenda|session|introduction)\b/i.test(name)) return false;
+    if (/\b(customer|needs|summary|experience|education|skills|projects|resume|invoice|statement|chapter|agenda|session|introduction|professional|academic|various|portfolio|high school|diploma|degree)\b/i.test(name)) return false;
+    if (/[0-9]/.test(name)) return false;
 
     const words = name.split(/\s+/).filter(Boolean);
     if (words.length < 1 || words.length > 5) return false;
 
-    return words.every(word =>
-      /^[A-Za-z][A-Za-z'-]*$/.test(word) &&
-      (word === word.toUpperCase() || /^[A-Z][a-zA-Z'-]*$/.test(word))
-    );
+    return true;
   };
 
   const cleanResumeFileNameForCard = (value?: string): string => {
@@ -1055,11 +1063,17 @@ export default function App() {
       .filter(indicator => indicator.matched)
       .map(indicator => indicator.name);
     const isLoremIpsum = /\blorem ipsum\b|\bdolor sit amet\b|\bconsectetur adipiscing\b/i.test(lowerText);
+    const isCoverLetter = /\b(dear hiring manager|dear recruiter|dear sir|dear madam|writing to apply|express my interest|my attached resume|my resume|sincerely)\b/i.test(lowerText);
+    const isResume = /\b(work experience|education|skills|certifications|summary of qualifications|projects|professional experience)\b/i.test(lowerText) && 
+      (/\b(gpa|bachelor of|master of|phd|school|university|contact details|email|phone)\b/i.test(lowerText) || /^\+?[0-9]{1,4}[-.\s]?[0-9]{3,4}[-.\s]?[0-9]{3,4}$/m.test(lowerText));
+
     const isValid =
       words.length >= JD_MIN_WORDS &&
       words.length <= JD_MAX_WORDS &&
       foundIndicators.length >= 2 &&
-      !isLoremIpsum;
+      !isLoremIpsum &&
+      !isCoverLetter &&
+      !isResume;
 
     console.info("[JD Validation] JD Indicators Found", foundIndicators);
     console.info("[JD Validation] Word Count", words.length);
@@ -1325,8 +1339,9 @@ export default function App() {
       };
     });
 
-    // 5. Preserve certifications exactly. Do not invent certifications.
+    // 5. Preserve certifications and languages exactly.
     sanitized.certifications = original.certifications || [];
+    sanitized.languages = original.languages || [];
 
     return sanitized;
   };
@@ -1480,6 +1495,12 @@ export default function App() {
       let simplifiedJd;
       if (simplifyRes && simplifyRes.ok) {
         simplifiedJd = await simplifyRes.json();
+        if (simplifiedJd && simplifiedJd.isValidJd === false) {
+          setTailorIsAnalyzing(false);
+          setTailorAnalysisError(simplifiedJd.invalidReason || "Invalid Job Description");
+          showNotification(simplifiedJd.invalidReason || "The pasted text does not appear to be a valid Job Description.", "error");
+          return;
+        }
       }
 
       const isAiFallback = !simplifiedJd;
@@ -1780,15 +1801,28 @@ Keywords: ${(simplifiedJd.keywordsToTarget || []).join(", ")}`;
   };
 
   const getHighlightClass = (section: "summary" | "skills" | "experience" | "projects", originalValue: unknown, tailoredValue: unknown, value?: string) => {
-    const changed = JSON.stringify(originalValue || "") !== JSON.stringify(tailoredValue || "");
-    if (!changed) return "";
-    if (section === "summary") return "bg-purple-100 border-purple-300";
+    if (section === "summary") {
+      return JSON.stringify(originalValue || "") !== JSON.stringify(tailoredValue || "") ? "bg-purple-100 border-purple-300" : "";
+    }
     if (section === "skills") {
       const originalSkills = Array.isArray(originalValue) ? originalValue.map(skill => String(skill).toLowerCase()) : [];
       return value && !originalSkills.includes(value.toLowerCase()) ? "bg-blue-100 border-blue-300" : "";
     }
-    if (section === "experience") return "bg-emerald-100 border-emerald-300";
-    if (section === "projects") return "bg-yellow-100 border-yellow-300";
+    if (section === "experience") {
+      const originalBullets = Array.isArray(originalValue) ? originalValue.map(b => String(b).trim().toLowerCase()) : [];
+      const isNew = !originalBullets.includes(String(tailoredValue).trim().toLowerCase());
+      return isNew ? "bg-emerald-100 border-emerald-300" : "";
+    }
+    if (section === "projects") {
+      const origProjects = Array.isArray(originalValue) ? originalValue : [];
+      const tailProj = tailoredValue as any;
+      const tailDesc = Array.isArray(tailProj?.description) ? tailProj.description.join(" ") : String(tailProj?.description || "");
+      const exists = origProjects.some((op: any) => {
+        const opDesc = Array.isArray(op?.description) ? op.description.join(" ") : String(op?.description || "");
+        return opDesc.trim().toLowerCase() === tailDesc.trim().toLowerCase();
+      });
+      return !exists ? "bg-yellow-100 border-yellow-300" : "";
+    }
     return "";
   };
 
@@ -1936,14 +1970,14 @@ WORK EXPERIENCE
   const loadPresetResume = (key: "software_grad" | "marketing_grad") => {
     const presetData = DEMO_RESUMES[key].data;
     const label = DEMO_RESUMES[key].label;
-    if (isDuplicateResume(label, undefined, presetData)) {
+    if (isDuplicateResume(undefined, undefined, presetData)) {
       showNotification("This resume has already been added.", "error");
       return;
     }
     const newId = `resume-preset-${key}-${Date.now()}`;
     const newEntry: SavedResume = {
       id: newId,
-      name: label,
+      name: generateUniqueResumeName(label),
       data: presetData,
       uploadedAt: new Date().toISOString()
     };
@@ -1988,14 +2022,14 @@ WORK EXPERIENCE
       try {
         const parsed = JSON.parse(event.target?.result as string);
         if (parsed.fullName && parsed.email && Array.isArray(parsed.workExperience)) {
-          if (isDuplicateResume(file.name, undefined, parsed)) {
+          if (isDuplicateResume(undefined, undefined, parsed)) {
             showNotification("This resume has already been added.", "error");
             return;
           }
           const newId = `resume-json-${Date.now()}`;
           const newEntry: SavedResume = {
             id: newId,
-            name: file.name,
+            name: generateUniqueResumeName(parsed.fullName || file.name),
             data: parsed,
             uploadedAt: new Date().toISOString()
           };
@@ -2090,7 +2124,7 @@ WORK EXPERIENCE
     try {
       const base64Data = await convertFileToBase64(file);
 
-      if (isDuplicateResume(file.name, base64Data)) {
+      if (isDuplicateResume(base64Data)) {
         setUploadError("This resume has already been added to your library.");
         setIsAnalyzing(false);
         return;
@@ -2173,7 +2207,7 @@ WORK EXPERIENCE
         const newId = `resume-${Date.now()}`;
         const newEntry: SavedResume = {
           id: newId,
-          name: resumeHolderName || file.name,
+          name: generateUniqueResumeName(resumeHolderName || file.name.replace(/\.[^/.]+$/, "")),
           data: newResumeData,
           fileBase64: base64Data,
           originalFileName: file.name,
@@ -2902,12 +2936,17 @@ WORK EXPERIENCE
       resume.education.forEach(edu => {
         if (edu.degree) lines.push({ text: edu.degree, type: "subhead" });
         if (edu.school) lines.push({ text: edu.school, type: "body" });
-        if (edu.duration) lines.push({ text: edu.duration, type: "meta" });
+        const metaParts = [edu.duration, edu.gpa ? `GPA: ${edu.gpa}` : null].filter(Boolean);
+        if (metaParts.length) lines.push({ text: metaParts.join(" | "), type: "meta" });
       });
     }
     if (resume.certifications?.length) {
       lines.push({ text: "Certifications", type: "heading" });
       resume.certifications.forEach(cert => lines.push({ text: cert, type: "bullet" }));
+    }
+    if (resume.languages?.length) {
+      lines.push({ text: "Languages", type: "heading" });
+      resume.languages.forEach(lang => lines.push({ text: lang, type: "bullet" }));
     }
     return lines;
   };
@@ -2932,111 +2971,17 @@ WORK EXPERIENCE
   const handlePrintOrSavePDF = (resume: ResumeStructure, original?: ResumeStructure, headline = "") => {
     try {
       logDownloadEvent("Download Started", { type: "PDF" });
-      const exportResume = prepareResumeForDownload(resume, original);
-      if (!exportResume) return;
-
-      logDownloadEvent("File Generation Started", { type: "PDF" });
-      const pageWidth = 612;
-      const pageHeight = 792;
-      const margin = 54;
-      const maxY = pageHeight - margin;
-      const minY = margin;
-      const pages: string[][] = [[]];
-      let y = maxY;
-      const pdfSafeText = (value: string) =>
-        value
-          .replace(/[•]/g, "-")
-          .replace(/[–—]/g, "-")
-          .replace(/[“”]/g, '"')
-          .replace(/[‘’]/g, "'")
-          .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "");
-      const pdfEscape = (value: string) => pdfSafeText(value).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
-      const addRule = () => {
-        if (y < minY + 14) {
-          pages.push([]);
-          y = maxY;
-        }
-        pages[pages.length - 1].push(`0.55 w ${margin} ${y} m ${pageWidth - margin} ${y} l S`);
-        y -= 16;
-      };
-      const addText = (text: string, x: number, size: number, font = "F1", leading = size + 4) => {
-        if (y < minY + leading) {
-          pages.push([]);
-          y = maxY;
-        }
-        pages[pages.length - 1].push(`BT /${font} ${size} Tf ${x} ${y} Td (${pdfEscape(text)}) Tj ET`);
-        y -= leading;
-      };
-
-      buildResumePlainLines(exportResume, headline).forEach(item => {
-        if (item.type === "title") {
-          addText(item.text, margin, 18, "F2", 22);
-        } else if (item.type === "headline") {
-          addText(item.text, margin, 11, "F2", 15);
-        } else if (item.type === "contact") {
-          wrapPdfText(item.text, 82).forEach(line => addText(line, margin, 11, "F1", 15));
-          y -= 6;
-        } else if (item.type === "rule") {
-          addRule();
-        } else if (item.type === "heading") {
-          y -= 7;
-          addText(item.text.toUpperCase(), margin, 13, "F2", 17);
-          addRule();
-        } else if (item.type === "subhead") {
-          addText(item.text, margin, 11, "F2", 15);
-        } else if (item.type === "meta") {
-          wrapPdfText(item.text, 90).forEach(line => addText(line, margin, 10, "F1", 14));
-        } else if (item.type === "bullet") {
-          wrapPdfText(`- ${item.text}`, 88).forEach((line, index) => addText(line, margin + (index ? 14 : 8), 10.5, "F1", 14));
-        } else if (item.type === "spacer") {
-          y -= 5;
-        } else {
-          wrapPdfText(item.text, 90).forEach(line => addText(line, margin, 10.5, "F1", 14));
-        }
-      });
-
-      const objects: string[] = [];
-      const addObject = (body: string) => {
-        objects.push(body);
-        return objects.length;
-      };
-      const catalogId = addObject("<< /Type /Catalog /Pages 2 0 R >>");
-      objects.push(""); // pages placeholder at id 2
-      const fontRegularId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
-      const fontBoldId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>");
-      const pageIds: number[] = [];
-      pages.forEach(pageContent => {
-        const stream = pageContent.join("\n");
-        const contentId = addObject(`<< /Length ${new TextEncoder().encode(stream).length} >>\nstream\n${stream}\nendstream`);
-        const pageId = addObject(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 ${fontRegularId} 0 R /F2 ${fontBoldId} 0 R >> >> /Contents ${contentId} 0 R >>`);
-        pageIds.push(pageId);
-      });
-      objects[1] = `<< /Type /Pages /Kids [${pageIds.map(id => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`;
-
-      let pdf = "%PDF-1.4\n";
-      const offsets = [0];
-      objects.forEach((body, index) => {
-        offsets.push(pdf.length);
-        pdf += `${index + 1} 0 obj\n${body}\nendobj\n`;
-      });
-      const xrefOffset = pdf.length;
-      pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-      offsets.slice(1).forEach(offset => {
-        pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
-      });
-      pdf += `trailer\n<< /Size ${objects.length + 1} /Root ${catalogId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
-
-      const blob = new Blob([pdf], { type: "application/pdf" });
-      if (blob.size === 0) {
-        failDownload("PDF generation produced an empty file.");
-        return;
-      }
-      logDownloadEvent("PDF Generated", { bytes: blob.size });
-      const didDownload = downloadBlob(blob, `${exportResume.fullName.replace(/\s+/g, "_")}_Resume.pdf`);
-      if (didDownload) showNotification("PDF resume downloaded successfully.", "success");
+      setPrintResume(resume);
+      
+      // Let React update the hidden print container DOM with printResume, then trigger print dialog
+      setTimeout(() => {
+        window.print();
+        logDownloadEvent("Download Completed", { type: "PDF" });
+        showNotification("PDF print dialog opened successfully.", "success");
+      }, 150);
     } catch (error: any) {
-      console.error("PDF generation failed:", error);
-      failDownload(error.message || "PDF generation failed.", error);
+      console.error("PDF Print failed:", error);
+      showNotification("Failed to trigger print/save dialog.", "error");
     }
   };
 
@@ -3097,6 +3042,10 @@ WORK EXPERIENCE
         body += heading("Certifications");
         exportResume.certifications.forEach(cert => { body += bullet(cert); });
       }
+      if (exportResume.languages?.length) {
+        body += heading("Languages");
+        exportResume.languages.forEach(lang => { body += bullet(lang); });
+      }
 
       const zip = new JSZip();
       zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>`);
@@ -3138,6 +3087,12 @@ WORK EXPERIENCE
     activeResume.education.forEach(edu => {
       text += `${edu.degree} - ${edu.school} (${edu.duration})${edu.gpa ? ` | GPA: ${edu.gpa}` : ""}\n`;
     });
+    if (activeResume.certifications?.length) {
+      text += `\n-- CERTIFICATIONS --\n${activeResume.certifications.join(", ")}\n`;
+    }
+    if (activeResume.languages?.length) {
+      text += `\n-- LANGUAGES --\n${activeResume.languages.join(", ")}\n`;
+    }
 
     navigator.clipboard.writeText(text);
     showNotification("Copied resume raw plain-text outline to your clipboard!", "success");
@@ -5406,7 +5361,7 @@ WORK EXPERIENCE
 
               {/* Actual structured preview component */}
               <div className="max-h-[750px] overflow-y-auto rounded-2xl scrollbar-none border border-neutral-250 dark:border-neutral-800 print-container select-all">
-                <ResumePreview resume={activeResume} templateStyle={selectedStyle} />
+                <ResumePreview resume={activeResume} templateStyle={selectedStyle} originalResume={originalResume || undefined} />
               </div>
             </div>
           </div>
@@ -5455,7 +5410,11 @@ WORK EXPERIENCE
                           </span>
                           <button
                             id={`btn-delete-ver-${version.id}`}
-                            onClick={(e) => handleDeleteVersion(version.id, e)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setVersionToDeleteId(version.id);
+                              setShowDeleteSavedVersionConfirmModal(true);
+                            }}
                             className="text-neutral-400 hover:text-rose-500 p-1 opacity-85 transition"
                             title="Delete this saved copy"
                           >
@@ -6240,57 +6199,22 @@ WORK EXPERIENCE
                       </div>
 
                       <div className="flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-wide">
-                        <span className="px-2 py-1 rounded-lg bg-yellow-100 border border-yellow-300">Yellow: New keywords</span>
-                        <span className="px-2 py-1 rounded-lg bg-blue-100 border border-blue-300">Blue: New skills</span>
-                        <span className="px-2 py-1 rounded-lg bg-emerald-100 border border-emerald-300">Green: Improved bullets</span>
-                        <span className="px-2 py-1 rounded-lg bg-purple-100 border border-purple-300">Purple: Modified summary</span>
+                        <span className="px-2 py-1 rounded-lg bg-blue-100 border border-blue-300 text-blue-900">Blue: Added skills / keywords</span>
+                        <span className="px-2 py-1 rounded-lg bg-emerald-100 border border-emerald-300 text-emerald-900">Green: Improved bullets</span>
+                        <span className="px-2 py-1 rounded-lg bg-purple-100 border border-purple-300 text-purple-900">Purple: Modified summary</span>
                       </div>
 
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
                         {[{ title: "Original Resume", resume: originalResume, side: "original" }, { title: "Tailored Resume", resume: tailoredResume, side: "tailored" }].map(panel => (
                           <div key={panel.title} className="border-2 border-black rounded-2xl overflow-hidden bg-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
                             <div className="bg-black text-white px-4 py-2 text-xs font-black uppercase tracking-wider font-mono">{panel.title}</div>
-                            <div className="p-4 max-h-[520px] overflow-y-auto space-y-4 text-xs leading-relaxed">
-                              <section className={`border rounded-xl p-3 ${panel.side === "tailored" ? getHighlightClass("summary", originalResume?.summary, tailoredResume?.summary) : "border-neutral-200"}`}>
-                                <h4 className="text-[10px] font-black uppercase font-mono text-neutral-500 mb-1">Summary</h4>
-                                <p className="font-semibold text-neutral-800">{panel.resume?.summary || "No summary provided."}</p>
-                              </section>
-
-                              <section className="border border-neutral-200 rounded-xl p-3">
-                                <h4 className="text-[10px] font-black uppercase font-mono text-neutral-500 mb-2">Skills</h4>
-                                <div className="flex flex-wrap gap-1.5">
-                                  {(panel.resume?.skills || []).map(skill => (
-                                    <span key={`${panel.title}-${skill}`} className={`px-2 py-1 rounded-lg border text-[10px] font-bold ${panel.side === "tailored" ? getHighlightClass("skills", originalResume?.skills, tailoredResume?.skills, skill) || "bg-white border-neutral-200" : "bg-white border-neutral-200"}`}>{skill}</span>
-                                  ))}
-                                </div>
-                              </section>
-
-                              <section className="border border-neutral-200 rounded-xl p-3">
-                                <h4 className="text-[10px] font-black uppercase font-mono text-neutral-500 mb-2">Experience</h4>
-                                <div className="space-y-3">
-                                  {(panel.resume?.workExperience || []).map((exp, idx) => (
-                                    <div key={`${panel.title}-exp-${exp.id || idx}`} className="space-y-1">
-                                      <p className="font-black text-neutral-900">{exp.role} @ {exp.company}</p>
-                                      {(exp.description || []).map((bullet, bulletIdx) => (
-                                        <p key={bulletIdx} className={`border rounded-lg px-2 py-1.5 ${panel.side === "tailored" ? getHighlightClass("experience", originalResume?.workExperience?.[idx]?.description?.[bulletIdx], bullet) || "border-neutral-200" : "border-neutral-200"}`}>• {bullet}</p>
-                                      ))}
-                                    </div>
-                                  ))}
-                                </div>
-                              </section>
-
-                              <section className="border border-neutral-200 rounded-xl p-3">
-                                <h4 className="text-[10px] font-black uppercase font-mono text-neutral-500 mb-2">Projects / Education</h4>
-                                {(panel.resume?.projects || []).map((project, idx) => (
-                                  <div key={`${panel.title}-project-${project.id || idx}`} className={`mb-2 border rounded-lg p-2 ${panel.side === "tailored" ? getHighlightClass("projects", originalResume?.projects?.[idx], project) || "border-neutral-200" : "border-neutral-200"}`}>
-                                    <p className="font-black">{project.name}</p>
-                                    <p>{(project.description || []).join(" ")}</p>
-                                  </div>
-                                ))}
-                                {(panel.resume?.education || []).map((edu, idx) => (
-                                  <p key={`${panel.title}-edu-${edu.id || idx}`} className="text-neutral-700">• {edu.degree} — {edu.school} ({edu.duration})</p>
-                                ))}
-                              </section>
+                            <div className="p-4 max-h-[600px] overflow-y-auto bg-neutral-50 border-t border-black">
+                              <ResumePreview
+                                resume={panel.resume}
+                                templateStyle={selectedStyle}
+                                id={`step-4-preview-${panel.side}`}
+                                originalResume={panel.side === "tailored" ? originalResume : undefined}
+                              />
                             </div>
                           </div>
                         ))}
@@ -6620,7 +6544,7 @@ WORK EXPERIENCE
                   <span className="text-[10px] text-neutral-400">Pure print output preview</span>
                 </div>
                 <div className="flex-1 overflow-y-auto p-4 bg-neutral-50 scrollbar-thin">
-                  <ResumePreview resume={selectedSavedVersion.resumeData} templateStyle="two-column" />
+                  <ResumePreview resume={selectedSavedVersion.resumeData} templateStyle="two-column" originalResume={selectedSavedVersion.originalResumeData || undefined} />
                 </div>
               </div>
             </div>

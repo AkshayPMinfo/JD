@@ -1,15 +1,42 @@
 import React from "react";
 import { ResumeStructure } from "../types";
-import { Mail, Phone, Linkedin, Globe, Award, Briefcase, GraduationCap } from "lucide-react";
+import { Mail, Phone, Linkedin, Globe } from "lucide-react";
 
 interface ResumePreviewProps {
   resume: ResumeStructure;
   templateStyle: "classic" | "tech" | "executive" | "two-column";
   id?: string;
+  originalResume?: ResumeStructure;
 }
 
-export default function ResumePreview({ resume, templateStyle, id = "resume-preview-sheet" }: ResumePreviewProps) {
+export default function ResumePreview({ resume, templateStyle, id = "resume-preview-sheet", originalResume }: ResumePreviewProps) {
   const { fullName, email, phone, linkedin, website, summary, workExperience, education, skills } = resume;
+
+  // Custom highlights helper
+  const getHighlightStyle = (section: "summary" | "skills" | "experience-bullet" | "project-bullet", value: string): string => {
+    if (!originalResume) return "";
+    
+    if (section === "summary") {
+      return originalResume.summary !== resume.summary ? "bg-purple-100/70 border border-purple-250 px-1.5 py-0.5 rounded print:bg-transparent print:border-none print:p-0" : "";
+    }
+    
+    if (section === "skills") {
+      const originalSkills = (originalResume.skills || []).map(s => s.toLowerCase());
+      return !originalSkills.includes(value.toLowerCase()) ? "bg-blue-100/70 border border-blue-250 px-2 py-0.5 rounded print:bg-transparent print:border-none print:p-0" : "";
+    }
+    
+    if (section === "experience-bullet") {
+      const allOriginalBullets = (originalResume.workExperience || []).flatMap(exp => exp.description || []).map(b => b.trim().toLowerCase());
+      return !allOriginalBullets.includes(value.trim().toLowerCase()) ? "bg-emerald-100/70 border border-emerald-250 px-1.5 py-0.5 rounded print:bg-transparent print:border-none print:p-0 block" : "";
+    }
+    
+    if (section === "project-bullet") {
+      const allOriginalBullets = (originalResume.projects || []).flatMap(proj => proj.description || []).map(b => b.trim().toLowerCase());
+      return !allOriginalBullets.includes(value.trim().toLowerCase()) ? "bg-emerald-100/70 border border-emerald-250 px-1.5 py-0.5 rounded print:bg-transparent print:border-none print:p-0 block" : "";
+    }
+    
+    return "";
+  };
 
   // Render different styles based on template
   if (templateStyle === "two-column") {
@@ -35,8 +62,17 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
 
         {/* Content columns */}
         <div className="grid grid-cols-1 md:grid-cols-12 gap-8 text-left">
-          {/* Left Column - Experience */}
+          {/* Left Column - Summary & Experience */}
           <div className="md:col-span-8 space-y-6">
+            {summary && (
+              <div className={getHighlightStyle("summary", summary)}>
+                <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-2 font-sans">
+                  Professional Summary
+                </h2>
+                <p className="text-xs text-neutral-700 leading-relaxed font-serif">{summary}</p>
+              </div>
+            )}
+
             {workExperience && workExperience.length > 0 && (
               <div>
                 <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
@@ -53,7 +89,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                       <p className="text-[11px] text-neutral-500 font-semibold font-sans mt-0.5">{exp.duration}</p>
                       <ul className="list-disc pl-5 mt-2 space-y-1 text-xs text-neutral-700 leading-relaxed font-serif">
                         {exp.description.map((bullet, idx) => (
-                          <li key={idx}>
+                          <li key={idx} className={getHighlightStyle("experience-bullet", bullet)}>
                             <span className="text-neutral-700">{bullet}</span>
                           </li>
                         ))}
@@ -75,7 +111,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                       <h3 className="font-bold text-black text-sm">{proj.name}</h3>
                       <ul className="list-disc pl-5 mt-1.5 space-y-1 text-xs text-neutral-700 leading-relaxed font-serif">
                         {proj.description.map((bullet, idx) => (
-                          <li key={idx}>
+                          <li key={idx} className={getHighlightStyle("project-bullet", bullet)}>
                             <span className="text-neutral-700">{bullet}</span>
                           </li>
                         ))}
@@ -111,9 +147,9 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                 <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
                   Skills
                 </h2>
-                <ul className="list-disc pl-5 space-y-2 text-xs text-neutral-700 font-sans font-semibold">
+                <ul className="list-none space-y-2 text-xs text-neutral-700 font-sans font-semibold">
                   {skills.map((skill, index) => (
-                    <li key={index}>{skill}</li>
+                    <li key={index} className={getHighlightStyle("skills", skill)}>{skill}</li>
                   ))}
                 </ul>
               </div>
@@ -195,7 +231,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
             <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-2 print:text-black">
               // PROFILE SUMMARY
             </h2>
-            <p className="text-xs leading-relaxed text-gray-300 print:text-gray-800">{summary}</p>
+            <p className={`text-xs leading-relaxed text-gray-300 print:text-gray-800 ${getHighlightStyle("summary", summary)}`}>{summary}</p>
           </div>
         )}
 
@@ -209,7 +245,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
               {skills.map((skill, index) => (
                 <span
                   key={index}
-                  className="bg-[#2a2a2e] text-green-400 px-2 py-0.5 rounded text-xs border border-[#3e3e44] print:bg-gray-100 print:text-black print:border-gray-300"
+                  className={`bg-[#2a2a2e] text-green-400 px-2 py-0.5 rounded text-xs border border-[#3e3e44] print:bg-gray-100 print:text-black print:border-gray-300 ${getHighlightStyle("skills", skill)}`}
                 >
                   {skill}
                 </span>
@@ -235,7 +271,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                   </div>
                   <ul className="list-none space-y-1.5 mt-2">
                     {exp.description.map((bullet, idx) => (
-                      <li key={idx} className="text-xs text-gray-300 leading-relaxed print:text-gray-800 flex items-start gap-1">
+                      <li key={idx} className={`text-xs text-gray-300 leading-relaxed print:text-gray-800 flex items-start gap-1 ${getHighlightStyle("experience-bullet", bullet)}`}>
                         <span className="text-green-500 select-none">-</span>
                         <span>{bullet}</span>
                       </li>
@@ -261,7 +297,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                   </h3>
                   <ul className="list-none space-y-1.5 mt-2">
                     {proj.description.map((bullet, idx) => (
-                      <li key={idx} className="text-xs text-gray-300 leading-relaxed print:text-gray-800 flex items-start gap-1">
+                      <li key={idx} className={`text-xs text-gray-300 leading-relaxed print:text-gray-800 flex items-start gap-1 ${getHighlightStyle("project-bullet", bullet)}`}>
                         <span className="text-green-500 select-none">-</span>
                         <span>{bullet}</span>
                       </li>
@@ -306,6 +342,23 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                 <li key={index} className="flex items-start gap-1">
                   <span className="text-green-500 select-none">&#62;</span>
                   <span>{cert}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Languages Section */}
+        {resume.languages && resume.languages.length > 0 && (
+          <div className="mb-4">
+            <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-3 print:text-black">
+              // LANGUAGES
+            </h2>
+            <ul className="list-none space-y-1.5 text-xs text-gray-300 print:text-gray-800">
+              {resume.languages.map((lang, index) => (
+                <li key={index} className="flex items-start gap-1">
+                  <span className="text-green-500 select-none">&#62;</span>
+                  <span>{lang}</span>
                 </li>
               ))}
             </ul>
@@ -356,7 +409,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
             <h2 className="text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-2 print:text-black">
               Executive Summary
             </h2>
-            <p className="text-xs leading-relaxed text-gray-700 font-normal">{summary}</p>
+            <p className={`text-xs leading-relaxed text-gray-700 font-normal ${getHighlightStyle("summary", summary)}`}>{summary}</p>
           </div>
         )}
 
@@ -370,7 +423,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
               {skills.map((skill, index) => (
                 <span
                   key={index}
-                  className="bg-[#f0f4ff] text-[#1e3a8a] px-2.5 py-1 rounded text-xs font-semibold print:bg-gray-100 print:text-black print:border print:border-gray-200"
+                  className={`bg-[#f0f4ff] text-[#1e3a8a] px-2.5 py-1 rounded text-xs font-semibold print:bg-gray-100 print:text-black print:border print:border-gray-200 ${getHighlightStyle("skills", skill)}`}
                 >
                   {skill}
                 </span>
@@ -396,7 +449,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                   </div>
                   <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed">
                     {exp.description.map((bullet, idx) => (
-                      <li key={idx}>
+                      <li key={idx} className={getHighlightStyle("experience-bullet", bullet)}>
                         <span className="text-gray-700">{bullet}</span>
                       </li>
                     ))}
@@ -419,7 +472,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                   <h3 className="text-sm font-bold text-[#111827]">{proj.name}</h3>
                   <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed">
                     {proj.description.map((bullet, idx) => (
-                      <li key={idx}>
+                      <li key={idx} className={getHighlightStyle("project-bullet", bullet)}>
                         <span className="text-gray-700">{bullet}</span>
                       </li>
                     ))}
@@ -467,6 +520,22 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
             </div>
           </div>
         )}
+
+        {/* Languages Section */}
+        {resume.languages && resume.languages.length > 0 && (
+          <div className="mb-4">
+            <h2 className="text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-3 print:text-black">
+              Languages
+            </h2>
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {resume.languages.map((lang, index) => (
+                <span key={index} className="bg-gray-50 text-gray-700 border border-gray-200 px-2.5 py-1 rounded text-xs font-semibold print:bg-gray-100 print:text-black">
+                  {lang}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -499,7 +568,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
           <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-2 border-b border-gray-300 pb-0.5">
             Professional Summary
           </h2>
-          <p className="text-xs leading-relaxed text-gray-700">{summary}</p>
+          <p className={`text-xs leading-relaxed text-gray-700 ${getHighlightStyle("summary", summary)}`}>{summary}</p>
         </div>
       )}
 
@@ -520,7 +589,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                 </div>
                 <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed">
                   {exp.description.map((bullet, idx) => (
-                    <li key={idx}>
+                    <li key={idx} className={getHighlightStyle("experience-bullet", bullet)}>
                       <span className="text-gray-700 font-normal">{bullet}</span>
                     </li>
                   ))}
@@ -543,7 +612,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                 <div className="font-semibold text-gray-900 text-sm">{proj.name}</div>
                 <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed">
                   {proj.description.map((bullet, idx) => (
-                    <li key={idx}>
+                    <li key={idx} className={getHighlightStyle("project-bullet", bullet)}>
                       <span className="text-gray-700 font-normal">{bullet}</span>
                     </li>
                   ))}
@@ -560,9 +629,13 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
           <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-2 border-b border-gray-300 pb-0.5">
             Skills
           </h2>
-          <p className="text-xs text-gray-700 leading-relaxed">
-            {skills.join(", ")}
-          </p>
+          <div className="flex flex-wrap gap-x-2 gap-y-1 text-xs text-gray-700 leading-relaxed">
+            {skills.map((skill, idx) => (
+              <span key={idx} className={getHighlightStyle("skills", skill)}>
+                {skill}{idx < skills.length - 1 ? "," : ""}
+              </span>
+            ))}
+          </div>
         </div>
       )}
 
@@ -596,6 +669,18 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
           </h2>
           <p className="text-xs text-gray-700 leading-relaxed">
             {resume.certifications.join(", ")}
+          </p>
+        </div>
+      )}
+
+      {/* Languages Section */}
+      {resume.languages && resume.languages.length > 0 && (
+        <div className="mb-4 font-sans">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-2 border-b border-gray-300 pb-0.5">
+            Languages
+          </h2>
+          <p className="text-xs text-gray-700 leading-relaxed">
+            {resume.languages.join(", ")}
           </p>
         </div>
       )}

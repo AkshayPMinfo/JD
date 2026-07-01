@@ -1789,11 +1789,21 @@ Keywords: ${(simplifiedJd.keywordsToTarget || []).join(", ")}`;
       JSON.stringify(original?.education || []) !== JSON.stringify(tailored?.education || []) ? "Education" : null,
     ].filter(Boolean) as string[];
 
+    const originalMissing = tailorAnalysisResult?.missingKeywords || version?.missingRequirements || [];
+    const remainingMissing = originalMissing.filter(kw => {
+      if (!kw) return false;
+      const kwLower = kw.toLowerCase();
+      // Check if it exists in tailored skills or tailored full text
+      const inSkills = (tailored?.skills || []).some(s => String(s).toLowerCase() === kwLower);
+      const inText = tailoredText.includes(kwLower);
+      return !inSkills && !inText;
+    });
+
     return {
       skillsAdded,
       keywordsAdded,
       sectionsImproved,
-      missingRequirements: tailorAnalysisResult?.missingKeywords || version?.missingRequirements || [],
+      missingRequirements: remainingMissing,
       improvements: version?.improvements || [],
       added: version?.diffAdded || [],
       modified: version?.diffModified || [],
@@ -6218,7 +6228,7 @@ WORK EXPERIENCE
                         {[{ title: "Original Resume", resume: originalResume, side: "original" }, { title: "Tailored Resume", resume: tailoredResume, side: "tailored" }].map(panel => (
                           <div key={panel.title} className="border-2 border-black rounded-2xl overflow-hidden bg-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
                             <div className="bg-black text-white px-4 py-2 text-xs font-black uppercase tracking-wider font-mono">{panel.title}</div>
-                            <div className="p-4 max-h-[600px] overflow-y-auto bg-neutral-50 border-t border-black">
+                            <div className="p-4 bg-neutral-50 border-t border-black">
                               <ResumePreview
                                 resume={panel.resume}
                                 templateStyle={selectedStyle}

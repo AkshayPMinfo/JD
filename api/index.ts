@@ -107,13 +107,14 @@ Analyze the following raw text extracted from a resume document and parse it int
 
 Rules:
 1. Extract the candidate's information as accurately as possible from the text.
-2. DO NOT invent details, and DO NOT use default placeholder values (e.g. "Professional @ Various Companies", "Academic Portfolio", "High School Diploma / Degree"). If a section (like workExperience, education, projects, certifications, website, linkedin, location, languages) is not found or has no content in the text, return an empty array [] or empty string "" respectively.
+2. DO NOT invent details, and DO NOT use default placeholder values (e.g. "Professional @ Various Companies", "Academic Portfolio", "High School Diploma / Degree"). If a section (like workExperience, education, projects, certifications, website, linkedin, location, languages, achievements) is not found or has no content in the text, return an empty array [] or empty string "" respectively.
 3. Preserve all company names, job titles, roles, durations, and description bullet points exactly as they are described in the resume. Do not change their phrasing during parsing.
 4. Preserve all projects, education details (degree, school, duration, gpa), and certifications exactly as described.
 5. In workExperience, education, and projects, generate a unique string "id" for each entry (e.g., "exp-1", "exp-2", "edu-1", "proj-1").
 6. Verify if this document is actually a professional resume. (A cover letter, template with placeholder names, food recipe, empty text, or random non-resume file counts as isResume: false).
    - A document is a resume (isResume: true) if it has a person's name and at least some sections like experience, education, or skills.
    - If the document is not a resume (isResume: false), explain why in the "reason" field.
+7. ABSOLUTE FIDELITY: You must extract EVERY section, EVERY work experience, EVERY project, EVERY educational degree, EVERY certification, EVERY language, and EVERY single bullet point or description line. Do NOT summarize, truncate, shorten, rewrite, or simplify any descriptions. Keep all sentences, bullets, dates, names, achievements, and technical details EXACTLY as they are written in the original raw text. The parsed profile must be a 100% complete factual mirror of the candidate's uploaded resume.
 
 Raw Resume Text:
 """

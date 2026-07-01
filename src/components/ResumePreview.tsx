@@ -17,22 +17,22 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
     if (!originalResume) return "";
     
     if (section === "summary") {
-      return originalResume.summary !== resume.summary ? "bg-purple-100/70 border border-purple-250 px-1.5 py-0.5 rounded print:bg-transparent print:border-none print:p-0" : "";
+      return originalResume.summary !== resume.summary ? "bg-purple-100 dark:bg-purple-950/45 text-purple-900 dark:text-purple-300 border border-purple-300 dark:border-purple-800 px-1.5 py-0.5 rounded print:bg-transparent print:text-black print:border-none print:p-0" : "";
     }
     
     if (section === "skills") {
       const originalSkills = (originalResume.skills || []).map(s => s.toLowerCase());
-      return !originalSkills.includes(value.toLowerCase()) ? "bg-blue-100/70 border border-blue-250 px-2 py-0.5 rounded print:bg-transparent print:border-none print:p-0" : "";
+      return !originalSkills.includes(value.toLowerCase()) ? "bg-blue-100 dark:bg-blue-950/45 text-blue-900 dark:text-blue-300 border border-blue-300 dark:border-blue-800 px-2 py-0.5 rounded print:bg-transparent print:text-black print:border-none print:p-0" : "";
     }
     
     if (section === "experience-bullet") {
       const allOriginalBullets = (originalResume.workExperience || []).flatMap(exp => exp.description || []).map(b => b.trim().toLowerCase());
-      return !allOriginalBullets.includes(value.trim().toLowerCase()) ? "bg-emerald-100/70 border border-emerald-250 px-1.5 py-0.5 rounded print:bg-transparent print:border-none print:p-0 block" : "";
+      return !allOriginalBullets.includes(value.trim().toLowerCase()) ? "bg-emerald-100 dark:bg-emerald-950/45 text-emerald-900 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 px-1.5 py-0.5 rounded print:bg-transparent print:text-black print:border-none print:p-0 block" : "";
     }
     
     if (section === "project-bullet") {
       const allOriginalBullets = (originalResume.projects || []).flatMap(proj => proj.description || []).map(b => b.trim().toLowerCase());
-      return !allOriginalBullets.includes(value.trim().toLowerCase()) ? "bg-emerald-100/70 border border-emerald-250 px-1.5 py-0.5 rounded print:bg-transparent print:border-none print:p-0 block" : "";
+      return !allOriginalBullets.includes(value.trim().toLowerCase()) ? "bg-emerald-100 dark:bg-emerald-950/45 text-emerald-900 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 px-1.5 py-0.5 rounded print:bg-transparent print:text-black print:border-none print:p-0 block" : "";
     }
     
     return "";

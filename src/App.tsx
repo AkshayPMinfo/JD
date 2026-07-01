@@ -123,10 +123,6 @@ export default function App() {
     }
   }, [isSignUp]);
 
-  // Resume Setup
-  const [hasResume, setHasResume] = useState<boolean>(() => {
-    return localStorage.getItem("jd_resume_customizer_has_resume") === "true";
-  });
   const [showSetupOptions, setShowSetupOptions] = useState(false);
 
   const [activeResume, setActiveResume] = useState<ResumeStructure>(() => {
@@ -219,8 +215,15 @@ export default function App() {
   // Mandatory Prerequisite Check for resume creation/uploading to unlock Auralis
   const [isUnlocked, setIsUnlocked] = useState<boolean>(() => {
     const sessionUnlocked = sessionStorage.getItem("auralis_platform_unlocked") === "true";
-    const localUnlocked = localStorage.getItem("jd_resume_customizer_has_resume") === "true";
-    return sessionUnlocked || localUnlocked;
+    const localSaved = localStorage.getItem("jd_resume_customizer_saved_resumes");
+    let hasSaved = false;
+    if (localSaved) {
+      try {
+        const parsed = JSON.parse(localSaved);
+        hasSaved = Array.isArray(parsed) && parsed.length > 0;
+      } catch {}
+    }
+    return sessionUnlocked || hasSaved || localStorage.getItem("jd_resume_customizer_has_resume") === "true";
   });
 
   // Onboarding choice: null = select pathway, 'yes' = upload path, 'no' = build form path, 'done' = workflow complete
@@ -253,6 +256,8 @@ export default function App() {
     }
     return [];
   });
+
+  const hasResume = savedUserResumes.length > 0;
 
   const isDuplicateResume = (fileBase64?: string, extractedText?: string, data?: ResumeStructure): boolean => {
     return savedUserResumes.some(r => {
@@ -291,23 +296,28 @@ export default function App() {
 
   const isStoredUploadedResumeObviouslyInvalid = (resume: SavedResume): boolean => {
     const isUploadedDocument = resume.fileType === "pdf" || resume.fileType === "docx" || !!resume.fileBase64 || !!resume.pdfBase64;
+    // Only inspect uploaded documents that have extracted text. If no extracted text, keep the resume.
     if (!isUploadedDocument || !resume.extractedText) return false;
 
     const text = resume.extractedText.toLowerCase();
-    if (/\b(invoice|receipt|bank statement|statement of account|transaction|balance|amount due|payment|vendor|chapter|session agenda|session kickoff|lecture notes|meeting notes|minutes of meeting)\b/i.test(text)) {
-      return true;
-    }
 
+    // Hard reject: clear non-resume content types (invoices, bank statements, meeting notes, etc.)
+    const isObviouslyNonResume = /\b(invoice|receipt|bank statement|statement of account|transaction history|amount due|payment due|vendor invoice|balance sheet|profit and loss|chapter \d|session agenda|session kickoff|lecture notes|minutes of meeting)\b/i.test(text);
+
+    // Count resume section indicators
     const indicators = [
       /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(text) || /\+?\(?[0-9]{1,4}\)?[-.\s]?[0-9]{3,4}[-.\s]?[0-9]{3,4}/.test(text),
       /\b(education|university|college|school|degree|bachelor|master|phd|gpa|coursework|academic)\b/i.test(text),
-      /\b(experience|work history|employment|internship|responsibilities|achievements|professional experience)\b/i.test(text),
-      /\b(skills|technical skills|technologies|tools|competencies|expertise|programming languages)\b/i.test(text),
-      /\b(projects|portfolio|personal projects|academic projects|repositories|github)\b/i.test(text),
-      /\b(certifications?|licenses?|awards?|credentials?)\b/i.test(text),
+      /\b(experience|work history|employment|internship|responsibilities|achievements|professional experience|worked at|working at)\b/i.test(text),
+      /\b(skills|technical skills|technologies|tools|competencies|expertise|programming|languages)\b/i.test(text),
+      /\b(projects|portfolio|personal projects|academic projects|repositories|github|open.?source)\b/i.test(text),
+      /\b(certifications?|licenses?|awards?|credentials?|honors?|publications?)\b/i.test(text),
     ].filter(Boolean).length;
 
-    return indicators < 3;
+    // Only reject if: it matches a clearly non-resume pattern AND has zero resume indicators.
+    // If Gemini already validated it as a resume (it was uploaded successfully), trust it.
+    // This prevents valid uploaded resumes from being evicted on next page load.
+    return isObviouslyNonResume && indicators === 0;
   };
 
   const formatFriendlyError = (errMessage: string | null): string => {
@@ -633,12 +643,7 @@ export default function App() {
         }).catch((error) => console.warn("Supabase resume save failed:", error));
       });
     }
-    // Keep hasResume in sync
-    const nowHas = savedUserResumes.length > 0;
-    if (nowHas !== hasResume) {
-      setHasResume(nowHas);
-      localStorage.setItem("jd_resume_customizer_has_resume", String(nowHas));
-    }
+    localStorage.setItem("jd_resume_customizer_has_resume", String(savedUserResumes.length > 0));
   }, [savedUserResumes]);
 
   // Persist activeResumeId
@@ -905,13 +910,11 @@ export default function App() {
         setActiveResumeId(resumes[0].id);
         setActiveResume(resumes[0].data);
         setOriginalResume(resumes[0].data);
-        setHasResume(true);
         setIsUnlocked(true);
         sessionStorage.setItem("auralis_platform_unlocked", "true");
         localStorage.setItem("jd_resume_customizer_has_resume", "true");
       } else {
         setSavedUserResumes([]);
-        setHasResume(false);
         localStorage.setItem("jd_resume_customizer_has_resume", "false");
       }
       setSavedVersions(versions);
@@ -2142,7 +2145,8 @@ WORK EXPERIENCE
       }
 
       const controller = new AbortController();
-      const validationTimeout = window.setTimeout(() => controller.abort(), 10000);
+      // 55-second timeout: Gemini 2.5 Flash can take 20-40s under load; Vercel functions cap at 60s
+      const validationTimeout = window.setTimeout(() => controller.abort(), 55000);
       const res = await fetch("/api/analyze-uploaded-resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3723,7 +3727,6 @@ WORK EXPERIENCE
                 setSavedUserResumes([]);
                 setSavedVersions([]);
                 setActiveResumeId(null);
-                setHasResume(false);
                 setJdText(DEMO_JDS.frontend_eng.text);
                 setTargetCompany("Vercel Systems");
                 setTargetRole("Junior Frontend Engineer");
@@ -5915,7 +5918,7 @@ WORK EXPERIENCE
       {isTailorWizardOpen && (
         <div 
           id="tailor-wizard-modal-backdrop" 
-          className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto animate-fadeIn"
+          className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fadeIn"
           onClick={() => {
             if (!tailorIsAnalyzing) {
               setIsTailorWizardOpen(false);

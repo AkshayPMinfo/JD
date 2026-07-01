@@ -780,6 +780,61 @@ Format your response strictly as JSON with this schema:
   }
 });
 
+/**
+ * Helper to programmatically merge tailored fields back into the original resume.
+ * Guarantees that only the professional summary, skills, and experience/project descriptions
+ * are modified, leaving all education, contact details, layout, order, and styling identical.
+ */
+function mergeAndSanitizeTailoredResume(original: any, tailored: any): any {
+  if (!original) return tailored || {};
+  if (!tailored) return original;
+
+  // Deep copy of original resume as base.
+  const result = JSON.parse(JSON.stringify(original));
+
+  // 1. Overwrite Summary.
+  if (typeof tailored.summary === "string") {
+    result.summary = tailored.summary;
+  }
+
+  // 2. Overwrite Skills (keep original skills and append any newly added skills, filter out duplicates).
+  if (Array.isArray(tailored.skills)) {
+    const originalSkillsLower = (original.skills || []).map((s: string) => s.toLowerCase());
+    const addedSkills = tailored.skills.filter((s: string) => s && !originalSkillsLower.includes(s.toLowerCase()));
+    result.skills = [...(original.skills || []), ...addedSkills];
+  }
+
+  // 3. Merge Work Experience (strictly copy only the description bullet points).
+  if (Array.isArray(original.workExperience)) {
+    result.workExperience = original.workExperience.map((origExp: any, index: number) => {
+      const tailExp = (tailored.workExperience || []).find((e: any) => e && e.id === origExp.id) || tailored.workExperience?.[index];
+      if (tailExp && Array.isArray(tailExp.description)) {
+        return {
+          ...origExp,
+          description: tailExp.description
+        };
+      }
+      return origExp;
+    });
+  }
+
+  // 4. Merge Projects (strictly copy only the description bullet points).
+  if (Array.isArray(original.projects)) {
+    result.projects = original.projects.map((origProj: any, index: number) => {
+      const tailProj = (tailored.projects || []).find((p: any) => p && p.id === origProj.id) || tailored.projects?.[index];
+      if (tailProj && Array.isArray(tailProj.description)) {
+        return {
+          ...origProj,
+          description: tailProj.description
+        };
+      }
+      return origProj;
+    });
+  }
+
+  return result;
+}
+
 // 2. Tailor Resume API
 app.post("/api/tailor-resume", async (req, res) => {
   try {
@@ -980,7 +1035,11 @@ Format your response strictly as JSON matching this schema:
       throw new Error("Failed to receive output text from Gemini API");
     }
 
-    res.json(JSON.parse(resultText.trim()));
+    const parsed = JSON.parse(resultText.trim());
+    if (parsed && parsed.tailoredResume) {
+      parsed.tailoredResume = mergeAndSanitizeTailoredResume(resume, parsed.tailoredResume);
+    }
+    res.json(parsed);
   } catch (error: any) {
     console.error("Error in tailor-resume:", error);
     res.status(500).json({ error: cleanErrorMessage(error) });

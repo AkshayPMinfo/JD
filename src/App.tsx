@@ -6287,8 +6287,7 @@ WORK EXPERIENCE
 
                       <div className="flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-wide">
                         <span className="px-2 py-1 rounded-lg bg-blue-100 border border-blue-300 text-blue-900">Blue: Added skills / keywords</span>
-                        <span className="px-2 py-1 rounded-lg bg-emerald-100 border border-emerald-300 text-emerald-900">Green: Improved bullets</span>
-                        <span className="px-2 py-1 rounded-lg bg-purple-100 border border-purple-300 text-purple-900">Purple: Modified summary</span>
+                        <span className="px-2 py-1 rounded-lg bg-yellow-100 border border-yellow-300 text-yellow-900">Yellow: Modified / Improved content</span>
                       </div>
 
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">

@@ -17,7 +17,7 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
     if (!originalResume) return "";
     
     if (section === "summary") {
-      return originalResume.summary !== resume.summary ? "bg-purple-100 dark:bg-purple-950/45 text-purple-900 dark:text-purple-300 border border-purple-300 dark:border-purple-800 px-1.5 py-0.5 rounded print:bg-transparent print:text-black print:border-none print:p-0" : "";
+      return originalResume.summary !== resume.summary ? "bg-yellow-100 dark:bg-yellow-950/45 text-yellow-900 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-800 px-1.5 py-0.5 rounded print:bg-transparent print:text-black print:border-none print:p-0" : "";
     }
     
     if (section === "skills") {
@@ -27,12 +27,12 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
     
     if (section === "experience-bullet") {
       const allOriginalBullets = (originalResume.workExperience || []).flatMap(exp => exp.description || []).map(b => b.trim().toLowerCase());
-      return !allOriginalBullets.includes(value.trim().toLowerCase()) ? "bg-emerald-100 dark:bg-emerald-950/45 text-emerald-900 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 px-1.5 py-0.5 rounded print:bg-transparent print:text-black print:border-none print:p-0 block" : "";
+      return !allOriginalBullets.includes(value.trim().toLowerCase()) ? "bg-yellow-100 dark:bg-yellow-950/45 text-yellow-900 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-800 px-1.5 py-0.5 rounded print:bg-transparent print:text-black print:border-none print:p-0 block" : "";
     }
     
     if (section === "project-bullet") {
       const allOriginalBullets = (originalResume.projects || []).flatMap(proj => proj.description || []).map(b => b.trim().toLowerCase());
-      return !allOriginalBullets.includes(value.trim().toLowerCase()) ? "bg-emerald-100 dark:bg-emerald-950/45 text-emerald-900 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 px-1.5 py-0.5 rounded print:bg-transparent print:text-black print:border-none print:p-0 block" : "";
+      return !allOriginalBullets.includes(value.trim().toLowerCase()) ? "bg-yellow-100 dark:bg-yellow-950/45 text-yellow-900 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-800 px-1.5 py-0.5 rounded print:bg-transparent print:text-black print:border-none print:p-0 block" : "";
     }
     
     return "";

@@ -47,6 +47,14 @@ type SavedTailoredResumePayload = {
   diffUnchanged?: string[];
 };
 
+type SupabaseDiagnosticResponse = {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  requestId?: string | null;
+  payload?: unknown;
+};
+
 export type SupabaseSession = {
   accessToken: string;
   refreshToken?: string;
@@ -73,6 +81,25 @@ const authHeaders = () => ({
   "Content-Type": "application/json",
 });
 
+const readDiagnosticResponse = async (response: Response): Promise<SupabaseDiagnosticResponse> => {
+  const text = await response.text().catch(() => "");
+  let payload: unknown = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = text;
+    }
+  }
+  return {
+    ok: response.ok,
+    status: response.status,
+    statusText: response.statusText,
+    requestId: response.headers.get("x-request-id") || response.headers.get("cf-ray"),
+    payload,
+  };
+};
+
 const parseAuthResponse = async (
   response: Response,
   options: { allowEmailConfirmation?: boolean } = {}
@@ -89,8 +116,11 @@ const parseAuthResponse = async (
     if (/already registered|already exists|user_already_exists/i.test(message)) {
       throw new Error("An account already exists for this email. Please sign in.");
     }
-    if (/rate limit|too many requests/i.test(message)) {
+    if (response.status === 429 || /rate limit|too many requests|only request this after/i.test(message)) {
       throw new Error("Too many signup attempts. Please wait a few minutes and try again.");
+    }
+    if (/unable to validate email|invalid format/i.test(message)) {
+      throw new Error("Please provide a valid email address.");
     }
     if (/network|fetch failed/i.test(message)) {
       throw new Error("Network connection failed. Please check your connection and try again.");
@@ -144,27 +174,57 @@ export const supabaseAuth = {
     return parseAuthResponse(response);
   },
 
-  async sendPasswordReset(email: string, redirectTo: string): Promise<void> {
+  async sendPasswordReset(email: string, redirectTo: string): Promise<SupabaseDiagnosticResponse> {
     assertSupabaseConfigured();
     const response = await fetch(`${SUPABASE_URL}/auth/v1/recover?redirect_to=${encodeURIComponent(redirectTo)}`, {
       method: "POST",
       headers: authHeaders(),
       body: JSON.stringify({ email }),
+    }).catch(() => {
+      console.error("Supabase Password Reset Network Failure", {
+        email,
+        redirectTo,
+        reason: "fetch_failed",
+      });
+      throw new Error("Email sending failed. Please check your connection and try again.");
+    });
+    const diagnostic = await readDiagnosticResponse(response);
+    console.info("Supabase Password Reset Response", {
+      email,
+      redirectTo,
+      status: diagnostic.status,
+      ok: diagnostic.ok,
+      requestId: diagnostic.requestId,
+      payload: diagnostic.payload,
+      emailDeliveryStatus: "not exposed by Supabase client response",
     });
     if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
+      const payload = (diagnostic.payload || {}) as { error_description?: string; msg?: string; error?: string; error_code?: string; code?: string | number };
       const message = payload.error_description || payload.msg || payload.error || "Could not send password reset email.";
-      if (/rate limit|too many requests/i.test(message)) {
+      console.error("Supabase Password Reset Error", {
+        email,
+        status: diagnostic.status,
+        requestId: diagnostic.requestId,
+        payload: diagnostic.payload,
+      });
+      if (/not found|no user|user_not_found/i.test(message)) {
+        throw new Error("No account was found for this email address.");
+      }
+      if (diagnostic.status === 429 || /rate limit|too many requests/i.test(message)) {
         throw new Error("Too many reset attempts. Please wait a few minutes and try again.");
       }
       if (/invalid/i.test(message)) {
         throw new Error("Please provide a valid email address.");
       }
+      if (/network|fetch failed|failed to fetch/i.test(message)) {
+        throw new Error("Email sending failed. Please check your connection and try again.");
+      }
       throw new Error(message);
     }
+    return diagnostic;
   },
 
-  async updatePassword(accessToken: string, password: string): Promise<void> {
+  async updatePassword(accessToken: string, password: string): Promise<SupabaseDiagnosticResponse> {
     assertSupabaseConfigured();
     const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
       method: "PUT",
@@ -173,10 +233,27 @@ export const supabaseAuth = {
         Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({ password }),
+    }).catch(() => {
+      console.error("Supabase Password Update Network Failure", {
+        reason: "fetch_failed",
+      });
+      throw new Error("Network connection failed. Please check your connection and try again.");
+    });
+    const diagnostic = await readDiagnosticResponse(response);
+    console.info("Supabase Password Update Response", {
+      status: diagnostic.status,
+      ok: diagnostic.ok,
+      requestId: diagnostic.requestId,
+      payload: diagnostic.payload,
     });
     if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
+      const payload = (diagnostic.payload || {}) as { error_description?: string; msg?: string; error?: string };
       const message = payload.error_description || payload.msg || payload.error || "Could not update password.";
+      console.error("Supabase Password Update Error", {
+        status: diagnostic.status,
+        requestId: diagnostic.requestId,
+        payload: diagnostic.payload,
+      });
       if (/expired|invalid|jwt/i.test(message)) {
         throw new Error("This reset link is invalid or expired. Please request a new password reset link.");
       }
@@ -185,6 +262,7 @@ export const supabaseAuth = {
       }
       throw new Error(message);
     }
+    return diagnostic;
   },
 
   async signOut(accessToken?: string): Promise<void> {

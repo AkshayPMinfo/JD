@@ -42,7 +42,9 @@ import {
   Facebook,
   Twitter,
   Linkedin,
-  Image
+  Image,
+  Eye,
+  EyeOff
 } from "lucide-react";
 import {
   ResumeStructure,
@@ -69,24 +71,46 @@ export default function App() {
     if (guest) return JSON.parse(guest);
     const saved = localStorage.getItem("jd_resume_customizer_user");
     if (saved) {
-      const parsed = JSON.parse(saved);
-      if (parsed?.isGuest || parsed?.email === "guest@fresher.io") {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed?.isGuest || parsed?.email === "guest@fresher.io") {
+          localStorage.removeItem("jd_resume_customizer_user");
+          return null;
+        }
+        return parsed;
+      } catch {
         localStorage.removeItem("jd_resume_customizer_user");
-        return null;
       }
-      return parsed;
+    }
+    // Try to restore from Supabase session if user is not set
+    const storedSession = localStorage.getItem(SUPABASE_SESSION_STORAGE_KEY || "jd_resume_customizer_supabase_session");
+    if (storedSession) {
+      try {
+        const session = JSON.parse(storedSession);
+        if (session?.user?.email) {
+          const email = session.user.email;
+          const name = email.split("@")[0];
+          return { email, name };
+        }
+      } catch {}
     }
     return null;
   });
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authConfirmPassword, setAuthConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
   const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [isResetPassword, setIsResetPassword] = useState(false);
   const [resetAccessToken, setResetAccessToken] = useState<string | null>(null);
   const [authMessage, setAuthMessage] = useState<{ type: "success" | "error" | "info"; message: string } | null>(null);
+  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
+  const [resetCooldownSeconds, setResetCooldownSeconds] = useState(0);
   const SUPABASE_SESSION_STORAGE_KEY = "jd_resume_customizer_supabase_session";
+  const PASSWORD_MIN_LENGTH = 8;
+  const PASSWORD_RESET_COOLDOWN_SECONDS = 60;
 
   // Resume Setup
   const [hasResume, setHasResume] = useState<boolean>(() => {
@@ -97,45 +121,29 @@ export default function App() {
   const [activeResume, setActiveResume] = useState<ResumeStructure>(() => {
     const saved = localStorage.getItem("jd_resume_customizer_active_resume");
     if (saved) {
-      const parsed = JSON.parse(saved);
-      if (
-        parsed.fullName === "Akshay Anand" &&
-        (parsed.workExperience?.length === 0 ||
-          parsed.workExperience?.some((w: any) => w.company === "Nexus Digital Agency"))
-      ) {
-        return DEMO_RESUMES.akshay_anand.data;
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return DEMO_RESUMES.software_grad.data;
       }
-      return parsed;
     }
-    return DEMO_RESUMES.akshay_anand.data;
+    return DEMO_RESUMES.software_grad.data;
   });
 
   const [originalResume, setOriginalResume] = useState<ResumeStructure>(() => {
     const saved = localStorage.getItem("jd_resume_customizer_original_resume");
     if (saved) {
-      const parsed = JSON.parse(saved);
-      if (
-        parsed.fullName === "Akshay Anand" &&
-        (parsed.workExperience?.length === 0 ||
-          parsed.workExperience?.some((w: any) => w.company === "Nexus Digital Agency"))
-      ) {
-        return DEMO_RESUMES.akshay_anand.data;
-      }
-      return parsed;
+      try {
+        return JSON.parse(saved);
+      } catch {}
     }
     const savedActive = localStorage.getItem("jd_resume_customizer_active_resume");
     if (savedActive) {
-      const parsed = JSON.parse(savedActive);
-      if (
-        parsed.fullName === "Akshay Anand" &&
-        (parsed.workExperience?.length === 0 ||
-          parsed.workExperience?.some((w: any) => w.company === "Nexus Digital Agency"))
-      ) {
-        return DEMO_RESUMES.akshay_anand.data;
-      }
-      return parsed;
+      try {
+        return JSON.parse(savedActive);
+      } catch {}
     }
-    return DEMO_RESUMES.akshay_anand.data;
+    return DEMO_RESUMES.software_grad.data;
   });
 
   const [uploadedPdfBase64, setUploadedPdfBase64] = useState<string | null>(() => {
@@ -517,6 +525,14 @@ export default function App() {
   }, [activeResume]);
 
   useEffect(() => {
+    if (resetCooldownSeconds <= 0) return;
+    const timer = window.setTimeout(() => {
+      setResetCooldownSeconds((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [resetCooldownSeconds]);
+
+  useEffect(() => {
     localStorage.setItem("jd_resume_customizer_original_resume", JSON.stringify(originalResume));
   }, [originalResume]);
 
@@ -534,7 +550,7 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("jd_resume_customizer_versions", JSON.stringify(savedVersions));
     const session = getStoredSupabaseSession();
-    if (!session?.accessToken || !session.user?.id || !currentUser) return;
+    if (!session?.accessToken || !session.user?.id || !currentUser || currentUser.isGuest) return;
     savedVersions.forEach((version) => {
       supabaseData.upsertTailoredResume(session.accessToken, {
         id: version.id,
@@ -583,7 +599,7 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("jd_resume_customizer_saved_resumes", JSON.stringify(savedUserResumes));
     const session = getStoredSupabaseSession();
-    if (session?.accessToken && session.user?.id && currentUser) {
+    if (session?.accessToken && session.user?.id && currentUser && !currentUser.isGuest) {
       savedUserResumes.forEach((resume) => {
         supabaseData.upsertResume(session.accessToken, {
           id: resume.id,
@@ -642,7 +658,7 @@ export default function App() {
   // Helper: delete a resume by id from the library
   const handleDeleteResumeById = (id: string) => {
     const session = getStoredSupabaseSession();
-    if (session?.accessToken) {
+    if (session?.accessToken && currentUser && !currentUser.isGuest) {
       supabaseData.deleteResume(session.accessToken, id)
         .catch((error) => console.warn("Supabase resume delete failed:", error));
     }
@@ -684,6 +700,7 @@ export default function App() {
   // Auth simulation
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isAuthSubmitting) return;
     setAuthMessage(null);
     const email = authEmail.trim();
     if (isResetPassword) {
@@ -695,10 +712,15 @@ export default function App() {
         setAuthMessage({ type: "error", message: "Password cannot be empty." });
         return;
       }
+      if (authPassword.length < PASSWORD_MIN_LENGTH) {
+        setAuthMessage({ type: "error", message: `Password must be at least ${PASSWORD_MIN_LENGTH} characters.` });
+        return;
+      }
       if (authPassword !== authConfirmPassword) {
         setAuthMessage({ type: "error", message: "Passwords do not match." });
         return;
       }
+      setIsAuthSubmitting(true);
       try {
         await supabaseAuth.updatePassword(resetAccessToken, authPassword);
         setIsResetPassword(false);
@@ -711,7 +733,14 @@ export default function App() {
         showNotification("Password updated successfully. Please sign in.", "success");
       } catch (error: any) {
         setAuthMessage({ type: "error", message: error.message || "Could not update password. Please try again." });
+      } finally {
+        setIsAuthSubmitting(false);
       }
+      return;
+    }
+    if (!email) {
+      setAuthMessage({ type: "error", message: "Email address cannot be empty." });
+      showNotification("Email address cannot be empty.", "error");
       return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -720,13 +749,30 @@ export default function App() {
       return;
     }
     if (isForgotPassword) {
+      if (resetCooldownSeconds > 0) {
+        setAuthMessage({ type: "info", message: `You can request another reset email in ${resetCooldownSeconds} seconds.` });
+        return;
+      }
+      setIsAuthSubmitting(true);
       try {
         const resetUrl = `${window.location.origin}${window.location.pathname}`;
-        await supabaseAuth.sendPasswordReset(email, resetUrl);
-        setAuthMessage({ type: "success", message: "If an account exists for this email, a password reset link has been sent." });
-        showNotification("If an account exists for this email, a password reset link has been sent.", "success");
+        const diagnostic = await supabaseAuth.sendPasswordReset(email, resetUrl);
+        console.info("Password reset request accepted by Supabase", {
+          email,
+          status: diagnostic.status,
+          requestId: diagnostic.requestId,
+        });
+        setResetCooldownSeconds(PASSWORD_RESET_COOLDOWN_SECONDS);
+        setAuthMessage({ type: "success", message: "Password reset link sent. Please check your inbox and spam folder." });
+        showNotification("Password reset link sent. Please check your inbox and spam folder.", "success");
       } catch (error: any) {
+        console.error("Password reset request failed", {
+          email,
+          message: error.message,
+        });
         setAuthMessage({ type: "error", message: error.message || "Could not send reset link. Please try again." });
+      } finally {
+        setIsAuthSubmitting(false);
       }
       return;
     }
@@ -735,11 +781,17 @@ export default function App() {
       showNotification("Password cannot be empty.", "error");
       return;
     }
+    if (isSignUp && authPassword.length < PASSWORD_MIN_LENGTH) {
+      setAuthMessage({ type: "error", message: `Password must be at least ${PASSWORD_MIN_LENGTH} characters.` });
+      showNotification(`Password must be at least ${PASSWORD_MIN_LENGTH} characters.`, "error");
+      return;
+    }
     if (isSignUp && authPassword !== authConfirmPassword) {
       setAuthMessage({ type: "error", message: "Passwords do not match." });
       showNotification("Passwords do not match.", "error");
       return;
     }
+    setIsAuthSubmitting(true);
     try {
       const session = isSignUp
         ? await supabaseAuth.signUp(email, authPassword)
@@ -770,6 +822,8 @@ export default function App() {
       }
       setAuthMessage({ type: "error", message: error.message || "Authentication failed. Please try again." });
       showNotification(error.message || "Authentication failed. Please try again.", "error");
+    } finally {
+      setIsAuthSubmitting(false);
     }
   };
 
@@ -847,7 +901,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || currentUser.isGuest) return;
     const session = getStoredSupabaseSession();
     if (!session?.accessToken || !session.user?.id) return;
     loadPersistedSupabaseData(session);
@@ -1516,7 +1570,7 @@ Keywords: ${(simplifiedJd.keywordsToTarget || []).join(", ")}`;
       });
 
       const storedSession = getStoredSupabaseSession();
-      if (storedSession?.accessToken && storedSession.user?.id) {
+      if (storedSession?.accessToken && storedSession.user?.id && currentUser && !currentUser.isGuest) {
         supabaseData.createJobDescription(storedSession.accessToken, {
           user_id: storedSession.user.id,
           company_name: companyVal,
@@ -1824,6 +1878,9 @@ WORK EXPERIENCE
   };
 
   const handleGuestAccess = async () => {
+    if (isAuthSubmitting) return;
+    setIsAuthSubmitting(true);
+    setAuthMessage(null);
     const name = "Guest Candidate";
     const email = "guest@fresher.io";
     try {
@@ -1837,13 +1894,14 @@ WORK EXPERIENCE
         id: session.user.id,
         full_name: name,
       });
-      await loadPersistedSupabaseData(session);
       const userObj = { email, name, isGuest: true };
       setCurrentUser(userObj);
       setCurrentStep("dashboard");
       showNotification("Continuing as Guest.", "success");
     } catch (error: any) {
       showNotification(error.message || "Guest login failed. Please try again.", "error");
+    } finally {
+      setIsAuthSubmitting(false);
     }
   };
 
@@ -1863,7 +1921,7 @@ WORK EXPERIENCE
   };
 
   // Preset loaders
-  const loadPresetResume = (key: "software_grad" | "marketing_grad" | "akshay_anand") => {
+  const loadPresetResume = (key: "software_grad" | "marketing_grad") => {
     const presetData = DEMO_RESUMES[key].data;
     const label = DEMO_RESUMES[key].label;
     if (isDuplicateResume(label, undefined, presetData)) {
@@ -2365,6 +2423,10 @@ WORK EXPERIENCE
 
   // Save Version and label it by Company and Role
   const handleSaveCurrentVersion = () => {
+    if (currentUser?.isGuest) {
+      showNotification("Please sign in or create an account to save tailored resume versions.", "error");
+      return;
+    }
     if (!targetCompany.trim() || !targetRole.trim()) {
       showNotification("Please set target company and job title labels first.", "error");
       return;
@@ -2396,7 +2458,7 @@ WORK EXPERIENCE
   const handleDeleteVersion = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const session = getStoredSupabaseSession();
-    if (session?.accessToken) {
+    if (session?.accessToken && currentUser && !currentUser.isGuest) {
       supabaseData.deleteTailoredResume(session.accessToken, id)
         .catch((error) => console.warn("Supabase tailored resume delete failed:", error));
     }
@@ -3093,7 +3155,10 @@ WORK EXPERIENCE
               <div className="flex items-center gap-4">
                 <button
                   onClick={handleGuestAccess}
-                  className="bg-neutral-950 text-white font-medium text-xs px-5 py-2.5 rounded-full hover:opacity-90 active:scale-95 duration-200 cursor-pointer"
+                  disabled={isAuthSubmitting}
+                  className={`bg-neutral-950 text-white font-medium text-xs px-5 py-2.5 rounded-full hover:opacity-90 active:scale-95 duration-200 ${
+                    isAuthSubmitting ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                  }`}
                 >
                   Continue as Guest
                 </button>
@@ -3151,7 +3216,10 @@ WORK EXPERIENCE
                     <button
                       id="btn-quick-guest"
                       onClick={handleGuestAccess}
-                      className="w-full py-3.5 bg-black hover:bg-neutral-800 text-white text-sm font-bold rounded-xl transition duration-150 cursor-pointer shadow-md"
+                      disabled={isAuthSubmitting}
+                      className={`w-full py-3.5 bg-black hover:bg-neutral-800 text-white text-sm font-bold rounded-xl transition duration-150 shadow-md ${
+                        isAuthSubmitting ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                      }`}
                     >
                       Continue as Guest
                     </button>
@@ -3164,7 +3232,7 @@ WORK EXPERIENCE
                       <div className="flex-grow border-t border-neutral-300"></div>
                     </div>
    
-                    <form onSubmit={handleAuth} className="space-y-4 text-left">
+                    <form onSubmit={handleAuth} noValidate className="space-y-4 text-left">
                       <h2 className="text-xl font-black text-black tracking-tight">
                         {isResetPassword ? "Reset Password" : isForgotPassword ? "Forgot Password" : isSignUp ? "Create Account" : "Sign In"}
                       </h2>
@@ -3189,19 +3257,29 @@ WORK EXPERIENCE
    
                       {!isForgotPassword && (
                         <div>
-                        <label className="block text-[10px] text-black uppercase font-mono mb-1.5 font-bold">{isResetPassword ? "New Password" : "Password"}</label>
-                        <input
-                          id="input-auth-password"
-                          type="password"
-                          required
-                          placeholder="••••••••"
-                          value={authPassword}
-                          onChange={(e) => {
-                            setAuthPassword(e.target.value);
-                            setAuthMessage(null);
-                          }}
-                          className="w-full pl-3 pr-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
-                        />
+                          <label className="block text-[10px] text-black uppercase font-mono mb-1.5 font-bold">{isResetPassword ? "New Password" : "Password"}</label>
+                          <div className="relative">
+                            <input
+                              id="input-auth-password"
+                              type={showPassword ? "text" : "password"}
+                              required
+                              placeholder="••••••••"
+                              value={authPassword}
+                              onChange={(e) => {
+                                setAuthPassword(e.target.value);
+                                setAuthMessage(null);
+                              }}
+                              className="w-full pl-3 pr-10 py-2 bg-white border border-neutral-300 rounded-lg text-xs text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowPassword(!showPassword)}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-black cursor-pointer flex items-center justify-center p-1 rounded-md"
+                              title={showPassword ? "Hide password" : "Show password"}
+                            >
+                              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            </button>
+                          </div>
                           {!isSignUp && !isResetPassword && (
                             <button
                               id="btn-forgot-password"
@@ -3213,6 +3291,8 @@ WORK EXPERIENCE
                                 setAuthPassword("");
                                 setAuthConfirmPassword("");
                                 setAuthMessage(null);
+                                setShowPassword(false);
+                                setShowConfirmPassword(false);
                               }}
                               className="mt-2 text-[11px] text-black hover:text-neutral-700 underline font-semibold"
                             >
@@ -3225,18 +3305,28 @@ WORK EXPERIENCE
                       {(isSignUp || isResetPassword) && (
                         <div>
                           <label className="block text-[10px] text-black uppercase font-mono mb-1.5 font-bold">Confirm Password</label>
-                          <input
-                            id="input-auth-confirm-password"
-                            type="password"
-                            required
-                            placeholder="••••••••"
-                            value={authConfirmPassword}
-                            onChange={(e) => {
-                              setAuthConfirmPassword(e.target.value);
-                              setAuthMessage(null);
-                            }}
-                            className="w-full pl-3 pr-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
-                          />
+                          <div className="relative">
+                            <input
+                              id="input-auth-confirm-password"
+                              type={showConfirmPassword ? "text" : "password"}
+                              required
+                              placeholder="••••••••"
+                              value={authConfirmPassword}
+                              onChange={(e) => {
+                                setAuthConfirmPassword(e.target.value);
+                                setAuthMessage(null);
+                              }}
+                              className="w-full pl-3 pr-10 py-2 bg-white border border-neutral-300 rounded-lg text-xs text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-500 hover:text-black cursor-pointer flex items-center justify-center p-1 rounded-md"
+                              title={showConfirmPassword ? "Hide password" : "Show password"}
+                            >
+                              {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            </button>
+                          </div>
                         </div>
                       )}
 
@@ -3254,13 +3344,43 @@ WORK EXPERIENCE
                           {authMessage.message}
                         </div>
                       )}
+
+                      {isForgotPassword && resetCooldownSeconds > 0 && (
+                        <div
+                          id="password-reset-cooldown"
+                          className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold leading-relaxed text-amber-800"
+                        >
+                          You can request another reset email in {resetCooldownSeconds} seconds.
+                        </div>
+                      )}
    
                       <button
                         id="btn-auth-submit"
                         type="submit"
-                        className="w-full py-2.5 bg-black hover:bg-neutral-800 text-white text-xs font-semibold rounded-lg transition mt-4 cursor-pointer shadow-md"
+                        disabled={isAuthSubmitting || (isForgotPassword && resetCooldownSeconds > 0)}
+                        className={`w-full py-2.5 text-white text-xs font-semibold rounded-lg transition mt-4 shadow-md ${
+                          isAuthSubmitting || (isForgotPassword && resetCooldownSeconds > 0)
+                            ? "bg-neutral-400 cursor-not-allowed"
+                            : "bg-black hover:bg-neutral-800 cursor-pointer"
+                        }`}
                       >
-                        {isResetPassword ? "Update Password" : isForgotPassword ? "Send Reset Link" : isSignUp ? "Create Account" : "Sign In"}
+                        {isAuthSubmitting
+                          ? isResetPassword
+                            ? "Updating Password..."
+                            : isForgotPassword
+                              ? "Sending Reset Link..."
+                              : isSignUp
+                                ? "Creating Account..."
+                                : "Signing In..."
+                          : isResetPassword
+                            ? "Update Password"
+                            : isForgotPassword
+                              ? resetCooldownSeconds > 0
+                                ? `Wait ${resetCooldownSeconds}s`
+                                : "Send Reset Link"
+                              : isSignUp
+                                ? "Create Account"
+                                : "Sign In"}
                       </button>
    
                       <div className="text-center mt-3">
@@ -3605,15 +3725,43 @@ WORK EXPERIENCE
                     // Local sign-out should still continue even if remote sign-out fails.
                   }
                 }
+                // Clear all local storage and session storage
                 localStorage.removeItem(SUPABASE_SESSION_STORAGE_KEY);
                 sessionStorage.removeItem("jd_resume_customizer_guest_user");
+                localStorage.removeItem("jd_resume_customizer_user");
+                localStorage.removeItem("jd_resume_customizer_active_resume");
+                localStorage.removeItem("jd_resume_customizer_original_resume");
+                localStorage.removeItem("jd_resume_customizer_saved_resumes");
+                localStorage.removeItem("jd_resume_customizer_versions");
+                localStorage.removeItem("jd_resume_customizer_jd");
+                localStorage.removeItem("jd_resume_customizer_active_resume_id");
+                localStorage.removeItem("jd_resume_customizer_has_resume");
+                sessionStorage.removeItem("auralis_platform_unlocked");
+                sessionStorage.removeItem("auralis_onboarding_dismissed");
+                localStorage.removeItem("jd_resume_customizer_onboarding_done");
+
+                // Reset all states
                 setCurrentUser(null);
                 setCurrentStep("auth");
                 setIsUnlocked(false);
                 setOnboardingChoice(null);
-                sessionStorage.removeItem("auralis_platform_unlocked");
-                sessionStorage.removeItem("auralis_onboarding_dismissed");
-                localStorage.removeItem("jd_resume_customizer_onboarding_done");
+                setActiveResume(DEMO_RESUMES.software_grad.data);
+                setOriginalResume(DEMO_RESUMES.software_grad.data);
+                setSavedUserResumes([]);
+                setSavedVersions([]);
+                setActiveResumeId(null);
+                setHasResume(false);
+                setJdText(DEMO_JDS.frontend_eng.text);
+                setTargetCompany("Vercel Systems");
+                setTargetRole("Junior Frontend Engineer");
+                setAuthEmail("");
+                setAuthPassword("");
+                setAuthConfirmPassword("");
+                setAuthMessage(null);
+                setNotifications([]);
+                setShowPassword(false);
+                setShowConfirmPassword(false);
+
                 showNotification("Logged out securely.", "info");
               }}
               className="bg-white hover:bg-neutral-50 text-black font-bold text-xs px-4 py-2.5 rounded-xl border-2 border-black transition duration-150 cursor-pointer shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
@@ -3826,10 +3974,10 @@ WORK EXPERIENCE
                     <button
                       id="onboarding-skip-btn"
                       onClick={() => {
+                        loadPresetResume("software_grad");
                         setOnboardingChoice("done");
                         sessionStorage.setItem("auralis_onboarding_dismissed", "true");
                         localStorage.setItem("jd_resume_customizer_onboarding_done", "true");
-                        showNotification("Loaded demo software resume template.", "info");
                       }}
                       className="text-xs text-neutral-500 hover:text-neutral-900 dark:hover:text-white transition underline cursor-pointer"
                     >
@@ -6557,7 +6705,7 @@ WORK EXPERIENCE
                 onClick={() => {
                   if (versionToDeleteId) {
                     const session = getStoredSupabaseSession();
-                    if (session?.accessToken) {
+                    if (session?.accessToken && currentUser && !currentUser.isGuest) {
                       supabaseData.deleteTailoredResume(session.accessToken, versionToDeleteId)
                         .catch((error) => console.warn("Supabase tailored resume delete failed:", error));
                     }

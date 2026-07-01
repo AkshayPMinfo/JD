@@ -202,7 +202,7 @@ export default function App() {
   const [atsResult, setAtsResult] = useState<ATSCheckResult | null>(null);
 
   // UI Customizations
-  const [selectedStyle, setSelectedStyle] = useState<"classic" | "tech" | "executive" | "two-column">("tech");
+  const [selectedStyle, setSelectedStyle] = useState<"classic" | "tech" | "executive" | "two-column">("classic");
   const [savedVersions, setSavedVersions] = useState<SavedResumeVersion[]>(() => {
     const saved = localStorage.getItem("jd_resume_customizer_versions");
     try { return saved ? JSON.parse(saved) : []; } catch { return []; }
@@ -1004,7 +1004,10 @@ export default function App() {
     setTailorJdFileBase64(null);
     setTailorJdFileName(null);
     setTailorJdFileType(null);
-    if (existingResumes.length > 0) {
+    const activeExists = existingResumes.some(r => r.key === activeResumeId);
+    if (activeExists && activeResumeId) {
+      setTailorSelectedResumeKey(activeResumeId);
+    } else if (existingResumes.length > 0) {
       setTailorSelectedResumeKey(existingResumes[0].key);
     } else {
       setTailorSelectedResumeKey("active");

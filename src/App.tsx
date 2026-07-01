@@ -6299,7 +6299,8 @@ WORK EXPERIENCE
                             <div className="bg-black text-white px-4 py-2 text-xs font-black uppercase tracking-wider font-mono">{panel.title}</div>
                             <div className="p-4 bg-neutral-50 border-t border-black">
                               {panel.side === "original" ? (() => {
-                                const savedOriginal = savedUserResumes.find(r => r.id === tailorSelectedResumeKey);
+                                const resolvedId = tailorSelectedResumeKey === "active" ? activeResumeId : tailorSelectedResumeKey;
+                                const savedOriginal = savedUserResumes.find(r => r.id === resolvedId);
                                 const isPdf = savedOriginal?.fileType === 'pdf' || !!savedOriginal?.pdfBase64;
                                 const base64Data = savedOriginal?.fileBase64 || savedOriginal?.pdfBase64;
                                 
@@ -6310,6 +6311,18 @@ WORK EXPERIENCE
                                       className="w-full h-full min-h-[550px] border border-neutral-300 rounded-lg bg-white"
                                       title="Original Uploaded Resume"
                                     />
+                                  );
+                                }
+                                if (savedOriginal?.fileType === 'docx' || (base64Data && !isPdf)) {
+                                  return (
+                                    <div className="w-full h-full min-h-[550px] border border-neutral-300 rounded-lg bg-neutral-100 flex flex-col items-center justify-center p-8 text-center">
+                                      <div className="text-4xl mb-4">📄</div>
+                                      <h3 className="text-lg font-bold text-neutral-800 mb-2">Original Document</h3>
+                                      <p className="text-sm text-neutral-600">
+                                        Native preview for this file format is not supported by the browser. 
+                                        Your original document structure is preserved under the hood.
+                                      </p>
+                                    </div>
                                   );
                                 }
                                 return (

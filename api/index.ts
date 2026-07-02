@@ -116,6 +116,7 @@ Rules:
    - REJECT (isResume: false) documents that are: reports, brochures, articles, presentations, meeting notes, invoices, recipes, cover letters, random text, or general biographies.
    - If the document is NOT a resume (isResume: false), explain why in the "reason" field and return empty/null for detectedProfile.
 7. ABSOLUTE FIDELITY: You must extract EVERY section, EVERY work experience, EVERY project, EVERY educational degree, EVERY certification, EVERY language, and EVERY single bullet point or description line. Do NOT summarize, truncate, shorten, rewrite, or simplify any descriptions. Keep all sentences, bullets, dates, names, achievements, and technical details EXACTLY as they are written in the original raw text. The parsed profile must be a 100% complete factual mirror of the candidate's uploaded resume.
+8. NO PARSER OR DEBUG HEADINGS: Do NOT extract or include page numbers, parser-generated headers, internal labels, metadata, or document headings (e.g., "Experience Record", "Candidate Profile", "Timeline", "Professional Skills", "Page 1 of 2", "Header", "Footer") as content inside any field (such as job roles, company names, summary, bullet points, skills, or achievements). Filter these out completely.
 
 Raw Resume Text:
 """
@@ -526,7 +527,7 @@ function heuristicResumeValidation(cleanText: string, fileName: string, original
     isResume: true,
     confidenceScore: 40,
     reason: `Parsed heuristically (Gemini temporarily unavailable: ${originalError?.message || 'unknown'}). Resume sections detected: ${indicators.join(', ')}.`,
-    detectedProfile: {
+    detectedProfile: sanitizeResumeTextFields({
       fullName,
       email,
       phone,
@@ -541,9 +542,105 @@ function heuristicResumeValidation(cleanText: string, fileName: string, original
       skills: skills.length > 0 ? [...new Set(skills)] : [],
       languages,
       achievements
-    },
+    }),
     indicators
   };
+}
+
+function sanitizeResumeTextFields(resume: any): any {
+  if (!resume) return resume;
+
+  const debugTerms = [
+    /^\s*experience\s+record\s*$/i,
+    /^\s*candidate\s+profile\s*$/i,
+    /^\s*timeline\s*$/i,
+    /^\s*professional\s+skills\s*$/i,
+    /^\s*parser-generated\s*$/i,
+    /^\s*internal\s+label\s*$/i,
+    /^\s*page\s+\d+\s*(of\s*\d+)?\s*$/i
+  ];
+
+  const shouldStrip = (val: string) => {
+    if (typeof val !== "string") return false;
+    const clean = val.trim();
+    if (!clean) return true;
+    return debugTerms.some(regex => regex.test(clean));
+  };
+
+  // Sanitize name, email, phone
+  if (typeof resume.fullName === "string" && shouldStrip(resume.fullName)) resume.fullName = "";
+  if (typeof resume.email === "string" && shouldStrip(resume.email)) resume.email = "";
+  if (typeof resume.phone === "string" && shouldStrip(resume.phone)) resume.phone = "";
+  if (typeof resume.summary === "string") {
+    if (shouldStrip(resume.summary)) {
+      resume.summary = "";
+    } else {
+      resume.summary = resume.summary
+        .replace(/\b(Experience Record|Candidate Profile|Timeline|Professional Skills)\b/gi, "")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+  }
+
+  // Sanitize work experience
+  if (Array.isArray(resume.workExperience)) {
+    resume.workExperience = resume.workExperience
+      .map((exp: any) => {
+        if (!exp) return null;
+        const role = shouldStrip(exp.role) ? "" : exp.role;
+        const company = shouldStrip(exp.company) ? "" : exp.company;
+        const duration = shouldStrip(exp.duration) ? "" : exp.duration;
+        let description = exp.description;
+        if (Array.isArray(description)) {
+          description = description
+            .filter((bullet: any) => typeof bullet === "string" && !shouldStrip(bullet))
+            .map((bullet: string) => bullet.replace(/\b(Experience Record|Candidate Profile|Timeline|Professional Skills)\b/gi, "").trim());
+        }
+        return { ...exp, role, company, duration, description };
+      })
+      .filter((exp: any) => exp && (exp.role || exp.company || (exp.description && exp.description.length > 0)));
+  }
+
+  // Sanitize projects
+  if (Array.isArray(resume.projects)) {
+    resume.projects = resume.projects
+      .map((proj: any) => {
+        if (!proj) return null;
+        const name = shouldStrip(proj.name) ? "" : proj.name;
+        const duration = shouldStrip(proj.duration) ? "" : proj.duration;
+        let description = proj.description;
+        if (Array.isArray(description)) {
+          description = description
+            .filter((bullet: any) => typeof bullet === "string" && !shouldStrip(bullet))
+            .map((bullet: string) => bullet.replace(/\b(Experience Record|Candidate Profile|Timeline|Professional Skills)\b/gi, "").trim());
+        }
+        return { ...proj, name, duration, description };
+      })
+      .filter((proj: any) => proj && (proj.name || (proj.description && proj.description.length > 0)));
+  }
+
+  // Sanitize skills
+  if (Array.isArray(resume.skills)) {
+    resume.skills = resume.skills
+      .filter((skill: any) => typeof skill === "string" && !shouldStrip(skill))
+      .map((skill: string) => skill.trim());
+  }
+
+  // Sanitize certifications
+  if (Array.isArray(resume.certifications)) {
+    resume.certifications = resume.certifications
+      .filter((cert: any) => typeof cert === "string" && !shouldStrip(cert))
+      .map((cert: string) => cert.trim());
+  }
+
+  // Sanitize achievements
+  if (Array.isArray(resume.achievements)) {
+    resume.achievements = resume.achievements
+      .filter((ach: any) => typeof ach === "string" && !shouldStrip(ach))
+      .map((ach: string) => ach.trim());
+  }
+
+  return resume;
 }
 
 async function generateContentWithRetry(ai: GoogleGenAI, options: any, maxRetries = 2): Promise<any> {
@@ -872,6 +969,8 @@ Instructions:
 8. IMPORTANT - DATA INTEGRITY: You MUST process and include ALL work experiences, projects, education history, certifications, languages, achievements, and skills from the original resume in the output tailoredResume. Do not truncate, omit, or ignore any jobs, projects, certifications, languages, achievements, or education entries. If there are 3 work experiences, you must return all 3. If there are projects, return them all. If certifications are present, return them all. If the original resume has no projects or certifications, return an empty array [] for these fields.
 9. IMPORTANT - NO PLACEHOLDERS: Do NOT output placeholders like "Present", "Unknown Institution", "Unknown Degree", "Undefined", or null fields. If a date, school name, or degree is already defined, keep it exactly as-is. Do not invent details.
 10. STRICT DATA PRESERVATION: You MUST preserve the candidate's original factual details exactly (including names, locations, contact info, companies, job titles, dates, schools, degrees, GPAs, project names, certification names, languages, achievements, and layout/ordering). Do NOT replace them with generic or placeholder content (e.g. "Professional @ Various Companies", "Academic Portfolio", "High School Diploma / Degree"). You may ONLY customize/improve the experience/project description bullet points, rewrite the professional summary narrative, and append relevant matching skills to the skills array. All other fields must remain identical.
+11. NO PARSER OR DEBUG HEADINGS: Do NOT introduce or preserve parser-generated headers, internal labels, metadata, or debug headings (such as "Experience Record", "Candidate Profile", "Timeline", "Professional Skills", "Page 1", "Header", "Footer") in any field of the tailored resume. All sections must remain structured according to the schema.
+12. PRESERVE ORIGINAL SECTION STRUCTURE: Do NOT invent new section names or replace existing ones with generic labels. The section headings in the output must only be the valid schema fields (workExperience, education, projects, skills, certifications, achievements, languages, summary).
 
 Format your response strictly as JSON matching this schema:
 {
@@ -1044,6 +1143,7 @@ Format your response strictly as JSON matching this schema:
     const parsed = JSON.parse(resultText.trim());
     if (parsed && parsed.tailoredResume) {
       parsed.tailoredResume = mergeAndSanitizeTailoredResume(resume, parsed.tailoredResume);
+      parsed.tailoredResume = sanitizeResumeTextFields(parsed.tailoredResume);
     }
     res.json(parsed);
   } catch (error: any) {
@@ -1197,6 +1297,9 @@ app.post("/api/analyze-uploaded-resume", async (req, res) => {
     }
 
     const validationResult = await parseResumeWithGemini(extractedText, fileName);
+    if (validationResult && validationResult.detectedProfile) {
+      validationResult.detectedProfile = sanitizeResumeTextFields(validationResult.detectedProfile);
+    }
     
     // Double-guard: enforce strict rules-based validation on the extracted text.
     const strictValidation = checkTextAgainstStrictResumeCriteria(extractedText);

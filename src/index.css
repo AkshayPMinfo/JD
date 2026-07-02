@@ -17,8 +17,13 @@
   }
 }
 
-/* Custom print style */
+.print-container-display {
+  display: none !important;
+}
 @media print {
+  .print-container-display {
+    display: block !important;
+  }
   body {
     background-color: white !important;
     color: black !important;
@@ -27,7 +32,7 @@
   body > div:not(#root) {
     display: none !important;
   }
-  #root > :not(.print-container) {
+  #root > div > *:not(.print-container) {
     display: none !important;
   }
   .print-container {

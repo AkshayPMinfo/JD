@@ -5184,7 +5184,7 @@ WORK EXPERIENCE
       )}
 
       {currentStep !== "auth" && (
-        <div className="hidden print:block print-container">
+        <div className="print-container-display print-container">
           <ResumePreview
             resume={printResume || activeResume}
             templateStyle={selectedStyle}

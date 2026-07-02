@@ -3341,7 +3341,7 @@ WORK EXPERIENCE
       {/* Collapsible Left Sidebar */}
       <aside 
         id="sidebar-menu"
-        className={`flex flex-col justify-between border-r-2 border-black bg-white transition-all duration-300 z-30 h-fit self-start relative flex-shrink-0 ${
+        className={`flex flex-col border-r-2 border-black bg-white transition-all duration-300 z-30 h-screen relative flex-shrink-0 ${
           isSidebarCollapsed ? "w-20" : "w-64"
         }`}
       >
@@ -3408,7 +3408,7 @@ WORK EXPERIENCE
         </div>
 
         {/* Persona identifier block */}
-        <div className="p-4 border-t-2 border-black bg-white">
+        <div className="p-4 border-t-2 border-black bg-white mt-auto">
           <div className="flex items-center gap-3 overflow-hidden">
             <div className="w-8 h-8 rounded-full bg-black border-2 border-black flex items-center justify-center text-white text-xs font-black flex-shrink-0">
               {currentUser?.name.charAt(0).toUpperCase()}

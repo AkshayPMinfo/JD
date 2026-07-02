@@ -89,28 +89,104 @@ function normalizeWhitespace(text: string): string {
 async function extractTextFromPdfProxy(pdfData: any): Promise<string> {
   const numPages = pdfData.numPages;
   let fullText = '';
-  for (let i = 1; i <= numPages; i++) {
-    const page = await pdfData.getPage(i);
+
+  for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+    const page = await pdfData.getPage(pageNum);
     const textContent = await page.getTextContent();
-    let pageText = '';
-    let lastY: number | null = null;
-    for (const item of textContent.items as any[]) {
-      const y = item.transform?.[5];
-      const str = item.str || "";
-      if (lastY !== null && y !== undefined && Math.abs(y - lastY) > 5) {
-        pageText += '\n';
-      } else if (item.hasEOL) {
-        pageText += '\n';
+    const items = textContent.items as any[];
+
+    if (items.length === 0) continue;
+
+    // ── Collect (x, y, str) for every non-empty item ────────────────────────
+    type TextItem = { x: number; y: number; str: string; hasEOL: boolean };
+    const allItems: TextItem[] = items
+      .map((item: any) => ({
+        x: item.transform?.[4] ?? 0,
+        y: item.transform?.[5] ?? 0,
+        str: (item.str || '').trim(),
+        hasEOL: !!item.hasEOL
+      }))
+      .filter(item => item.str.length > 0);
+
+    if (allItems.length === 0) continue;
+
+    // ── Detect column boundary via X-coordinate gap analysis ─────────────────
+    // Sort unique X values and look for the largest gap.
+    const xValues = [...new Set(allItems.map(it => Math.round(it.x)))].sort((a, b) => a - b);
+    const pageWidth = xValues[xValues.length - 1] - xValues[0];
+
+    let splitX: number | null = null;
+    if (xValues.length >= 4 && pageWidth > 100) {
+      // Find the largest gap between consecutive X clusters
+      let maxGap = 0;
+      let maxGapIdx = -1;
+      for (let i = 1; i < xValues.length; i++) {
+        const gap = xValues[i] - xValues[i - 1];
+        if (gap > maxGap) { maxGap = gap; maxGapIdx = i; }
       }
-      pageText += str + ' ';
-      if (y !== undefined) {
-        lastY = y;
+      // Only treat as two-column if the gap is at least 15% of page width
+      // AND the split point falls between 20% and 80% of the page (not near edges)
+      if (maxGap > pageWidth * 0.15 && maxGapIdx > 0) {
+        const candidateSplit = (xValues[maxGapIdx - 1] + xValues[maxGapIdx]) / 2;
+        const relPos = (candidateSplit - xValues[0]) / pageWidth;
+        if (relPos >= 0.2 && relPos <= 0.8) {
+          // Also verify both sides have meaningful content (at least 5% of items each)
+          const leftCount = allItems.filter(it => it.x <= candidateSplit).length;
+          const rightCount = allItems.filter(it => it.x > candidateSplit).length;
+          const minCount = allItems.length * 0.05;
+          if (leftCount >= minCount && rightCount >= minCount) {
+            splitX = candidateSplit;
+          }
+        }
       }
     }
-    fullText += (fullText ? "\n\n" : "") + pageText;
+
+    let pageText = '';
+
+    if (splitX !== null) {
+      // ── Two-column mode: emit left column, then right column ─────────────
+      const leftItems  = allItems.filter(it => it.x <= splitX).sort((a, b) => b.y - a.y || a.x - b.x);
+      const rightItems = allItems.filter(it => it.x >  splitX).sort((a, b) => b.y - a.y || a.x - b.x);
+
+      const renderColumn = (colItems: TextItem[]): string => {
+        let text = '';
+        let lastY: number | null = null;
+        for (const item of colItems) {
+          if (lastY !== null && Math.abs(item.y - lastY) > 5) {
+            text += '\n';
+          } else if (text.length > 0 && !text.endsWith(' ') && !text.endsWith('\n')) {
+            text += ' ';
+          }
+          text += item.str;
+          lastY = item.y;
+        }
+        return text.trim();
+      };
+
+      const leftText  = renderColumn(leftItems);
+      const rightText = renderColumn(rightItems);
+      pageText = leftText + (rightText ? '\n\n' + rightText : '');
+    } else {
+      // ── Single-column fallback: original Y-based logic ───────────────────
+      const sorted = allItems.sort((a, b) => b.y - a.y || a.x - b.x);
+      let lastY: number | null = null;
+      for (const item of sorted) {
+        if (lastY !== null && Math.abs(item.y - lastY) > 5) {
+          pageText += '\n';
+        } else if (pageText.length > 0 && !pageText.endsWith(' ') && !pageText.endsWith('\n')) {
+          pageText += ' ';
+        }
+        pageText += item.str;
+        lastY = item.y;
+      }
+    }
+
+    fullText += (fullText ? '\n\n' : '') + pageText;
   }
+
   return fullText;
 }
+
 
 function detectUploadedResumeType(fileName = "", fileType = ""): "pdf" | "docx" | null {
   const lowerName = fileName.toLowerCase();

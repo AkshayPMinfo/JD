@@ -54,14 +54,30 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
     return "bg-[#BAE6FD] px-1.5 py-0.5 rounded"; // New
   };
 
+  /**
+   * Renders a bullet/summary with word-level diff highlights.
+   * - Entirely new text → solid blue highlight (#BAE6FD)
+   * - Modified text (similarity ≥ 0.2) → yellow for added words, plain for unchanged
+   * - print:bg-transparent strips all highlights for PDF/print export
+   */
   const renderInlineDiff = (value: string, originalCandidates: string[]) => {
-    if (!originalResume || !originalCandidates || originalCandidates.length === 0) {
+    if (!originalResume) {
+      // No diff context — render plain
+      return <>{value}</>;
+    }
+    if (!originalCandidates || originalCandidates.length === 0) {
+      // Brand-new bullet (not in original at all) → full blue
       return <span className="bg-[#BAE6FD] print:bg-transparent">{value}</span>;
     }
 
     const { match, similarity } = findBestMatch(value, originalCandidates);
-    if (similarity < 0.2 || !match) {
+    if (similarity < 0.15 || !match) {
+      // Very low similarity → treat as entirely new
       return <span className="bg-[#BAE6FD] print:bg-transparent">{value}</span>;
+    }
+    if (similarity >= 0.99) {
+      // Effectively identical → no highlight
+      return <>{value}</>;
     }
 
     const changes = diffWords(match, value);
@@ -328,7 +344,9 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
             <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-2 print:text-black">
               // SUMMARY
             </h2>
-            <p className={`text-xs leading-relaxed text-gray-300 print:text-gray-800 ${getHighlightStyle("summary", summary)}`}>{summary}</p>
+            <p className="text-xs leading-relaxed text-gray-300 print:text-gray-800">
+              {renderInlineDiff(summary, originalResume ? [originalResume.summary] : [])}
+            </p>
           </div>
         )}
 
@@ -367,12 +385,16 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                     <span className="text-xs text-gray-500 print:text-gray-600 font-semibold">{exp.duration}</span>
                   </div>
                   <ul className="list-none space-y-1.5 mt-2">
-                    {exp.description.map((bullet, idx) => (
-                      <li key={idx} className={`text-xs text-gray-300 leading-relaxed print:text-gray-800 flex items-start gap-1 ${getHighlightStyle("experience-bullet", bullet)}`}>
-                        <span className="text-green-500 select-none">-</span>
-                        <span>{bullet}</span>
-                      </li>
-                    ))}
+                    {exp.description.map((bullet, idx) => {
+                      const origBullets = originalResume?.workExperience?.find(e => e.id === exp.id)?.description
+                        ?? (originalResume?.workExperience || []).flatMap(e => e.description);
+                      return (
+                        <li key={idx} className="text-xs text-gray-300 leading-relaxed print:text-gray-800 flex items-start gap-1">
+                          <span className="text-green-500 select-none">-</span>
+                          <span>{renderInlineDiff(bullet, origBullets)}</span>
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               ))}
@@ -393,12 +415,16 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                     {proj.name}
                   </h3>
                   <ul className="list-none space-y-1.5 mt-2">
-                    {proj.description.map((bullet, idx) => (
-                      <li key={idx} className={`text-xs text-gray-300 leading-relaxed print:text-gray-800 flex items-start gap-1 ${getHighlightStyle("project-bullet", bullet)}`}>
-                        <span className="text-green-500 select-none">-</span>
-                        <span>{bullet}</span>
-                      </li>
-                    ))}
+                    {proj.description.map((bullet, idx) => {
+                      const origBullets = originalResume?.projects?.find(p => p.id === proj.id)?.description
+                        ?? (originalResume?.projects || []).flatMap(p => p.description);
+                      return (
+                        <li key={idx} className="text-xs text-gray-300 leading-relaxed print:text-gray-800 flex items-start gap-1">
+                          <span className="text-green-500 select-none">-</span>
+                          <span>{renderInlineDiff(bullet, origBullets)}</span>
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               ))}
@@ -522,7 +548,9 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
             <h2 className="text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-2 print:text-black">
               Executive Summary
             </h2>
-            <p className={`text-xs leading-relaxed text-gray-700 font-normal ${getHighlightStyle("summary", summary)}`}>{summary}</p>
+            <p className="text-xs leading-relaxed text-gray-700 font-normal">
+              {renderInlineDiff(summary, originalResume ? [originalResume.summary] : [])}
+            </p>
           </div>
         )}
 
@@ -561,11 +589,15 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                     <span className="text-xs text-gray-500 font-normal">{exp.duration}</span>
                   </div>
                   <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed">
-                    {exp.description.map((bullet, idx) => (
-                      <li key={idx} className={getHighlightStyle("experience-bullet", bullet)}>
-                        <span className="text-gray-700">{bullet}</span>
-                      </li>
-                    ))}
+                    {exp.description.map((bullet, idx) => {
+                      const origBullets = originalResume?.workExperience?.find(e => e.id === exp.id)?.description
+                        ?? (originalResume?.workExperience || []).flatMap(e => e.description);
+                      return (
+                        <li key={idx}>
+                          <span className="text-gray-700">{renderInlineDiff(bullet, origBullets)}</span>
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               ))}
@@ -584,11 +616,15 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                 <div key={proj.id}>
                   <h3 className="text-sm font-bold text-[#111827]">{proj.name}</h3>
                   <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed">
-                    {proj.description.map((bullet, idx) => (
-                      <li key={idx} className={getHighlightStyle("project-bullet", bullet)}>
-                        <span className="text-gray-700">{bullet}</span>
-                      </li>
-                    ))}
+                    {proj.description.map((bullet, idx) => {
+                      const origBullets = originalResume?.projects?.find(p => p.id === proj.id)?.description
+                        ?? (originalResume?.projects || []).flatMap(p => p.description);
+                      return (
+                        <li key={idx}>
+                          <span className="text-gray-700">{renderInlineDiff(bullet, origBullets)}</span>
+                        </li>
+                      );
+                    })}
                   </ul>
                 </div>
               ))}
@@ -695,7 +731,9 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
           <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-2 border-b border-gray-300 pb-0.5">
             Professional Summary
           </h2>
-          <p className={`text-xs leading-relaxed text-gray-700 ${getHighlightStyle("summary", summary)}`}>{summary}</p>
+          <p className="text-xs leading-relaxed text-gray-700">
+            {renderInlineDiff(summary, originalResume ? [originalResume.summary] : [])}
+          </p>
         </div>
       )}
 
@@ -715,11 +753,15 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
                   <span className="text-gray-500 font-normal">{exp.duration}</span>
                 </div>
                 <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed">
-                  {exp.description.map((bullet, idx) => (
-                    <li key={idx} className={getHighlightStyle("experience-bullet", bullet)}>
-                      <span className="text-gray-700 font-normal">{bullet}</span>
-                    </li>
-                  ))}
+                  {exp.description.map((bullet, idx) => {
+                    const origBullets = originalResume?.workExperience?.find(e => e.id === exp.id)?.description
+                      ?? (originalResume?.workExperience || []).flatMap(e => e.description);
+                    return (
+                      <li key={idx}>
+                        <span className="text-gray-700 font-normal">{renderInlineDiff(bullet, origBullets)}</span>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             ))}
@@ -738,11 +780,15 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
               <div key={proj.id}>
                 <div className="font-semibold text-gray-900 text-sm">{proj.name}</div>
                 <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed">
-                  {proj.description.map((bullet, idx) => (
-                    <li key={idx} className={getHighlightStyle("project-bullet", bullet)}>
-                      <span className="text-gray-700 font-normal">{bullet}</span>
-                    </li>
-                  ))}
+                  {proj.description.map((bullet, idx) => {
+                    const origBullets = originalResume?.projects?.find(p => p.id === proj.id)?.description
+                      ?? (originalResume?.projects || []).flatMap(p => p.description);
+                    return (
+                      <li key={idx}>
+                        <span className="text-gray-700 font-normal">{renderInlineDiff(bullet, origBullets)}</span>
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             ))}

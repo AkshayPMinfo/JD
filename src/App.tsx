@@ -58,6 +58,8 @@ import {
   TailoredResume
 } from "./types";
 import { resumeStructureToResume, mergeResumeWithAdditions } from "./utils/resumeConverter";
+import { jsPDF } from "jspdf";
+import html2canvas from "html2canvas";
 import { DEMO_RESUMES, DEMO_JDS } from "./demoData";
 import ResumePreview from "./components/ResumePreview";
 import { supabaseAuth, supabaseData } from "./lib/supabase";
@@ -2697,15 +2699,72 @@ WORK EXPERIENCE
       setPrintOriginalResume(original);
       setPrintTailoredResult(tailored || null);
       
-      // Let React update the hidden print container DOM with printResume, then trigger print dialog
-      setTimeout(() => {
-        window.print();
-        logDownloadEvent("Download Completed", { type: "PDF" });
-        showNotification("PDF print dialog opened successfully.", "success");
-      }, 150);
+      showNotification("Generating PDF file...", "info");
+
+      // Wait for React to render the print preview container into DOM
+      setTimeout(async () => {
+        try {
+          const element = document.getElementById("resume-preview-sheet-print");
+          if (!element) {
+            throw new Error("Print layout container not found in DOM");
+          }
+
+          // Clone the element to render off-screen cleanly
+          const clone = element.cloneNode(true) as HTMLElement;
+          clone.style.position = "fixed";
+          clone.style.left = "-9999px";
+          clone.style.top = "0";
+          clone.style.width = "820px"; // standard Letter/A4 page layout width for resume
+          clone.style.display = "block";
+          clone.style.background = "white";
+          clone.style.zIndex = "-9999";
+          
+          document.body.appendChild(clone);
+
+          // Force-show images or icons if any (wait 100ms for browser layout recalculation)
+          await new Promise((resolve) => setTimeout(resolve, 100));
+
+          const canvas = await html2canvas(clone, {
+            scale: 2, // High DPI print resolution
+            useCORS: true,
+            logging: false,
+            backgroundColor: "#ffffff"
+          });
+
+          document.body.removeChild(clone);
+
+          const imgData = canvas.toDataURL("image/png");
+          const pdf = new jsPDF("p", "mm", "a4");
+          const imgWidth = 210; // A4 width in mm
+          const pageHeight = 297; // A4 height in mm
+          const imgHeight = (canvas.height * imgWidth) / canvas.width;
+          
+          let heightLeft = imgHeight;
+          let position = 0;
+
+          pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
+          heightLeft -= pageHeight;
+
+          while (heightLeft >= 0) {
+            position = heightLeft - imgHeight;
+            pdf.addPage();
+            pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
+            heightLeft -= pageHeight;
+          }
+
+          const filename = `${resume.fullName.replace(/\s+/g, "_")}_Tailored_Resume.pdf`;
+          pdf.save(filename);
+
+          logDownloadEvent("Download Completed", { type: "PDF" });
+          showNotification("PDF downloaded successfully.", "success");
+        } catch (genError: any) {
+          console.error("PDF canvas generation failed:", genError);
+          showNotification("Failed to generate PDF file.", "error");
+        }
+      }, 300);
     } catch (error: any) {
       console.error("PDF Print failed:", error);
-      showNotification("Failed to trigger print/save dialog.", "error");
+      showNotification("Failed to generate PDF.", "error");
     }
   };
 

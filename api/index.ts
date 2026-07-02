@@ -9,7 +9,7 @@ import {
   rulesBasedSimplifyJd,
   rulesBasedTailorResume,
   rulesBasedAtsAudit
-} from "./rulesEngine";
+} from "./rulesEngine.js";
 
 dotenv.config();
 dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });

@@ -1637,18 +1637,7 @@ export default function App() {
           return updated;
         });
 
-        // Save to DB if logged in
-        const storedSession = getStoredSupabaseSession();
-        if (storedSession?.accessToken && storedSession.user?.id) {
-          supabaseData.saveTailoredResume(storedSession.accessToken, {
-            user_id: storedSession.user.id,
-            job_role: extractedRole,
-            company_name: companyVal,
-            content: result.tailoredResume,
-            version: result.version || "1.0",
-            source_resume_id: selectedResume.id
-          }).catch(console.warn);
-        }
+
         
         setTailorWizardStep(3);
       }

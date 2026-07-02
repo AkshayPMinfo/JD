@@ -2701,6 +2701,59 @@ WORK EXPERIENCE
       
       showNotification("Generating PDF file...", "info");
 
+      // Helper function to temporarily replace oklch colors with rgb equivalent to avoid html2canvas parser crash
+      const tempConvertStyleSheets = async () => {
+        const links = Array.from(document.querySelectorAll("link[rel='stylesheet']")) as HTMLLinkElement[];
+        const styles = Array.from(document.querySelectorAll("style")) as HTMLStyleElement[];
+        
+        const originalLinkStates = links.map(l => ({ el: l, disabled: l.disabled }));
+        const originalStyleContents = styles.map(s => ({ el: s, content: s.innerHTML }));
+        
+        const tempStyleEl = document.createElement("style");
+        tempStyleEl.id = "temp-html2canvas-styles";
+        
+        // 1. Process inline styles
+        styles.forEach(s => {
+          try {
+            s.innerHTML = s.innerHTML.replace(/oklch\([^)]+\)/g, "rgb(100, 100, 100)");
+          } catch (e) {
+            // Ignore stylesheet access errors
+          }
+        });
+        
+        // 2. Fetch external styles, replace oklch, and inject
+        let mergedCss = "";
+        for (const link of links) {
+          try {
+            const res = await fetch(link.href);
+            if (res.ok) {
+              const cssText = await res.text();
+              mergedCss += cssText.replace(/oklch\([^)]+\)/g, "rgb(100, 100, 100)") + "\n";
+            }
+          } catch (e) {
+            console.warn("Could not load external stylesheet for PDF generation:", e);
+          }
+          link.disabled = true;
+        }
+        
+        tempStyleEl.innerHTML = mergedCss;
+        document.head.appendChild(tempStyleEl);
+        
+        return () => {
+          tempStyleEl.remove();
+          originalLinkStates.forEach(item => {
+            item.el.disabled = item.disabled;
+          });
+          originalStyleContents.forEach(item => {
+            try {
+              item.el.innerHTML = item.content;
+            } catch (e) {
+              // Ignore stylesheet restore errors
+            }
+          });
+        };
+      };
+
       // Wait for React to render the print preview container into DOM
       setTimeout(async () => {
         try {
@@ -2724,12 +2777,18 @@ WORK EXPERIENCE
           // Force-show images or icons if any (wait 100ms for browser layout recalculation)
           await new Promise((resolve) => setTimeout(resolve, 100));
 
+          // Run temporary stylesheet replacement to protect html2canvas from oklch crash
+          const restoreStylesheets = await tempConvertStyleSheets();
+
           const canvas = await html2canvas(clone, {
             scale: 2, // High DPI print resolution
             useCORS: true,
             logging: false,
             backgroundColor: "#ffffff"
           });
+
+          // Restore styles immediately
+          restoreStylesheets();
 
           document.body.removeChild(clone);
 

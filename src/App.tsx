@@ -417,7 +417,7 @@ export default function App() {
 
   // Tailoring Wizard States
   const [isTailorWizardOpen, setIsTailorWizardOpen] = useState(false);
-  const [tailorWizardStep, setTailorWizardStep] = useState<1 | 2 | 3 | 4>(1);
+  const [tailorWizardStep, setTailorWizardStep] = useState<1 | 2 | 3>(1);
   const [tailorCompany, setTailorCompany] = useState("");
   const [tailorRole, setTailorRole] = useState("");
   const [tailorJdText, setTailorJdText] = useState("");
@@ -446,6 +446,7 @@ export default function App() {
   const [tailoredResultResume, setTailoredResultResume] = useState<ResumeStructure | null>(null);
   const [tailoredResultVersion, setTailoredResultVersion] = useState<SavedResumeVersion | null>(null);
   const [tailoredAtsScore, setTailoredAtsScore] = useState<number | null>(null);
+  const [showHighlights, setShowHighlights] = useState(true);
 
   // Dashboard item preview states
   const [selectedSavedVersion, setSelectedSavedVersion] = useState<SavedResumeVersion | null>(null);
@@ -453,6 +454,7 @@ export default function App() {
   const [showDeleteSavedVersionConfirmModal, setShowDeleteSavedVersionConfirmModal] = useState(false);
   const [versionToDeleteId, setVersionToDeleteId] = useState<string | null>(null);
   const [printResume, setPrintResume] = useState<ResumeStructure | null>(null);
+  const [printOriginalResume, setPrintOriginalResume] = useState<ResumeStructure | undefined>(undefined);
 
   // User pathway selection inside Resume Setup (Upload or Create)
   const [resumeSelectionMode, setResumeSelectionMode] = useState<"upload" | "create" | null>(null);
@@ -1017,6 +1019,7 @@ export default function App() {
     setTailoredResultResume(null);
     setTailoredResultVersion(null);
     setTailoredAtsScore(null);
+    setShowHighlights(true);
     setTailorWizardStep(1);
     setIsTailorWizardOpen(true);
   };
@@ -1537,6 +1540,7 @@ export default function App() {
       const selectedResume = getResumeToTailor();
       if (!selectedResume) throw new Error("No resume selected");
 
+      // 1. Simplify JD
       let simplifyRes = await fetch("/api/simplify-jd", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1555,6 +1559,7 @@ export default function App() {
       
       const simplifiedJdText = `Role: ${extractedRole}\nCompany Pitch: ${simplifiedJd.companyPitch || ""}\nKeywords: ${(simplifiedJd.keywordsToTarget || []).join(", ")}`;
 
+      // 2. Generate Tailored
       setTailorProcessingStage("Applying AI Improvements");
       const tailorRes = await fetch("/api/tailor-resume", {
         method: "POST",
@@ -1569,9 +1574,42 @@ export default function App() {
       const result = await tailorRes.json();
       
       if (result.tailoredResume) {
+        // Calculate realistic tailored ATS Score, Match Percentage and Gaps
+        setTailorProcessingStage("Comparing Resume vs JD");
+        const tailoredAtsEvaluation = calculateRealisticAtsScore(result.tailoredResume, simplifiedJd);
+        const diffResult = generateResumeDiff(selectedResume, result.tailoredResume);
+
+        const newVersion: SavedResumeVersion = {
+          id: `ver-${Date.now()}`,
+          companyName: companyVal,
+          jobTitle: extractedRole,
+          savedAt: formatResumeCreatedDate(new Date().toISOString()),
+          resumeData: result.tailoredResume,
+          originalResumeData: selectedResume,
+          originalJobDescription: jdTextVal,
+          appliedSuggestionsCount: result.suggestions?.length || 0,
+          atsScore: tailoredAtsEvaluation.score,
+          matchPercentage: tailoredAtsEvaluation.matchPercentage,
+          improvements: (result.suggestions || []).map((s: any) => s.reason).filter(Boolean).slice(0, 5),
+          missingRequirements: tailoredAtsEvaluation.missingKeywords,
+          missingQualifications: [],
+          diffAdded: diffResult.added,
+          diffModified: diffResult.modified,
+          diffUnchanged: diffResult.unchanged
+        };
+
         setTailoredResultResume(result.tailoredResume);
-        setTailoredResultVersion(result.version || "1.0");
-        
+        setTailoredResultVersion(newVersion);
+        setTailoredAtsScore(tailoredAtsEvaluation.score);
+
+        // Update locally saved versions
+        setSavedVersions(prev => {
+          const updated = [newVersion, ...prev];
+          localStorage.setItem("jd_resume_customizer_versions", JSON.stringify(updated));
+          return updated;
+        });
+
+        // Save to DB if logged in
         const storedSession = getStoredSupabaseSession();
         if (storedSession?.accessToken && storedSession.user?.id) {
           supabaseData.saveTailoredResume(storedSession.accessToken, {
@@ -1584,347 +1622,12 @@ export default function App() {
           }).catch(console.warn);
         }
         
-        setTailorWizardStep(4);
+        setTailorWizardStep(3);
       }
     } catch (err: any) {
       console.error(err);
       setTailorAnalysisError(err.message || "Failed to process.");
     } finally {
-      stopTailorProgress(false);
-      setTailorIsAnalyzing(false);
-    }
-  };
-
-  const handleAnalyzeJD = async () => {
-    setTailorAnalysisError(null);
-    const companyVal = tailorCompany || "";
-    const jdTextVal = tailorJdText || "";
-
-    if (!companyVal.trim()) {
-      showNotification("Please enter the company name.", "error");
-      return;
-    }
-    if (!jdTextVal.trim()) {
-      showNotification("Please paste a job description.", "error");
-      return;
-    }
-    const jdValidation = validateJobDescriptionText(jdTextVal);
-    if (jdValidation.isTooLong) {
-      showNotification(`Job description is too long. Please keep it under ${JD_MAX_WORDS.toLocaleString()} words.`, "error");
-      return;
-    }
-    if (!jdValidation.isValid) {
-      showNotification(INVALID_JD_MESSAGE, "error");
-      return;
-    }
-    logTailorAnalysis("Analysis Started", {
-      jdWords: jdValidation.wordCount,
-      jdIndicators: jdValidation.foundIndicators
-    });
-
-    setTailorIsAnalyzing(true);
-    startTailorProgress("Analyzing Job Description");
-    const controller = new AbortController();
-    const warningId = window.setTimeout(() => {
-      logTailorAnalysis("Analysis warning threshold reached", { warningAfterMs: ANALYSIS_WARNING_MS });
-      showNotification("Still processing your resume and job description. This can take up to 60 seconds.", "info");
-    }, ANALYSIS_WARNING_MS);
-    const timeoutId = window.setTimeout(() => controller.abort(), ANALYSIS_HARD_TIMEOUT_MS);
-
-    try {
-      // 1. Simplify / Parse JD (handles Jargon cleaning)
-      let simplifyRes;
-      try {
-        logTailorAnalysis("JD Parsed", { source: "input", characters: jdTextVal.length });
-        simplifyRes = await fetch("/api/simplify-jd", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            jdText: jdTextVal
-          }),
-          signal: controller.signal
-        });
-      } catch (fetchErr: any) {
-        console.warn("Simplify JD API failed or timed out, falling back", fetchErr);
-        logTailorAnalysis("AI JD parsing failed; falling back to heuristic parsing", fetchErr?.message || fetchErr);
-      } finally {
-        // Keep the overall progress warning active until the whole analysis path finishes.
-      }
-
-      let simplifiedJd;
-      if (simplifyRes && simplifyRes.ok) {
-        simplifiedJd = await simplifyRes.json();
-        if (simplifiedJd && simplifiedJd.isValidJd === false) {
-          setTailorIsAnalyzing(false);
-          setTailorAnalysisError(simplifiedJd.invalidReason || "Invalid Job Description");
-          showNotification(simplifiedJd.invalidReason || "The pasted text does not appear to be a valid Job Description.", "error");
-          return;
-        }
-      }
-
-      const isAiFallback = !simplifiedJd;
-      if (isAiFallback) {
-        showNotification("Advanced AI analysis is temporarily unavailable. Using standard ATS analysis instead.", "info");
-        simplifiedJd = extractJDHeuristically(jdTextVal, companyVal);
-      }
-      logTailorAnalysis("JD Parsed", { fallback: isAiFallback, role: simplifiedJd.jobTitle || "Tailored Position" });
-
-      const extractedRole = simplifiedJd.jobTitle || "Tailored Position";
-      setTailorRole(extractedRole);
-
-      // 2. Perform initial ATS Audit to get matches, gaps, improvements
-      const simplifiedJdText = `Role: ${extractedRole}
-Company Pitch: ${simplifiedJd.companyPitch || ""}
-Core Skills Required: ${(simplifiedJd.requiredSkills || []).map((s: any) => s?.name || s || "").join(", ")}
-Core Responsibilities: ${(simplifiedJd.keyResponsibilities || []).join("\n")}
-Candidate Expectations: ${(simplifiedJd.candidateExpectations || []).join("\n")}
-Keywords: ${(simplifiedJd.keywordsToTarget || []).join(", ")}`;
-
-      const selectedResume = getResumeToTailor();
-      if (!selectedResume) {
-        throw new Error("Could not find selected resume to analyze.");
-      }
-      logTailorAnalysis("Resume Parsed", { name: selectedResume.fullName, experienceCount: selectedResume.workExperience?.length || 0 });
-
-      let auditResult;
-      if (!isAiFallback) {
-        const auditController = new AbortController();
-        const auditTimeoutId = window.setTimeout(() => auditController.abort(), ANALYSIS_HARD_TIMEOUT_MS);
-        try {
-          logTailorAnalysis("ATS Analysis Started");
-          const auditRes = await fetch("/api/ats-audit", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              resume: selectedResume,
-              jdText: simplifiedJdText
-            }),
-            signal: auditController.signal
-          });
-          if (auditRes.ok) {
-            auditResult = await auditRes.json();
-            logTailorAnalysis("ATS Analysis Completed", { source: "api", score: auditResult?.score });
-          }
-        } catch (auditErr) {
-          console.warn("ATS Audit API failed, falling back to local audit", auditErr);
-          logTailorAnalysis("ATS Analysis API failed; falling back to local audit", auditErr instanceof Error ? auditErr.message : auditErr);
-        } finally {
-          window.clearTimeout(auditTimeoutId);
-        }
-      }
-
-      // Calculate realistic score, match percentage, matched/missing keywords using our new deterministic function
-      logTailorAnalysis("ATS Analysis Started", { source: "local" });
-      const atsEvaluation = calculateRealisticAtsScore(selectedResume, simplifiedJd);
-      logTailorAnalysis("ATS Analysis Completed", { source: "local", score: atsEvaluation.score, matchPercentage: atsEvaluation.matchPercentage });
-      
-      const matched = atsEvaluation.matchedKeywords;
-      const missing = atsEvaluation.missingKeywords;
-      const improvements: string[] = [];
-
-      // Extract criteria improvements
-      const criteriaList = auditResult?.criteria || atsEvaluation.criteria;
-      criteriaList.forEach((c: any) => {
-        if (c && !c.passed) {
-          improvements.push(`${c.name || "Recommendation"}: ${c.feedback || ""}`);
-        }
-      });
-
-      // Extract missing qualifications
-      const missingQualifications: string[] = [];
-      const requiredQuals = simplifiedJd.requiredQualifications || [];
-      const resumeEducationText = (selectedResume.education || []).map(edu => `${edu.degree} ${edu.school}`).join(" ").toLowerCase();
-      const resumeCertificationsText = (selectedResume.certifications || []).map(c => c.toLowerCase()).join(" ");
-
-      requiredQuals.forEach((qual: string) => {
-        if (!qual) return;
-        const qualLower = qual.toLowerCase();
-        const hasQual = resumeEducationText.includes(qualLower) || resumeCertificationsText.includes(qualLower);
-        if (!hasQual) {
-          missingQualifications.push(qual);
-        }
-      });
-
-      if (matched.length === 0) matched.push("General profile keywords");
-      if (missing.length === 0) missing.push("No missing critical keywords found");
-      if (improvements.length === 0) improvements.push("Format is clean. Add more context to experience descriptions.");
-      if (missingQualifications.length === 0) missingQualifications.push("No critical missing qualifications found");
-
-      setTailorAnalysisResult({
-        matchedKeywords: matched,
-        missingKeywords: missing,
-        missingQualifications: missingQualifications,
-        improvements: improvements,
-        simplifiedText: simplifiedJdText,
-        originalAtsScore: auditResult?.score || atsEvaluation.score,
-        originalMatchPct: atsEvaluation.matchPercentage,
-        simplifiedJdObject: simplifiedJd
-      });
-
-      const storedSession = getStoredSupabaseSession();
-      if (storedSession?.accessToken && storedSession.user?.id && currentUser && !currentUser.isGuest) {
-        supabaseData.createJobDescription(storedSession.accessToken, {
-          user_id: storedSession.user.id,
-          company_name: companyVal,
-          job_role: extractedRole,
-          description: jdTextVal,
-          source: "tailored-resume-analysis",
-        }).catch(error => {
-          console.warn("Supabase job description save failed:", error);
-        });
-      }
-
-      setTailorWizardStep(3);
-      stopTailorProgress(true);
-      showNotification("Job description analyzed successfully!", "success");
-    } catch (err: any) {
-      console.error("Analysis error:", err);
-      logTailorAnalysis("Analysis failed", err?.message || err);
-      setTailorAnalysisError(err.name === "AbortError"
-        ? "Analysis is taking longer than expected. Please retry."
-        : err.message || "An unexpected error occurred during Job Description analysis.");
-    } finally {
-      window.clearTimeout(timeoutId);
-      window.clearTimeout(warningId);
-      stopTailorProgress(false);
-      setTailorIsAnalyzing(false);
-    }
-  };
-
-  const handleGenerateTailoredResume = async () => {
-    if (!tailorAnalysisResult) return;
-
-    setTailorIsAnalyzing(true);
-    startTailorProgress("Reading Resume");
-    setTailorAnalysisError(null);
-    const controller = new AbortController();
-    logTailorAnalysis("Tailored Resume Generation Started");
-    const warningId = window.setTimeout(() => {
-      logTailorAnalysis("Tailored resume generation warning threshold reached", { warningAfterMs: ANALYSIS_WARNING_MS });
-      showNotification("Still generating your tailored resume. This can take up to 60 seconds.", "info");
-    }, ANALYSIS_WARNING_MS);
-    const timeoutId = window.setTimeout(() => controller.abort(), ANALYSIS_HARD_TIMEOUT_MS);
-
-    try {
-      const selectedResume = getResumeToTailor();
-      if (!selectedResume) {
-        throw new Error("Could not find selected resume to tailor.");
-      }
-      logTailorAnalysis("Resume Parsed", { name: selectedResume.fullName, experienceCount: selectedResume.workExperience?.length || 0 });
-
-      // 1. Generate tailored resume details
-      let tailorRes;
-      try {
-        setTailorProcessingStage("Generating Tailored Resume");
-        logTailorAnalysis("Tailored Resume Generation Started", { source: "api" });
-        tailorRes = await fetch("/api/tailor-resume", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            resume: selectedResume,
-            jdText: tailorAnalysisResult.simplifiedText
-          }),
-          signal: controller.signal
-        });
-      } catch (fetchErr: any) {
-        console.warn("Tailoring API was slow/unavailable, falling back to deterministic tailoring", fetchErr);
-        logTailorAnalysis("Tailored resume API failed; falling back to deterministic tailoring", fetchErr?.message || fetchErr);
-      } finally {
-        window.clearTimeout(timeoutId);
-      }
-
-      let tailoredResume;
-      let suggestions = [];
-
-      if (tailorRes && tailorRes.ok) {
-        const tailoredData = await tailorRes.json();
-        tailoredResume = sanitizeResume(tailoredData.tailoredResume, selectedResume);
-        suggestions = tailoredData.suggestions;
-        logTailorAnalysis("Tailored Resume Generation Completed", { source: "api" });
-      } else {
-        // Fallback to heuristic tailoring if AI model fails or throws error
-        showNotification("AI tailoring is temporarily unavailable. Using standard ATS matching instead.", "info");
-        
-        const missingKeywords = tailorAnalysisResult.missingKeywords || [];
-        tailoredResume = sanitizeResume({
-          ...selectedResume,
-          summary: `${selectedResume.summary || ""} Targeting the ${tailorRole} position at ${tailorCompany}. Possesses key skills in ${tailorAnalysisResult.matchedKeywords.slice(0, 3).join(', ')}.`,
-          skills: [...new Set([...(selectedResume.skills || []), ...missingKeywords])]
-        }, selectedResume);
-        suggestions = missingKeywords.map((kw, i) => ({
-          id: `he-s-${i}`,
-          type: "missing",
-          section: "skills",
-          suggestedText: kw,
-          reason: `Added missing critical skill "${kw}" requested in job description.`,
-          applied: true
-        }));
-        logTailorAnalysis("Tailored Resume Generation Completed", { source: "deterministic-fallback" });
-      }
-
-      // Calculate realistic tailored ATS Score, Match Percentage and Gaps
-      setTailorProcessingStage("Comparing Resume vs JD");
-      logTailorAnalysis("ATS Analysis Started", { phase: "tailored-resume" });
-      const tailoredAtsEvaluation = calculateRealisticAtsScore(tailoredResume, tailorAnalysisResult.simplifiedJdObject);
-      logTailorAnalysis("ATS Analysis Completed", { phase: "tailored-resume", score: tailoredAtsEvaluation.score, matchPercentage: tailoredAtsEvaluation.matchPercentage });
-      const diffResult = generateResumeDiff(selectedResume, tailoredResume);
-
-      // Remaining missing qualifications post-tailoring
-      const remainingQuals: string[] = [];
-      const requiredQuals = tailorAnalysisResult.simplifiedJdObject.requiredQualifications || [];
-      const resumeEducationText = (tailoredResume.education || []).map(edu => `${edu.degree} ${edu.school}`).join(" ").toLowerCase();
-      const resumeCertificationsText = (tailoredResume.certifications || []).map(c => c.toLowerCase()).join(" ");
-
-      requiredQuals.forEach((qual: string) => {
-        if (!qual) return;
-        const qualLower = qual.toLowerCase();
-        const hasQual = resumeEducationText.includes(qualLower) || resumeCertificationsText.includes(qualLower);
-        if (!hasQual) {
-          remainingQuals.push(qual);
-        }
-      });
-
-      // 3. Automatically persist every successfully generated tailored resume as its own card.
-      const newVersion: SavedResumeVersion = {
-        id: `ver-${Date.now()}`,
-        companyName: tailorCompany,
-        jobTitle: tailorRole,
-        savedAt: formatResumeCreatedDate(new Date().toISOString()),
-        resumeData: tailoredResume,
-        originalResumeData: selectedResume,
-        originalJobDescription: tailorJdText,
-        appliedSuggestionsCount: suggestions?.length || 0,
-        atsScore: tailoredAtsEvaluation.score,
-        matchPercentage: tailoredAtsEvaluation.matchPercentage,
-        improvements: (suggestions || []).map((s: any) => s.reason).filter(Boolean).slice(0, 5),
-        missingRequirements: tailoredAtsEvaluation.missingKeywords,
-        missingQualifications: remainingQuals,
-        diffAdded: diffResult.added,
-        diffModified: diffResult.modified,
-        diffUnchanged: diffResult.unchanged
-      };
-
-      setTailoredResultResume(tailoredResume);
-      setTailoredResultVersion(newVersion);
-      setSavedVersions(prev => {
-        const updated = [newVersion, ...prev];
-        localStorage.setItem("jd_resume_customizer_versions", JSON.stringify(updated));
-        return updated;
-      });
-      setTailoredAtsScore(tailoredAtsEvaluation.score);
-      setTailorProcessingStage("Preparing Download Files");
-      stopTailorProgress(true);
-      setTailorWizardStep(4);
-      showNotification(`Tailored resume card created automatically. Review or download anytime.`, "success");
-    } catch (err: any) {
-      console.error("Tailoring error:", err);
-      logTailorAnalysis("Tailored resume generation failed", err?.message || err);
-      setTailorAnalysisError(err.name === "AbortError"
-        ? "Tailored resume generation is taking longer than expected. Please retry."
-        : err.message || "An unexpected error occurred while generating tailored resume.");
-    } finally {
-      window.clearTimeout(timeoutId);
-      window.clearTimeout(warningId);
       stopTailorProgress(false);
       setTailorIsAnalyzing(false);
     }
@@ -2850,198 +2553,7 @@ WORK EXPERIENCE
     window.print();
   };
 
-  const downloadResumeAsDocxLegacy = (resume: ResumeStructure, filename: string) => {
-    const exportResume = prepareResumeForDownload(resume);
-    if (!exportResume) return;
 
-    let htmlContent = `
-      <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-      <head>
-        <title>${escapeHtml(exportResume.fullName)} - Resume</title>
-        <!--[if gte mso 9]>
-        <xml>
-          <w:WordDocument>
-            <w:View>Print</w:View>
-            <w:Zoom>100</w:Zoom>
-            <w:DoNotOptimizeForBrowser/>
-          </w:WordDocument>
-        </xml>
-        <![endif]-->
-        <style>
-          body {
-            font-family: Calibri, Arial, sans-serif;
-            line-height: 1.28;
-            color: #1f2933;
-            margin: 0.72in;
-          }
-          h1 {
-            font-size: 24pt;
-            font-weight: bold;
-            text-align: center;
-            margin: 0 0 3pt 0;
-            color: #111111;
-          }
-          .contact-info {
-            text-align: center;
-            font-size: 10pt;
-            color: #555555;
-            margin-bottom: 20pt;
-            border-bottom: 2px solid #333333;
-            padding-bottom: 8pt;
-          }
-          h2 {
-            font-size: 13pt;
-            font-weight: bold;
-            text-transform: uppercase;
-            color: #111111;
-            margin-top: 18pt;
-            margin-bottom: 6pt;
-            border-bottom: 1px solid #cccccc;
-            padding-bottom: 2pt;
-            page-break-after: avoid;
-          }
-          .summary {
-            font-size: 10.5pt;
-            margin-bottom: 12pt;
-          }
-          .skills-list {
-            font-size: 10.5pt;
-            margin-bottom: 12pt;
-          }
-          .item-header {
-            font-size: 11pt;
-            font-weight: bold;
-            margin-top: 10pt;
-            margin-bottom: 2pt;
-            page-break-after: avoid;
-          }
-          .bullet-list {
-            margin-top: 2pt;
-            margin-bottom: 8pt;
-            padding-left: 20px;
-          }
-          .bullet-item {
-            font-size: 10pt;
-            margin-bottom: 3pt;
-          }
-          .section {
-            page-break-inside: avoid;
-          }
-        </style>
-      </head>
-      <body>
-        <h1>${escapeHtml(exportResume.fullName)}</h1>
-        <div class="contact-info">
-    `;
-
-    if (exportResume.email) htmlContent += `<span>${escapeHtml(exportResume.email)}</span>`;
-    if (exportResume.phone) htmlContent += `<span> | ${escapeHtml(exportResume.phone)}</span>`;
-    if (exportResume.linkedin) htmlContent += `<span> | LinkedIn: ${escapeHtml(exportResume.linkedin)}</span>`;
-    if (exportResume.website) htmlContent += `<span> | Portfolio: ${escapeHtml(exportResume.website)}</span>`;
-
-    htmlContent += `</div>`;
-
-    if (exportResume.summary) {
-      htmlContent += `
-        <div class="section"><h2>Professional Summary</h2>
-        <div class="summary">${escapeHtml(exportResume.summary)}</div></div>
-      `;
-    }
-
-    if (exportResume.skills && exportResume.skills.length > 0) {
-      htmlContent += `
-        <div class="section"><h2>Skills</h2>
-        <div class="skills-list">
-          <strong>Technical Skills:</strong> ${exportResume.skills.map(escapeHtml).join(", ")}
-        </div></div>
-      `;
-    }
-
-    if (exportResume.workExperience && exportResume.workExperience.length > 0) {
-      htmlContent += `<h2>Work Experience</h2>`;
-      exportResume.workExperience.forEach(exp => {
-        htmlContent += `
-          <div class="section"><div class="item-header" style="display: flex; justify-content: space-between;">
-            <span>${escapeHtml(exp.role)}${exp.company ? ` - ${escapeHtml(exp.company)}` : ""}</span>
-            <span style="font-weight: normal; font-size: 10pt; float: right;">${escapeHtml(exp.duration)}</span>
-          </div>
-          <div style="clear: both;"></div>
-          <ul class="bullet-list">
-            ${exp.description.map(bullet => `<li class="bullet-item">${escapeHtml(bullet)}</li>`).join("")}
-          </ul></div>
-        `;
-      });
-    }
-
-    if (exportResume.projects && exportResume.projects.length > 0) {
-      htmlContent += `<h2>Projects</h2>`;
-      exportResume.projects.forEach(proj => {
-        htmlContent += `
-          <div class="section"><div class="item-header" style="display: flex; justify-content: space-between;">
-            <span>${escapeHtml(proj.name)}</span>
-            <span style="font-weight: normal; font-size: 10pt; float: right;">${escapeHtml(proj.duration)}</span>
-          </div>
-          <div style="clear: both;"></div>
-          <ul class="bullet-list">
-            ${proj.description.map(bullet => `<li class="bullet-item">${escapeHtml(bullet)}</li>`).join("")}
-          </ul></div>
-        `;
-      });
-    }
-
-    if (exportResume.education && exportResume.education.length > 0) {
-      htmlContent += `<h2>Education</h2>`;
-      exportResume.education.forEach(edu => {
-        htmlContent += `
-          <div class="section"><div class="item-header" style="display: flex; justify-content: space-between;">
-            <span>${escapeHtml(edu.degree)}${edu.school ? ` - ${escapeHtml(edu.school)}` : ""}</span>
-            <span style="font-weight: normal; font-size: 10pt; float: right;">${escapeHtml(edu.duration)}</span>
-          </div>
-          <div style="font-style: italic; font-size: 10pt; color: #555555; margin-bottom: 4pt;">${edu.gpa ? `GPA: ${escapeHtml(edu.gpa)}` : ""}</div></div>
-        `;
-      });
-    }
-
-    if (exportResume.certifications && exportResume.certifications.length > 0) {
-      htmlContent += `
-        <h2>Certifications</h2>
-        <ul class="bullet-list">
-          ${exportResume.certifications.map(cert => `<li class="bullet-item">${escapeHtml(cert)}</li>`).join("")}
-        </ul>
-      `;
-    }
-
-    htmlContent += `
-      </body>
-      </html>
-    `;
-
-    const blob = new Blob(['\ufeff' + htmlContent], {
-      type: 'application/msword'
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename.endsWith('.docx') ? filename : `${filename}.docx`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    showNotification("DOCX resume downloaded successfully!", "success");
-  };
-
-  const handlePrintOrSavePDFLegacy = (resume: ResumeStructure) => {
-    const exportResume = prepareResumeForDownload(resume);
-    if (!exportResume) return;
-
-    setPrintResume(exportResume);
-    setTimeout(() => {
-      window.print();
-      setTimeout(() => {
-        setPrintResume(null);
-      }, 500);
-    }, 100);
-  };
 
   const downloadBlob = (blob: Blob, filename: string): boolean => {
     if (!blob || blob.size === 0) {
@@ -3143,6 +2655,7 @@ WORK EXPERIENCE
     try {
       logDownloadEvent("Download Started", { type: "PDF" });
       setPrintResume(resume);
+      setPrintOriginalResume(original);
       
       // Let React update the hidden print container DOM with printResume, then trigger print dialog
       setTimeout(() => {
@@ -5630,10 +5143,14 @@ WORK EXPERIENCE
         </div>
       )}
 
-      {/* Standalone hidden print preview container — only rendered after authentication to prevent demo data leaking on login page */}
       {currentStep !== "auth" && (
         <div className="hidden print:block print-container">
-          <ResumePreview resume={printResume || activeResume} templateStyle={selectedStyle} id="resume-preview-sheet-print" />
+          <ResumePreview
+            resume={printResume || activeResume}
+            templateStyle={selectedStyle}
+            id="resume-preview-sheet-print"
+            originalResume={printOriginalResume}
+          />
         </div>
       )}
 
@@ -6054,7 +5571,7 @@ WORK EXPERIENCE
         >
           <div 
             id="tailor-wizard-modal" 
-            className={`bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 sm:p-8 w-full text-left relative animate-scaleIn flex flex-col max-h-[95vh] ${tailorWizardStep === 4 ? "max-w-[92vw]" : "max-w-2xl"}`}
+            className={`bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 sm:p-8 w-full text-left relative animate-scaleIn flex flex-col max-h-[95vh] ${tailorWizardStep === 3 ? "max-w-4xl" : "max-w-2xl"}`}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close button */}
@@ -6075,10 +5592,9 @@ WORK EXPERIENCE
               <p className="text-xs text-neutral-555 font-medium font-sans">
                 {tailorAnalysisError ? "Error Occurred during processing" : (
                   <>
-                    {tailorWizardStep === 1 && "Step 1 of 4: Target details"}
-                    {tailorWizardStep === 2 && "Step 2 of 4: Job Description"}
-                    {tailorWizardStep === 3 && "Step 3 of 4: Match & Gap Analysis"}
-                    {tailorWizardStep === 4 && "Step 4 of 4: Results & Download"}
+                    {tailorWizardStep === 1 && "Step 1 of 3: Target details"}
+                    {tailorWizardStep === 2 && "Step 2 of 3: Job Description"}
+                    {tailorWizardStep === 3 && "Step 3 of 3: Results & Download"}
                   </>
                 )}
               </p>
@@ -6144,11 +5660,7 @@ WORK EXPERIENCE
                       type="button"
                       onClick={() => {
                         setTailorAnalysisError(null);
-                        if (tailorWizardStep <= 2) {
-                          handleAnalyzeJD();
-                        } else {
-                          handleGenerateTailoredResume();
-                        }
+                        handleAnalyzeAndGenerate();
                       }}
                       className="flex-1 px-4 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
                     >
@@ -6218,70 +5730,8 @@ WORK EXPERIENCE
                 </div>
               )}
 
-              {/* STEP 3: DISPLAY ANALYSIS & GAPS */}
-              {!tailorIsAnalyzing && !tailorAnalysisError && tailorWizardStep === 3 && tailorAnalysisResult && (
-                <div className="space-y-5 text-left animate-fadeIn">
-                  {/* Grid showing Matches and Gaps */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    {/* Matches */}
-                    <div className="border-2 border-emerald-500 bg-emerald-50/10 rounded-2xl p-4 space-y-2.5">
-                      <h4 className="text-xs font-black text-emerald-800 uppercase tracking-wider font-mono flex items-center gap-1.5">
-                        <CheckCircle2 className="w-4 h-4" /> Matched Skills
-                      </h4>
-                      <div className="flex flex-wrap gap-1.5 animate-fadeIn">
-                        {tailorAnalysisResult.matchedKeywords.map((kw, i) => (
-                          <span key={i} className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded text-[10px] font-bold">
-                            {kw}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Missing Keywords */}
-                    <div className="border-2 border-rose-500 bg-rose-50/10 rounded-2xl p-4 space-y-2.5">
-                      <h4 className="text-xs font-black text-rose-800 uppercase tracking-wider font-mono flex items-center gap-1.5">
-                        <XCircle className="w-4 h-4" strokeWidth={2.5} /> Missing Keywords
-                      </h4>
-                      <div className="flex flex-wrap gap-1.5 animate-fadeIn">
-                        {tailorAnalysisResult.missingKeywords.map((kw, i) => (
-                          <span key={i} className="px-2 py-0.5 bg-rose-100 text-rose-800 rounded text-[10px] font-bold">
-                            {kw}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Missing Qualifications */}
-                    <div className="border-2 border-indigo-500 bg-indigo-50/10 rounded-2xl p-4 space-y-2.5">
-                      <h4 className="text-xs font-black text-indigo-800 uppercase tracking-wider font-mono flex items-center gap-1.5">
-                        <BookOpen className="w-4 h-4" /> Missing Qualifications
-                      </h4>
-                      <div className="flex flex-wrap gap-1.5 animate-fadeIn">
-                        {tailorAnalysisResult.missingQualifications.map((qual, i) => (
-                          <span key={i} className="px-2 py-0.5 bg-indigo-100 text-indigo-800 rounded text-[10px] font-bold">
-                            {qual}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Suggested Improvements */}
-                  <div className="border-2 border-amber-500 bg-amber-50/10 rounded-2xl p-4 space-y-2.5">
-                    <h4 className="text-xs font-black text-amber-800 uppercase tracking-wider font-mono flex items-center gap-1.5">
-                      <AlertTriangle className="w-4 h-4" /> Actionable Improvements
-                    </h4>
-                    <ul className="list-disc pl-5 text-xs text-neutral-700 space-y-1 font-semibold leading-relaxed">
-                      {tailorAnalysisResult.improvements.map((imp, i) => (
-                        <li key={i}>{imp}</li>
-                      ))}
-                    </ul>
-                  </div>
-                </div>
-              )}
-
-              {/* STEP 4: SIDE-BY-SIDE COMPARISON (Original left, Tailored right) */}
-              {!tailorIsAnalyzing && !tailorAnalysisError && tailorWizardStep === 4 && (
+              {/* STEP 3: RESULTS & DOWNLOAD (Tailored Resume only) */}
+              {!tailorIsAnalyzing && !tailorAnalysisError && tailorWizardStep === 3 && (
                 (() => {
                   const originalResume = getResumeToTailor();
                   const tailoredResume = tailoredResultResume;
@@ -6296,68 +5746,66 @@ WORK EXPERIENCE
                   return (
                     <div className="space-y-4 text-left py-2 animate-fadeIn font-sans">
                       {/* Info Banner */}
-                      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex items-start gap-3">
-                        <div className="w-4 h-4 mt-0.5 shrink-0 text-blue-500">
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex items-start gap-3 justify-between">
+                        <div className="flex gap-3">
+                          <div className="w-4 h-4 mt-0.5 shrink-0 text-blue-500">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                          </div>
+                          <div className="text-xs text-blue-800 font-semibold leading-relaxed">
+                            Your tailored resume has been generated. Use the controls below to toggle visual AI changes or download your file.
+                          </div>
                         </div>
-                        <div className="text-xs text-blue-800 font-semibold leading-relaxed">
-                          Left side is your original resume exactly as you uploaded it.<br />
-                          Right side is your tailored resume with AI-driven additions and improvements. All changes are highlighted.
+                        
+                        {/* Highlights Toggle */}
+                        <div className="flex items-center gap-2 bg-white border border-blue-300 px-3 py-1 rounded-lg shrink-0">
+                          <input
+                            type="checkbox"
+                            id="toggle-highlights-cb"
+                            checked={showHighlights}
+                            onChange={(e) => setShowHighlights(e.target.checked)}
+                            className="w-3.5 h-3.5 cursor-pointer accent-blue-600"
+                          />
+                          <label htmlFor="toggle-highlights-cb" className="text-[10px] font-black uppercase text-blue-900 cursor-pointer select-none">
+                            View AI Changes
+                          </label>
                         </div>
                       </div>
 
-                      {/* Highlight Legend */}
-                      <div className="flex flex-wrap items-center gap-3 text-[10px] font-bold uppercase tracking-wide">
-                        <span className="text-neutral-500 font-mono">Highlights:</span>
-                        <span className="flex items-center gap-1.5 bg-blue-100 border border-blue-300 text-blue-900 px-2 py-1 rounded-lg">
-                          <span className="w-2.5 h-2.5 rounded-sm bg-[#BAE6FD] border border-blue-300 inline-block"></span> Added
-                        </span>
-                        <span className="flex items-center gap-1.5 bg-yellow-100 border border-yellow-300 text-yellow-900 px-2 py-1 rounded-lg">
-                          <span className="w-2.5 h-2.5 rounded-sm bg-[#FEF08A] border border-yellow-300 inline-block"></span> Improved
-                        </span>
-                        <div className="flex-1"></div>
-                        <div className="bg-emerald-50 border-2 border-emerald-500 rounded-xl px-3 py-1.5 flex items-center gap-2">
-                          <span className="text-[10px] font-black uppercase text-emerald-800 tracking-wider">ATS Friendly</span>
+                      {/* Header controls & Score */}
+                      <div className="flex items-center justify-between border-b border-neutral-100 pb-2">
+                        {/* Highlight Legend */}
+                        <div className="flex flex-wrap items-center gap-3 text-[10px] font-bold uppercase tracking-wide">
+                          {showHighlights && (
+                            <>
+                              <span className="text-neutral-500 font-mono">Legend:</span>
+                              <span className="flex items-center gap-1.5 bg-blue-100 border border-blue-200 text-blue-900 px-2 py-0.5 rounded-lg">
+                                <span className="w-2 h-2 rounded-sm bg-[#BAE6FD] border border-blue-300 inline-block"></span> Added
+                              </span>
+                              <span className="flex items-center gap-1.5 bg-yellow-100 border border-yellow-200 text-yellow-900 px-2 py-0.5 rounded-lg">
+                                <span className="w-2 h-2 rounded-sm bg-[#FEF08A] border border-yellow-300 inline-block"></span> Improved
+                              </span>
+                            </>
+                          )}
+                        </div>
+                        <div className="bg-emerald-50 border-2 border-emerald-500 rounded-xl px-3 py-1 flex items-center gap-2 shadow-[2px_2px_0px_0px_rgba(16,185,129,1)]">
+                          <span className="text-[10px] font-black uppercase text-emerald-800 tracking-wider">ATS Score</span>
                           <span className="text-sm font-black text-emerald-600">{tailoredEval.score}%</span>
                         </div>
                       </div>
 
-                      {/* Side-by-Side Panels */}
-                      <div className="grid grid-cols-2 gap-4">
-                        {/* LEFT: Original Resume */}
-                        <div className="flex flex-col border-2 border-neutral-300 rounded-2xl overflow-hidden bg-white shadow-sm">
-                          <div className="bg-neutral-800 text-white px-4 py-2 text-xs font-black uppercase tracking-wider font-mono flex items-center justify-between">
-                            <span>Original Resume (Uploaded)</span>
-                          </div>
-                          <div className="overflow-y-auto bg-neutral-50" style={{height: '65vh'}}>
-                            <ResumePreview
-                              resume={originalResume}
-                              templateStyle={selectedStyle}
-                              id="step-4-preview-original"
-                            />
-                          </div>
+                      {/* Single Panel Tailored Resume */}
+                      <div className="border-2 border-neutral-300 rounded-2xl overflow-hidden bg-white shadow-md max-w-2xl mx-auto w-full">
+                        <div className="bg-neutral-800 text-white px-4 py-2 text-xs font-black uppercase tracking-wider font-mono flex items-center justify-between">
+                          <span>Tailored Resume (Optimized for {tailorCompany})</span>
                         </div>
-
-                        {/* RIGHT: Tailored Resume */}
-                        <div className="flex flex-col border-2 border-emerald-400 rounded-2xl overflow-hidden bg-white shadow-sm">
-                          <div className="bg-emerald-700 text-white px-4 py-2 text-xs font-black uppercase tracking-wider font-mono flex items-center justify-between">
-                            <span>→ Tailored Resume (Customized)</span>
-                          </div>
-                          <div className="overflow-y-auto bg-neutral-50" style={{height: '65vh'}}>
-                            <ResumePreview
-                              resume={tailoredResume}
-                              templateStyle={selectedStyle}
-                              id="step-4-preview-tailored"
-                              originalResume={originalResume}
-                            />
-                          </div>
+                        <div className="overflow-y-auto bg-neutral-50" style={{height: '60vh'}}>
+                          <ResumePreview
+                            resume={tailoredResume}
+                            templateStyle={selectedStyle}
+                            id="step-3-preview-tailored"
+                            originalResume={showHighlights ? originalResume : undefined}
+                          />
                         </div>
-                      </div>
-
-                      {/* Bottom integrity note */}
-                      <div className="flex items-center gap-2 text-xs text-neutral-500 font-semibold">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 text-emerald-500 shrink-0"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                        Your original resume is safe and unchanged. Only the tailored version contains AI-driven changes.
                       </div>
                     </div>
                   );
@@ -6416,25 +5864,6 @@ WORK EXPERIENCE
 
                 {tailorWizardStep === 3 && (
                   <>
-                    <button
-                      type="button"
-                      onClick={() => setTailorWizardStep(2)}
-                      className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
-                    >
-                      Back
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleGenerateTailoredResume}
-                      className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
-                    >
-                      Generate Tailored Resume
-                    </button>
-                  </>
-                )}
-
-                {tailorWizardStep === 4 && (
-                  <>
                     <div className="flex items-center gap-1.5 text-xs text-neutral-500 font-semibold mr-auto">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5 text-emerald-500"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                       Original resume unchanged
@@ -6442,13 +5871,14 @@ WORK EXPERIENCE
                     <button
                       type="button"
                       onClick={() => {
-                        const orig = getResumeToTailor();
-                        if (orig) handlePrintOrSavePDF(orig, undefined, tailorRole);
+                        if (tailoredResultResume) {
+                          handlePrintOrSavePDF(tailoredResultResume, undefined, tailorRole);
+                        }
                       }}
                       className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 flex items-center justify-center gap-1.5"
                     >
                       <FileText className="w-4 h-4 text-blue-600" />
-                      <span>Download Original (PDF)</span>
+                      <span>Download PDF</span>
                     </button>
 
                     <button
@@ -6466,7 +5896,7 @@ WORK EXPERIENCE
                       className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 flex items-center justify-center gap-1.5"
                     >
                       <Download className="w-4 h-4 text-emerald-600" />
-                      <span>Download Tailored (DOCX)</span>
+                      <span>Download DOCX</span>
                     </button>
 
                     <button
@@ -6806,48 +6236,4 @@ WORK EXPERIENCE
       )}
     </div>
   );
-                {tailorWizardStep === 4 && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (tailoredResultResume) {
-                          handlePrintOrSavePDF(tailoredResultResume, getResumeToTailor(), tailorRole);
-                        }
-                      }}
-                      className="px-6 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] flex items-center gap-2"
-                    >
-                      <FileText className="w-4 h-4 text-blue-600" />
-                      Download PDF
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (tailoredResultResume) {
-                          downloadResumeAsDocx(
-                            tailoredResultResume,
-                            `${tailorCompany.replace(/\s+/g, "_")}_Tailored_Resume`,
-                            getResumeToTailor(),
-                            tailorRole
-                          );
-                        }
-                      }}
-                      className="px-6 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] flex items-center gap-2"
-                    >
-                      <Download className="w-4 h-4 text-emerald-600" />
-                      Download DOCX
-                    </button>
-                    
-                    <div className="flex-1"></div>
-
-                    <button
-                      type="button"
-                      onClick={() => setIsTailorWizardOpen(false)}
-                      className="px-6 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] transition cursor-pointer"
-                    >
-                      Done
-                    </button>
-                  </>
-                )}
 }

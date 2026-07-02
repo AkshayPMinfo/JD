@@ -83,24 +83,46 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
                      cleanedText.match(/\b\d{3}[-.\s]??\d{3}[-.\s]??\d{4}\b/);
   const phone = phoneMatch ? phoneMatch[0] : '';
 
-  const sectionHeaders = {
+  const sectionHeaders: Record<string, RegExp> = {
     experience: /^(experience|work history|employment|career|professional experience|work record|work experience|experience record)$/i,
-    education: /^(education|academic|university|college|school|academic profile|education background|academic record|education & credentials|education & certifications)$/i,
+    education: /^(education|academic|academic profile|education background|academic record|education & credentials|education & certifications)$/i,
     projects: /^(projects|personal projects|academic projects|key projects|repositories|portfolio|selected projects)$/i,
     skills: /^(skills|technical skills|technologies|tools|competencies|expertise|core competencies|core skills|skills & expertise)$/i,
     certifications: /^(certifications?|licenses?|credentials?)$/i,
     languages: /^(languages)$/i,
     achievements: /^(achievements|awards|honors|extracurriculars|key achievements)$/i,
-    summary: /^(summary|objective|profile|about me|professional summary|executive summary)$/i
+    summary: /^(summary|objective|profile|about me|professional summary|executive summary)$/i,
+    // Sections we want to recognise and SKIP (don't dump into education or experience)
+    ignore: /^(interests?|hobbies|volunteer|volunteering|references?|activities|personal interests?|other interests?)$/i
   };
 
   const singleDate = /(?:(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)[a-z]*\.?[\s,]*\d{4}|\d{1,2}\/\d{4}|\b\d{4}\b)/i;
   const dateRegex = new RegExp(`(${singleDate.source})\\s*[-–—]\\s*(${singleDate.source}|present|current|active)`, 'i');
-  const jobKeywords = /\b(manager|engineer|developer|intern|lead|analyst|coordinator|specialist|host|service|worker|head|founder|ceo|pm)\b/i;
-  const actionVerbs = /^(collaborated|conducted|managed|coordinated|developed|created|executed|leveraged|designed|analyzed|implemented|spearheaded|built|partnered|authored|facilitated|mapped|drafted|assisted|led|oversaw)/i;
+  const jobKeywords = /\b(manager|engineer|developer|intern|lead|analyst|coordinator|specialist|host|service|worker|head|founder|ceo|pm|consultant|director|writer|designer|assistant|strategist|representative|executive|supervisor|officer|president)\b/i;
+  const actionVerbs = /^(collaborated|conducted|managed|coordinated|developed|created|executed|leveraged|designed|analyzed|implemented|spearheaded|built|partnered|authored|facilitated|mapped|drafted|assisted|led|oversaw|supported|maintained|delivered|drove|launched|established|improved|streamlined|optimized|generated|achieved)/i;
 
+  // ── SECTION DETECTION PASS ──────────────────────────────────────────────────
+  // Pre-classify each line as a section header or content so we can look ahead/behind
+  type LineType = { raw: string; clean: string; section: string | null; isBullet: boolean; hasDate: boolean };
+  const classified: LineType[] = mergedLines.map(raw => {
+    const normalized = raw.replace(/[\u2013\u2014\u2015]/g, "-").trim();
+    const clean = normalized.replace(/^[-*•●▪o▪]\s*/, '').trim();
+    let sectionLabel: string | null = null;
+    if (clean.length < 50) {
+      for (const [sec, rx] of Object.entries(sectionHeaders)) {
+        if (rx.test(clean) && !clean.includes(':') && !clean.includes('|')) {
+          sectionLabel = sec;
+          break;
+        }
+      }
+    }
+    const isBullet = /^[-*•●▪o▪]/.test(normalized) || (normalized.startsWith('-') && normalized.length > 2);
+    const hasDate = dateRegex.test(normalized);
+    return { raw: normalized, clean, section: sectionLabel, isBullet, hasDate };
+  });
+
+  // ── MAIN PARSE PASS ─────────────────────────────────────────────────────────
   let currentSection = 'header';
-  let lastRoutedSection = 'header';
 
   const workExperience: any[] = [];
   const education: any[] = [];
@@ -111,217 +133,257 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
   const achievements: string[] = [];
   let summary = '';
 
-  for (let i = 0; i < mergedLines.length; i++) {
-    let line = mergedLines[i].replace(/[\u2013\u2014\u2015]/g, "-").trim();
-    
-    // Split leaked column items
-    const leakMatch = line.match(/(?:\.|\)|•|●)\s+([A-Z][a-zA-Z0-9\s,'’\.\-&]+(?:[-–—])\s*(?:[a-zA-Z\s]+)?(manager|engineer|developer|intern|lead|analyst|coordinator|specialist|host|service|worker|head|founder|ceo|pm|consultant|director|writer|designer|assistant|strategist|partner|representative|executive|supervisor|officer|president)[a-z]*)$/i);
-    if (leakMatch) {
-      const leakedText = leakMatch[1].trim();
-      line = line.replace(leakMatch[1], "").trim();
-      mergedLines.splice(i + 1, 0, leakedText);
-    }
+  const schoolKeywords = /\b(college|university|school|institute|academy|high school)\b/i;
+  const degreeKeywords = /\b(bachelor|master|phd|b\.a\.|m\.a\.|b\.s\.|m\.s\.|btech|mtech|bca|mca|degree|diploma|associates?|associate's|10th|12th|hsc|ssc|metric|matriculation|intermediate)\b/i;
 
-    const cleanLine = line.replace(/^[-*•●▪o▪]\s*/, '').trim();
+  for (let i = 0; i < classified.length; i++) {
+    const { raw: line, clean: cleanLine, section: sectionLabel, isBullet, hasDate } = classified[i];
 
-    // 1. Check for section header
-    let headerMatched = false;
-    for (const [sec, regex] of Object.entries(sectionHeaders)) {
-      if (cleanLine.length < 40 && regex.test(cleanLine) && !cleanLine.includes(':') && !cleanLine.includes('|')) {
-        currentSection = sec;
-        lastRoutedSection = sec;
-        headerMatched = true;
-        break;
-      }
-    }
-    if (headerMatched) continue;
-
-    // 2. Determine line type
-    const isBullet = /^[-*•●▪o▪]/.test(line) || line.startsWith('-');
-    const hasDate = dateRegex.test(line);
-
-    if (currentSection === 'experience' && !isBullet && !hasDate && i < mergedLines.length - 1 && dateRegex.test(mergedLines[i + 1])) {
+    // ── Section header transition ──────────────────────────────────────────────
+    if (sectionLabel !== null) {
+      currentSection = sectionLabel; // 'ignore' is also a valid transition — it stops routing
       continue;
     }
 
-    // Heuristic: experience bullet routed elsewhere
-    const isExperienceBullet = isBullet && (
-      cleanLine.length > 30 || actionVerbs.test(cleanLine)
-    );
+    // ── Sections we explicitly ignore (interests, references, etc.) ─────────
+    if (currentSection === 'ignore') continue;
 
-    if (isExperienceBullet) {
-      if (workExperience.length > 0) {
-        workExperience[workExperience.length - 1].description.push(cleanLine);
-        currentSection = 'experience';
-        lastRoutedSection = 'experience';
-        continue;
-      }
-    }
+    // ── EXPERIENCE SECTION ────────────────────────────────────────────────────
+    if (currentSection === 'experience') {
+      if (hasDate) {
+        // The date line may also contain the role on the same line, or the role may be separate
+        const dateMatch = line.match(dateRegex)!;
+        const duration = dateMatch[0];
+        const remainder = line.replace(duration, '').replace(/^[,\-\s]+|[,\-\s]+$/g, '').trim();
 
-    // 3. Handle specific sections
-    if (hasDate) {
-      if (currentSection === 'experience') {
-        const dateMatch = line.match(dateRegex);
-        const duration = dateMatch ? dateMatch[0] : "";
-        let roleCompanyText = line.replace(duration, "").replace(/^[,\-\s]+|[,\-\s]+$/g, "").trim();
+        let role = '';
+        let company = '';
 
-        if (!roleCompanyText && i > 0) {
-          const prevLine = mergedLines[i - 1].replace(/[\u2013\u2014\u2015]/g, "-").trim();
-          const isPrevBullet = /^[-*•●▪o▪]/.test(prevLine) || prevLine.startsWith('-');
-          if (!isPrevBullet && !Object.values(sectionHeaders).some(rx => rx.test(prevLine))) {
-            roleCompanyText = prevLine;
+        if (remainder.length > 0) {
+          // Role is on the same line as the date.
+          // Look ahead: if next non-blank, non-bullet, non-date line looks like "Company – City", grab it.
+          role = remainder; // treat the whole remainder as role for now
+          const nextIdx = i + 1;
+          if (nextIdx < classified.length && !classified[nextIdx].section && !classified[nextIdx].isBullet && !classified[nextIdx].hasDate) {
+            const nextClean = classified[nextIdx].clean;
+            // Heuristic: company lines often contain city/location indicators or are short non-bullet text
+            const looksLikeCompany = nextClean.length < 80 && !actionVerbs.test(nextClean) && !jobKeywords.test(nextClean);
+            if (looksLikeCompany) {
+              // Strip city/state suffix (e.g. "– Boston, MA" or "- Boston, MA")
+              company = nextClean.replace(/[-–—]\s*[A-Z][a-zA-Z\s,\.]+$/, '').trim() || nextClean;
+              i++; // consume that line
+            }
+          }
+        } else {
+          // No remainder on date line — look backward for a preceding role line
+          if (i > 0) {
+            const prev = classified[i - 1];
+            if (!prev.section && !prev.isBullet && !prev.hasDate) {
+              role = prev.clean;
+            }
+          }
+          // Look ahead for company
+          const nextIdx = i + 1;
+          if (nextIdx < classified.length && !classified[nextIdx].section && !classified[nextIdx].isBullet && !classified[nextIdx].hasDate) {
+            company = classified[nextIdx].clean.replace(/[-–—]\s*[A-Z][a-zA-Z\s,\.]+$/, '').trim() || classified[nextIdx].clean;
+            i++;
           }
         }
 
-        const parts = roleCompanyText.split(/[-–—|,\t]/).map(s => s.trim()).filter(Boolean);
-        let role = "Role";
-        let company = "Company";
-
-        if (parts.length > 0) {
-          const roleIdx = parts.findIndex(p => jobKeywords.test(p));
-          if (roleIdx !== -1) {
-            role = parts[roleIdx];
-            company = parts.filter((_, idx) => idx !== roleIdx).join(", ");
-          } else {
-            company = parts[0];
-            role = parts.slice(1).join(", ") || "Role";
+        // If company was embedded in role with a separator (e.g. "TFI Fridays – Host")
+        if (company === '' && role.includes('–') || company === '' && role.includes(' - ')) {
+          const parts = role.split(/\s*[-–—]\s*/).map(s => s.trim()).filter(Boolean);
+          if (parts.length >= 2) {
+            const roleIdx = parts.findIndex(p => jobKeywords.test(p));
+            if (roleIdx !== -1) {
+              role = parts[roleIdx];
+              company = parts.filter((_, idx) => idx !== roleIdx).join(', ');
+            } else {
+              company = parts[0];
+              role = parts.slice(1).join(' ');
+            }
           }
         }
 
         workExperience.push({
           id: `exp-${Date.now()}-${workExperience.length}`,
-          role,
-          company,
+          role: role || 'Role',
+          company: company || '',
           duration,
           description: []
         });
-        lastRoutedSection = 'experience';
+        continue;
+      }
+
+      // Bullet points → experience description bullets
+      if (isBullet && workExperience.length > 0) {
+        workExperience[workExperience.length - 1].description.push(cleanLine);
+        continue;
+      }
+
+      // Non-bullet, non-date continuation lines in experience section
+      // This can be wrapped bullet text OR a company name line (already handled above in look-ahead)
+      if (workExperience.length > 0) {
+        const lastExp = workExperience[workExperience.length - 1];
+        if (lastExp.description.length > 0) {
+          // Likely a continuation of the last bullet — join with single space and normalize
+          lastExp.description[lastExp.description.length - 1] = (lastExp.description[lastExp.description.length - 1] + ' ' + cleanLine).replace(/\s{2,}/g, ' ').trim();
+        } else if (cleanLine.length > 30 || actionVerbs.test(cleanLine)) {
+          // Treat as an unwrapped bullet point
+          lastExp.description.push(cleanLine);
+        }
+        // Short lines that aren't bullets and come right after a new job entry
+        // are already consumed as company lines by the look-ahead above, so we skip them.
       }
       continue;
     }
 
-    // 4. Handle continuation lines or text blocks
-    if (currentSection === 'header' || currentSection === 'summary') {
-      if (line.includes('@') || (phone && line.includes(phone)) || /github\.com|linkedin\.com/i.test(line)) {
-        continue;
-      }
-      if (fullName && line.toLowerCase().includes(fullName.toLowerCase())) {
-        continue;
-      }
-      if (summary.length < 2000) {
-        summary += (summary ? '\n' : '') + line;
-      }
-    } else if (currentSection === 'education') {
-      const schoolKeywords = /\b(college|university|school|institute|academy|inst\b|high school)\b/i;
-      const degreeKeywords = /\b(bachelor|master|phd|b\.a\.|m\.a\.|b\.s\.|m\.s\.|btech|mtech|bca|mca|degree|diploma|10th|12th|hsc|ssc|metric|matriculation|intermediate)\b/i;
+    // ── EDUCATION SECTION ─────────────────────────────────────────────────────
+    if (currentSection === 'education') {
+      // Skip bullet lines in education (often stray artifacts)
+      if (isBullet) continue;
 
-      let duration = '';
-      if (i < mergedLines.length - 1) {
-        const nextLine = mergedLines[i + 1];
-        const nextDateMatch = nextLine.match(/\b(19|20)\d{2}\b/g) || nextLine.match(/\b(19|20)\d{2}\s*[-–—]\s*(?:(19|20)\d{2}|present)\b/i);
-        if (nextDateMatch && !schoolKeywords.test(nextLine) && !degreeKeywords.test(nextLine)) {
-          duration = nextLine;
-          i++; // skip next line containing the date
-        }
-      }
-
-      const gpaMatch = line.match(/gpa\s*:\s*\d+(\.\d+)?/i) || line.match(/\b\d\.\d{1,2}\b/);
+      const gpaMatch = line.match(/gpa\s*:\s*[\d.]+/i) || line.match(/\b\d\.\d{1,2}\b/);
       const gpa = gpaMatch ? gpaMatch[0] : '';
-
       let cleanRemainder = line;
-      if (gpa) cleanRemainder = cleanRemainder.replace(gpa, "").trim();
-      cleanRemainder = cleanRemainder.replace(/^[,\-\s]+|[,\-\s]+$/g, "").trim();
+      if (gpa) cleanRemainder = cleanRemainder.replace(gpa, '').trim();
+      cleanRemainder = cleanRemainder.replace(/^[,\-\s]+|[,\-\s]+$/g, '').trim();
 
-      const parts = cleanRemainder.split(/[-|,\t]/).map(s => s.trim()).filter(Boolean);
-      let school = 'School/Institution';
-      let degree = 'Degree';
+      // Check if the line contains degree or school keywords — otherwise skip (could be stray text)
+      const hasDegreeKw = degreeKeywords.test(cleanRemainder);
+      const hasSchoolKw = schoolKeywords.test(cleanRemainder);
+      const hasYear = /\b(19|20)\d{2}\b/.test(cleanRemainder);
 
-      if (parts.length > 0) {
-        const schoolIdx = parts.findIndex(p => schoolKeywords.test(p));
-        const degreeIdx = parts.findIndex(p => degreeKeywords.test(p));
+      // Lines with NONE of the above are likely hobbies/interests leaked in — skip them
+      if (!hasDegreeKw && !hasSchoolKw && !hasYear) continue;
 
-        if (schoolIdx !== -1 && degreeIdx !== -1) {
-          school = parts[schoolIdx];
-          degree = parts[degreeIdx];
-        } else if (schoolIdx !== -1) {
-          school = parts[schoolIdx];
-          degree = parts.filter((_, idx) => idx !== schoolIdx).join(", ");
-        } else if (degreeIdx !== -1) {
-          degree = parts[degreeIdx];
-          school = parts.filter((_, idx) => idx !== degreeIdx).join(", ");
-        } else {
-          school = parts[0];
-          degree = parts.slice(1).join(", ") || "Degree";
+      // Look ahead for a date-only line
+      let duration = '';
+      if (i < classified.length - 1) {
+        const nextLine = classified[i + 1];
+        const nextDateOnly = nextLine.clean.match(/\b(19|20)\d{2}\b/g);
+        if (nextDateOnly && !schoolKeywords.test(nextLine.clean) && !degreeKeywords.test(nextLine.clean) && nextLine.clean.length < 30) {
+          duration = nextLine.clean;
+          i++;
         }
+      }
+
+      const parts = cleanRemainder.split(/[-–—|,\t]/).map(s => s.trim()).filter(Boolean);
+      let school = '';
+      let degree = '';
+
+      const schoolIdx = parts.findIndex(p => schoolKeywords.test(p));
+      const degreeIdx = parts.findIndex(p => degreeKeywords.test(p));
+
+      if (schoolIdx !== -1 && degreeIdx !== -1) {
+        school = parts[schoolIdx];
+        degree = parts[degreeIdx];
+      } else if (schoolIdx !== -1) {
+        school = parts[schoolIdx];
+        degree = parts.filter((_, idx) => idx !== schoolIdx).join(', ');
+      } else if (degreeIdx !== -1) {
+        // Special case: single part that STARTS with a year (e.g. "2015 Associates Degree")
+        // In that case extract year as duration and rest as degree
+        if (parts.length === 1 && /^\d{4}\s/.test(cleanRemainder)) {
+          const yearPart = cleanRemainder.match(/^\d{4}/)?.[0] || '';
+          degree = cleanRemainder.slice(yearPart.length).replace(/^[\s:]+/, '').trim();
+          if (!duration) duration = yearPart;
+        } else {
+          degree = parts[degreeIdx];
+          school = parts.filter((_, idx) => idx !== degreeIdx).join(', ');
+        }
+      } else if (hasYear) {
+        // Lines like "2015  Associates Degree : Business Administration"
+        const yearPart = cleanRemainder.match(/\b(19|20)\d{2}\b/)?.[0] || '';
+        degree = cleanRemainder.replace(yearPart, '').replace(/^[,\-\s:]+|[,\-\s:]+$/g, '').trim();
+        if (!duration) duration = yearPart;
+      } else {
+        school = parts[0] || '';
+        degree = parts.slice(1).join(', ') || '';
+      }
+
+      if (!school && !degree) continue; // Nothing meaningful — skip
+
+      // If we have a degree but no school, look ahead for a school-only line
+      if (!school && degree) {
+        const nextIdx = i + 1;
+        if (nextIdx < classified.length && !classified[nextIdx].section) {
+          const nextClean = classified[nextIdx].clean;
+          if (schoolKeywords.test(nextClean) && !degreeKeywords.test(nextClean) && nextClean.length < 80) {
+            // Strip city suffix (e.g. "Roxbury Community College- Boston")
+            school = nextClean.replace(/[-–—]\s*[A-Z][a-zA-Z\s,\.]+$/, '').replace(/[-–—]/g, '').trim();
+            i++;
+          }
+      }
       }
 
       education.push({
         id: `edu-${Date.now()}-${education.length}`,
-        school,
-        degree,
+        school: school || '',
+        degree: degree || '',
         duration,
         gpa
       });
-      lastRoutedSection = 'education';
-    } else if (currentSection === 'skills') {
-      const parts = line.split(/[,•|·\t\-]/).map(s => s.trim()).filter(s => s.length > 1 && s.length < 50);
+      continue;
+    }
+
+    // ── SKILLS SECTION ────────────────────────────────────────────────────────
+    if (currentSection === 'skills') {
+      const parts = line.split(/[,•|·\t]/).map(s => s.replace(/^[-*•●▪o▪]\s*/, '').trim()).filter(s => s.length > 1 && s.length < 60);
       for (const p of parts) {
-        const cleanSkill = p.replace(/^[-*•●▪o▪]\s*/, '').trim();
-        if (cleanSkill && !skills.includes(cleanSkill)) skills.push(cleanSkill);
+        if (!skills.includes(p)) skills.push(p);
       }
-    } else if (currentSection === 'languages') {
-      const parts = line.split(/[,•|·\t]/).map(s => s.trim()).filter(s => s.length > 1);
+      continue;
+    }
+
+    // ── LANGUAGES SECTION ─────────────────────────────────────────────────────
+    if (currentSection === 'languages') {
+      const parts = line.split(/[,•|·\t]/).map(s => s.replace(/^[-*•●▪o▪]\s*/, '').trim()).filter(s => s.length > 1);
       for (const p of parts) {
-        const cleanLang = p.replace(/^[-*•●▪o▪]\s*/, '').trim();
-        if (cleanLang && !languages.includes(cleanLang)) languages.push(cleanLang);
+        if (!languages.includes(p)) languages.push(p);
       }
-    } else if (currentSection === 'certifications') {
-      const parts = line.split(/[,•|·\t]/).map(s => s.trim()).filter(s => s.length > 1);
+      continue;
+    }
+
+    // ── CERTIFICATIONS SECTION ────────────────────────────────────────────────
+    if (currentSection === 'certifications') {
+      const parts = line.split(/[,•|·\t]/).map(s => s.replace(/^[-*•●▪o▪]\s*/, '').trim()).filter(s => s.length > 1);
       for (const p of parts) {
-        const cleanCert = p.replace(/^[-*•●▪o▪]\s*/, '').trim();
-        if (cleanCert && !certifications.includes(cleanCert)) certifications.push(cleanCert);
+        if (!certifications.includes(p)) certifications.push(p);
       }
-    } else if (currentSection === 'achievements') {
+      continue;
+    }
+
+    // ── ACHIEVEMENTS SECTION ──────────────────────────────────────────────────
+    if (currentSection === 'achievements') {
       achievements.push(cleanLine);
-    } else if (currentSection === 'projects') {
-      const isProjBullet = isBullet && (cleanLine.length > 25 || actionVerbs.test(cleanLine));
-      if (isProjBullet) {
+      continue;
+    }
+
+    // ── PROJECTS SECTION ──────────────────────────────────────────────────────
+    if (currentSection === 'projects') {
+      if (isBullet && (cleanLine.length > 25 || actionVerbs.test(cleanLine))) {
         if (projects.length === 0) {
-          projects.push({
-            id: `proj-${Date.now()}-0`,
-            name: 'Project Entry',
-            description: [],
-            duration: ''
-          });
+          projects.push({ id: `proj-${Date.now()}-0`, name: 'Project Entry', description: [], duration: '' });
         }
         projects[projects.length - 1].description.push(cleanLine);
-        lastRoutedSection = 'projects';
-      } else {
-        projects.push({
-          id: `proj-${Date.now()}-${projects.length}`,
-          name: cleanLine,
-          description: [],
-          duration: ''
-        });
-        lastRoutedSection = 'projects';
-      }
-    } else {
-      // Continuation of previous line depending on lastRoutedSection
-      if (lastRoutedSection === 'experience' && workExperience.length > 0) {
-        const lastExp = workExperience[workExperience.length - 1];
-        if (lastExp.description.length > 0) {
-          lastExp.description[lastExp.description.length - 1] += " " + line;
+      } else if (!isBullet) {
+        if (hasDate && projects.length > 0) {
+          projects[projects.length - 1].duration = classified[i].clean;
         } else {
-          lastExp.description.push(line);
-        }
-      } else if (lastRoutedSection === 'projects' && projects.length > 0) {
-        const lastProj = projects[projects.length - 1];
-        if (lastProj.description.length > 0) {
-          lastProj.description[lastProj.description.length - 1] += " " + line;
-        } else {
-          lastProj.description.push(line);
+          projects.push({ id: `proj-${Date.now()}-${projects.length}`, name: cleanLine, description: [], duration: '' });
         }
       }
+      continue;
+    }
+
+    // ── HEADER / SUMMARY SECTION ──────────────────────────────────────────────
+    if (currentSection === 'header' || currentSection === 'summary') {
+      if (line.includes('@') || (phone && line.includes(phone)) || /github\.com|linkedin\.com/i.test(line)) continue;
+      if (fullName && line.toLowerCase().includes(fullName.toLowerCase())) continue;
+      // Skip address/location lines (short lines with digits or city-state patterns)
+      if (/\b\d{3,6}\b/.test(line) && line.length < 60) continue;
+      if (summary.length < 2000) summary += (summary ? '\n' : '') + line;
     }
   }
 

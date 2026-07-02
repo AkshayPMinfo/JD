@@ -4,9 +4,17 @@ import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import mammoth from "mammoth";
 import { getDocumentProxy, extractText } from "unpdf";
+import {
+  rulesBasedParseResume,
+  rulesBasedSimplifyJd,
+  rulesBasedTailorResume,
+  rulesBasedAtsAudit
+} from "./rulesEngine";
 
 dotenv.config();
 dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });
+
+const USE_GEMINI = process.env.USE_GEMINI === "true";
 
 const app = express();
 const PORT = 3000;
@@ -84,9 +92,21 @@ async function extractTextFromPdfProxy(pdfData: any): Promise<string> {
   for (let i = 1; i <= numPages; i++) {
     const page = await pdfData.getPage(i);
     const textContent = await page.getTextContent();
-    const pageText = textContent.items
-      .map((item: any) => item.str || "")
-      .join(" ");
+    let pageText = '';
+    let lastY: number | null = null;
+    for (const item of textContent.items as any[]) {
+      const y = item.transform?.[5];
+      const str = item.str || "";
+      if (lastY !== null && y !== undefined && Math.abs(y - lastY) > 5) {
+        pageText += '\n';
+      } else if (item.hasEOL) {
+        pageText += '\n';
+      }
+      pageText += str + ' ';
+      if (y !== undefined) {
+        lastY = y;
+      }
+    }
     fullText += (fullText ? "\n\n" : "") + pageText;
   }
   return fullText;
@@ -725,6 +745,16 @@ app.post("/api/simplify-jd", async (req, res) => {
       return;
     }
 
+    if (!USE_GEMINI) {
+      if (!jdText) {
+        res.status(400).json({ error: "Rules-based mode requires a text or document job description. Image upload requires enabling AI Mode." });
+        return;
+      }
+      const result = rulesBasedSimplifyJd(jdText);
+      res.json(result);
+      return;
+    }
+
     const ai = getAI();
     let contents: any[] = [];
 
@@ -970,6 +1000,12 @@ app.post("/api/tailor-resume", async (req, res) => {
       return;
     }
 
+    if (!USE_GEMINI) {
+      const result = rulesBasedTailorResume(resume, jdText);
+      res.json(result);
+      return;
+    }
+
     const ai = getAI();
     const prompt = `You are a veteran HR Consultant and senior Resume Writer. Your task is to review the Candidate's Resume and tailor it to better align with the requirements in the Job Description, preserving factual honesty but boosting keyword matching, professional tone, and clarity.
 
@@ -1189,6 +1225,12 @@ app.post("/api/ats-audit", async (req, res) => {
       return;
     }
 
+    if (!USE_GEMINI) {
+      const result = rulesBasedAtsAudit(resume, jdText);
+      res.json(result);
+      return;
+    }
+
     const ai = getAI();
     const prompt = `You are an veteran ATS (Applicant Tracking System) scanner simulation. Score the Candidate's Resume against the specified Job Description (JD) and suggest actionable optimizations.
 
@@ -1314,6 +1356,47 @@ app.post("/api/analyze-uploaded-resume", async (req, res) => {
         indicators: [],
         reason,
         error: reason
+      });
+      return;
+    }
+
+    if (!USE_GEMINI) {
+      const validationResult = rulesBasedParseResume(extractedText, fileName);
+      if (validationResult && validationResult.detectedProfile) {
+        validationResult.detectedProfile = sanitizeResumeTextFields(validationResult.detectedProfile);
+      }
+      
+      const strictValidation = checkTextAgainstStrictResumeCriteria(extractedText);
+      if (validationResult.isResume && !strictValidation.isResume) {
+        validationResult.isResume = false;
+        validationResult.reason = strictValidation.reason;
+        validationResult.confidenceScore = 0;
+        validationResult.detectedProfile = null;
+        validationResult.indicators = [];
+      }
+
+      const indicators: string[] = [];
+      if (validationResult.detectedProfile) {
+        const dp = validationResult.detectedProfile;
+        if (dp.fullName) indicators.push("name");
+        if (dp.email || dp.phone) indicators.push("contact");
+        if (dp.education?.length) indicators.push("education");
+        if (dp.workExperience?.length) indicators.push("experience");
+        if (dp.skills?.length) indicators.push("skills");
+        if (dp.projects?.length) indicators.push("projects");
+        if (dp.certifications?.length) indicators.push("certifications");
+      }
+      validationResult.indicators = indicators;
+
+      validationLog(fileName || "unknown-file", "Rules Parser: Sections Found", {
+        indicators: validationResult.indicators,
+        reason: validationResult.reason
+      });
+
+      res.json({
+        ...validationResult,
+        fileType: detectedFileType,
+        extractedText: normalizeWhitespace(extractedText)
       });
       return;
     }

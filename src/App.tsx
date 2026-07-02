@@ -3341,7 +3341,7 @@ WORK EXPERIENCE
       {/* Collapsible Left Sidebar */}
       <aside 
         id="sidebar-menu"
-        className={`flex flex-col justify-between border-r-2 border-black bg-white transition-all duration-300 z-30 h-full relative flex-shrink-0 ${
+        className={`flex flex-col justify-between border-r-2 border-black bg-white transition-all duration-300 z-30 h-fit self-start relative flex-shrink-0 ${
           isSidebarCollapsed ? "w-20" : "w-64"
         }`}
       >
@@ -3656,27 +3656,25 @@ WORK EXPERIENCE
                 )}
               </div>
 
-              {/* Floating Action Pill on dashboard placed on the right side below, near to the corner */}
-              <div className="flex justify-end mt-4 pr-1">
-                <button
-                  id={savedVersions.length === 0 ? "btn-dashboard-float-create-new" : "btn-dashboard-float-create-new-has-items"}
-                  onClick={() => {
-                    if (!hasResume) {
-                      setShowNoResumeAlert(true);
-                    } else {
-                      if (!isUnlocked) {
-                        setIsUnlocked(true);
-                        sessionStorage.setItem("auralis_platform_unlocked", "true");
-                      }
-                      handleOpenTailorWizard();
+              {/* Floating Action Pill on dashboard fixed to bottom-right */}
+              <button
+                id={savedVersions.length === 0 ? "btn-dashboard-float-create-new" : "btn-dashboard-float-create-new-has-items"}
+                onClick={() => {
+                  if (!hasResume) {
+                    setShowNoResumeAlert(true);
+                  } else {
+                    if (!isUnlocked) {
+                      setIsUnlocked(true);
+                      sessionStorage.setItem("auralis_platform_unlocked", "true");
                     }
-                  }}
-                  className="px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border border-transparent flex items-center gap-1.5"
-                >
-                  <Plus className="w-4 h-4 text-white" strokeWidth={3} />
-                  <span>Create New</span>
-                </button>
-              </div>
+                    handleOpenTailorWizard();
+                  }
+                }}
+                className="fixed bottom-8 right-8 z-40 px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border border-transparent flex items-center gap-1.5"
+              >
+                <Plus className="w-4 h-4 text-white" strokeWidth={3} />
+                <span>Create New</span>
+              </button>
             </div>
           )}
 
@@ -4180,9 +4178,9 @@ WORK EXPERIENCE
                 </div>
 
                 {resumeSelectionMode !== "create" && (
-                  <div className="flex justify-end mt-4 pr-1">
+                  <>
                     {!hasResume ? (
-                      <div className="group relative inline-block">
+                      <div className="fixed bottom-8 right-8 z-40 group inline-block animate-fadeIn">
                         <button
                           id="btn-first-time-create-resume"
                           onClick={() => {
@@ -4191,7 +4189,7 @@ WORK EXPERIENCE
                             setAnalysisResult(null);
                             setIsUploadModalOpen(true);
                           }}
-                          className="px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border-2 border-transparent flex items-center gap-2"
+                          className="px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border border-transparent flex items-center gap-2"
                           title="Start here to unlock Auralis."
                         >
                           <Plus className="w-4 h-4 text-white" strokeWidth={3} />
@@ -4210,13 +4208,13 @@ WORK EXPERIENCE
                           setAnalysisResult(null);
                           setIsUploadModalOpen(true);
                         }}
-                        className="px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border-2 border-transparent flex items-center gap-2"
+                        className="fixed bottom-8 right-8 z-40 px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border border-transparent flex items-center gap-2"
                       >
                         <Plus className="w-4 h-4 text-white" strokeWidth={3} />
                         <span>Add Resume</span>
                       </button>
                     )}
-                  </div>
+                  </>
                 )}
 
                 {/* Render Manual Build Form Fields Directly */}

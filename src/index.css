@@ -247,3 +247,73 @@ body {
   -webkit-background-clip: unset !important;
   color: #ffffff !important;
 }
+
+/* ── Tailored Resume Highlight Grammar ───────────────────────────────────── */
+:root {
+  --add-blue:      #1f6feb;
+  --add-blue-bg:   #e6efff;
+  --add-yellow-bg: #fff2a8;
+}
+
+/* Kind A — inline */
+.add-kw {
+  background: var(--add-blue-bg) !important;
+  border-bottom: 2px solid var(--add-blue) !important;
+  padding: 0 2px;
+  border-radius: 2px;
+  font-weight: 600;
+  color: #0c2d6f !important;
+}
+
+.add-mx {
+  background: var(--add-yellow-bg) !important;
+  padding: 0 3px;
+  border-radius: 2px;
+  font-weight: 700;
+  color: #4b3c00 !important;
+}
+
+.add-both {
+  background: var(--add-blue-bg) !important;
+  border-bottom: 2px solid #d4a017 !important;
+  padding: 0 2px;
+  border-radius: 2px;
+  font-weight: 700;
+  color: #0c2d6f !important;
+}
+
+/* Kind B — new bullet: full-line variant of blue */
+.add-line {
+  background: var(--add-blue-bg) !important;
+  border-left: 3px solid var(--add-blue) !important;
+  padding: 4px 8px !important;
+  border-radius: 4px;
+}
+
+/* Kind C — new skill: dot + subtle blue */
+.add-skill {
+  position: relative;
+  padding-left: 14px !important;
+}
+
+.add-skill::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: .55em;
+  width: 8px;
+  height: 8px;
+  background: var(--add-blue) !important;
+  border-radius: 50%;
+}
+
+/* Kind D — new section: yellow left rail */
+.add-block {
+  border-left: 4px solid #d4a017 !important;
+  padding-left: 14px !important;
+  background: linear-gradient(to right, var(--add-yellow-bg) 0%, transparent 40%) !important;
+  border-radius: 6px;
+  margin-top: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+

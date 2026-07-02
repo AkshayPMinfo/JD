@@ -8,7 +8,8 @@ import {
   rulesBasedParseResume,
   rulesBasedSimplifyJd,
   rulesBasedTailorResume,
-  rulesBasedAtsAudit
+  rulesBasedAtsAudit,
+  rulesBasedTailor
 } from "./rulesEngine.js";
 
 dotenv.config();
@@ -88,7 +89,9 @@ function normalizeWhitespace(text: string): string {
 
 async function extractTextFromPdfProxy(pdfData: any): Promise<string> {
   const numPages = pdfData.numPages;
-  let fullText = '';
+  const leftPageTexts: string[] = [];
+  const rightPageTexts: string[] = [];
+  let anyColumns = false;
 
   for (let pageNum = 1; pageNum <= numPages; pageNum++) {
     const page = await pdfData.getPage(pageNum);
@@ -111,12 +114,12 @@ async function extractTextFromPdfProxy(pdfData: any): Promise<string> {
     if (allItems.length === 0) continue;
 
     // ── Detect column boundary via X-coordinate gap analysis ─────────────────
-    // Sort unique X values and look for the largest gap.
     const xValues = [...new Set(allItems.map(it => Math.round(it.x)))].sort((a, b) => a - b);
     const pageWidth = xValues[xValues.length - 1] - xValues[0];
+    const maxX = xValues[xValues.length - 1];
 
     let splitX: number | null = null;
-    if (xValues.length >= 4 && pageWidth > 100) {
+    if (xValues.length >= 4 && pageWidth > 250 && maxX > 300) {
       // Find the largest gap between consecutive X clusters
       let maxGap = 0;
       let maxGapIdx = -1;
@@ -141,50 +144,43 @@ async function extractTextFromPdfProxy(pdfData: any): Promise<string> {
       }
     }
 
-    let pageText = '';
+    const renderColumn = (colItems: TextItem[]): string => {
+      let text = '';
+      let lastY: number | null = null;
+      for (const item of colItems) {
+        if (lastY !== null && Math.abs(item.y - lastY) > 5) {
+          text += '\n';
+        } else if (text.length > 0 && !text.endsWith(' ') && !text.endsWith('\n')) {
+          text += ' ';
+        }
+        text += item.str;
+        lastY = item.y;
+      }
+      return text.trim();
+    };
 
     if (splitX !== null) {
-      // ── Two-column mode: emit left column, then right column ─────────────
+      anyColumns = true;
       const leftItems  = allItems.filter(it => it.x <= splitX).sort((a, b) => b.y - a.y || a.x - b.x);
       const rightItems = allItems.filter(it => it.x >  splitX).sort((a, b) => b.y - a.y || a.x - b.x);
 
-      const renderColumn = (colItems: TextItem[]): string => {
-        let text = '';
-        let lastY: number | null = null;
-        for (const item of colItems) {
-          if (lastY !== null && Math.abs(item.y - lastY) > 5) {
-            text += '\n';
-          } else if (text.length > 0 && !text.endsWith(' ') && !text.endsWith('\n')) {
-            text += ' ';
-          }
-          text += item.str;
-          lastY = item.y;
-        }
-        return text.trim();
-      };
-
-      const leftText  = renderColumn(leftItems);
-      const rightText = renderColumn(rightItems);
-      pageText = leftText + (rightText ? '\n\n' + rightText : '');
+      leftPageTexts.push(renderColumn(leftItems));
+      rightPageTexts.push(renderColumn(rightItems));
     } else {
-      // ── Single-column fallback: original Y-based logic ───────────────────
+      // Single-column page: treat as left-column text for grouping
       const sorted = allItems.sort((a, b) => b.y - a.y || a.x - b.x);
-      let lastY: number | null = null;
-      for (const item of sorted) {
-        if (lastY !== null && Math.abs(item.y - lastY) > 5) {
-          pageText += '\n';
-        } else if (pageText.length > 0 && !pageText.endsWith(' ') && !pageText.endsWith('\n')) {
-          pageText += ' ';
-        }
-        pageText += item.str;
-        lastY = item.y;
-      }
+      leftPageTexts.push(renderColumn(sorted));
     }
-
-    fullText += (fullText ? '\n\n' : '') + pageText;
   }
 
-  return fullText;
+  if (anyColumns) {
+    // Join all left-column blocks first, then all right-column blocks
+    const leftText = leftPageTexts.filter(t => t.length > 0).join('\n\n');
+    const rightText = rightPageTexts.filter(t => t.length > 0).join('\n\n');
+    return leftText + (rightText ? '\n\n' + rightText : '');
+  } else {
+    return leftPageTexts.filter(t => t.length > 0).join('\n\n');
+  }
 }
 
 
@@ -1084,8 +1080,8 @@ app.post("/api/tailor-resume", async (req, res) => {
     }
 
     if (!USE_GEMINI) {
-      const result = rulesBasedTailorResume(resume, jdText);
-      console.log("[Rules Tailor: ResumeStructure Tailored]", JSON.stringify(result.tailoredResume, null, 2));
+      const result = rulesBasedTailor(resume, jdText);
+      console.log("[Rules Tailor: TailoredResume Output]", JSON.stringify(result, null, 2));
       res.json(result);
       return;
     }

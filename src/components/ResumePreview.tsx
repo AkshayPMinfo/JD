@@ -1,82 +1,92 @@
 import React from "react";
-import { ResumeStructure } from "../types";
-import { Mail, Phone, Linkedin, Globe, MapPin } from "lucide-react";
+import { Resume, ResumeStructure, Block, Item, TailoredResume } from "../types";
+import { Mail, Phone, Linkedin, Globe } from "lucide-react";
+import { resumeStructureToResume } from "../utils/resumeConverter";
 import { findBestMatch } from "../utils/diffUtils";
 import { diffWords } from "diff";
 
 interface ResumePreviewProps {
-  resume: ResumeStructure;
+  resume: Resume | ResumeStructure;
   templateStyle: "classic" | "tech" | "executive" | "two-column";
   id?: string;
-  originalResume?: ResumeStructure;
+  tailored?: TailoredResume;
+  originalResume?: Resume | ResumeStructure;
+  showHighlights?: boolean;
 }
 
-export default function ResumePreview({ resume, templateStyle, id = "resume-preview-sheet", originalResume }: ResumePreviewProps) {
-  const { fullName, email, phone, linkedin, website, summary, workExperience, education, skills } = resume;
+export default function ResumePreview({
+  resume,
+  templateStyle,
+  id = "resume-preview-sheet",
+  tailored,
+  originalResume,
+  showHighlights = true
+}: ResumePreviewProps) {
+  // Convert current resume to spec-compliant Resume type if needed
+  const normResume: Resume = "blocks" in resume
+    ? resume
+    : resumeStructureToResume(resume);
 
-  // Custom highlights helper
+  // Extract header info from blocks
+  const headerBlock = normResume.blocks.find(b => b.kind === "header") as Extract<Block, { kind: "header" }> | undefined;
+  const fullName = headerBlock?.name || "Your Name";
+  const contact = headerBlock?.contact || [];
 
-  const getHighlightStyle = (section: "summary" | "skills" | "experience-bullet" | "project-bullet", value: string): string => {
-    if (!originalResume) return "";
-    if (section === "summary") {
-      return originalResume.summary !== resume.summary ? "bg-yellow-100 dark:bg-yellow-950/45 text-yellow-900 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-800 px-1.5 py-0.5 rounded print:bg-transparent print:text-black print:border-none print:p-0" : "";
-    }
-    if (section === "skills") {
-      const originalSkills = (originalResume.skills || []).map(s => s.toLowerCase());
-      return !originalSkills.includes(value.toLowerCase()) ? "bg-blue-100 dark:bg-blue-950/45 text-blue-900 dark:text-blue-300 border border-blue-300 dark:border-blue-800 px-2 py-0.5 rounded print:bg-transparent print:text-black print:border-none print:p-0" : "";
-    }
-    if (section === "experience-bullet" || section === "project-bullet") {
-      const allOriginalBullets = (originalResume.workExperience || []).flatMap(exp => exp.description || []).concat((originalResume.projects || []).flatMap(proj => proj.description || [])).map(b => b.trim().toLowerCase());
-      return !allOriginalBullets.includes(value.trim().toLowerCase()) ? "bg-yellow-100 dark:bg-yellow-950/45 text-yellow-900 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-800 px-1.5 py-0.5 rounded print:bg-transparent print:text-black print:border-none print:p-0 block" : "";
-    }
-    return "";
-  };
+  const email = contact.find(c => c.includes("@")) || "";
+  const phone = contact.find(c => /^[+\d\s()-]{7,20}$/.test(c.replace(/[^\d+]/g, ""))) || (contact.length > 0 ? contact[0] : "");
+  const linkedin = contact.find(c => c.toLowerCase().includes("linkedin.com")) || "";
+  const website = contact.find(c => !c.includes("@") && c !== phone && c !== linkedin) || "";
 
-  const getSkillHighlight = (skill: string): string => {
+  // Prepare fallback diff lists if originalResume is provided directly
+  const normOriginal = originalResume
+    ? ("blocks" in originalResume ? originalResume : resumeStructureToResume(originalResume))
+    : undefined;
 
-    if (!originalResume) return "";
-    const originalSkills = (originalResume.skills || []).map(s => s.toLowerCase());
-    const lowerSkill = skill.toLowerCase();
-    
-    if (originalSkills.includes(lowerSkill)) return ""; // Unchanged
+  const originalBullets: string[] = [];
+  const originalSkills: string[] = [];
+  let originalSummary = "";
 
-    let maxSim = 0;
-    for (const os of originalSkills) {
-      let match = 0;
-      for (let i = 0; i < Math.min(os.length, lowerSkill.length); i++) {
-        if (os[i] === lowerSkill[i]) match++;
+  if (normOriginal) {
+    normOriginal.blocks.forEach(b => {
+      if (b.kind === "text" && (b.label?.toLowerCase().includes("summary") || b.label?.toLowerCase().includes("profile"))) {
+        originalSummary = b.body;
       }
-      const sim = match / Math.max(os.length, lowerSkill.length);
-      if (sim > maxSim) maxSim = sim;
-    }
-
-    if (maxSim > 0.5) return "bg-[#FEF08A] px-1.5 py-0.5 rounded"; // Modified
-    return "bg-[#BAE6FD] px-1.5 py-0.5 rounded"; // New
-  };
+      if (b.kind === "section") {
+        const labelLower = b.label.toLowerCase();
+        if (labelLower === "experience" || labelLower === "projects") {
+          b.items.forEach(it => {
+            if (it.kind === "job") {
+              originalBullets.push(...(it.bullets || []));
+            }
+          });
+        }
+        if (labelLower === "skills") {
+          b.items.forEach(it => {
+            if (it.kind === "skill") {
+              originalSkills.push(it.name.toLowerCase());
+            }
+          });
+        }
+      }
+    });
+  }
 
   /**
-   * Renders a bullet/summary with word-level diff highlights.
-   * - Entirely new text → solid blue highlight (#BAE6FD)
-   * - Modified text (similarity ≥ 0.2) → yellow for added words, plain for unchanged
-   * - print:bg-transparent strips all highlights for PDF/print export
+   * Renders a string with on-the-fly diffing against original candidates (fallback mode)
    */
-  const renderInlineDiff = (value: string, originalCandidates: string[]) => {
-    if (!originalResume) {
-      // No diff context — render plain
+  const renderInlineDiff = (value: string, originalCandidates: string[], highlightsEnabled: boolean) => {
+    if (!highlightsEnabled) {
       return <>{value}</>;
     }
     if (!originalCandidates || originalCandidates.length === 0) {
-      // Brand-new bullet (not in original at all) → full blue
-      return <span className="bg-[#BAE6FD] print:bg-transparent">{value}</span>;
+      return <span className="add-line">{value}</span>;
     }
 
     const { match, similarity } = findBestMatch(value, originalCandidates);
     if (similarity < 0.15 || !match) {
-      // Very low similarity → treat as entirely new
-      return <span className="bg-[#BAE6FD] print:bg-transparent">{value}</span>;
+      return <span className="add-line">{value}</span>;
     }
     if (similarity >= 0.99) {
-      // Effectively identical → no highlight
       return <>{value}</>;
     }
 
@@ -86,8 +96,10 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
         {changes.map((part, index) => {
           if (part.removed) return null;
           if (part.added) {
+            const hasMetric = /[\d%$\b\w]+/.test(part.value) && /[\d%$\/]+/.test(part.value);
+            const cls = hasMetric ? "add-both" : "add-kw";
             return (
-              <span key={index} className="bg-[#FEF08A] print:bg-transparent">
+              <span key={index} className={cls}>
                 {part.value}
               </span>
             );
@@ -98,18 +110,486 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
     );
   };
 
-  // Render different styles based on template
+  /**
+   * Renders a string with inline diff additions.
+   * NEVER touches original base characters.
+   */
+  const renderBullet = (
+    text: string,
+    additions: Array<{ insertAfter: number; text: string; cls: "add-kw" | "add-mx" | "add-both" }> | undefined,
+    highlightsEnabled: boolean,
+    bulletKey: string,
+    candidates: string[]
+  ): React.ReactNode => {
+    // If we have direct tailored additions, use them
+    if (tailored) {
+      if (!additions || additions.length === 0) {
+        return text;
+      }
+      const sortedAdditions = [...additions].sort((a, b) => a.insertAfter - b.insertAfter);
+      const elements: React.ReactNode[] = [];
+      let currentPos = 0;
+
+      sortedAdditions.forEach((add, idx) => {
+        if (add.insertAfter > currentPos) {
+          elements.push(<span key={`text-${idx}`}>{text.slice(currentPos, add.insertAfter)}</span>);
+          currentPos = add.insertAfter;
+        }
+        const highlightCls = highlightsEnabled ? add.cls : "";
+        elements.push(
+          <span key={`add-${idx}`} className={highlightCls}>
+            {add.text}
+          </span>
+        );
+      });
+
+      if (currentPos < text.length) {
+        elements.push(<span key="text-end">{text.slice(currentPos)}</span>);
+      }
+      return <>{elements}</>;
+    }
+
+    // Otherwise, fallback to on-the-fly diffing if originalResume is passed
+    if (normOriginal) {
+      return renderInlineDiff(text, candidates, highlightsEnabled);
+    }
+
+    // Default: render plain text
+    return text;
+  };
+
+  /**
+   * Renders an item inside a section block
+   */
+  const renderItem = (item: Item, blockIdx: number, itemIdx: number) => {
+    const jobKey = `${blockIdx}.${itemIdx}`;
+
+    if (item.kind === "job") {
+      if (templateStyle === "two-column") {
+        return (
+          <div key={jobKey} className="font-serif">
+            <h3 className="font-bold text-black text-sm">
+              <span>{item.company}</span>
+              {item.title && (
+                <>
+                  <span className="text-gray-400 font-normal font-sans mx-1.5">—</span>
+                  <span className="italic font-bold text-neutral-800">{item.title}</span>
+                </>
+              )}
+            </h3>
+            <p className="text-[11px] text-neutral-500 font-semibold font-sans mt-0.5">{item.dates}</p>
+            <ul className="list-disc pl-5 mt-2 space-y-1 text-xs text-neutral-700 leading-relaxed font-serif">
+              {item.bullets.map((bullet, bulletIdx) => {
+                const bulletKey = `${jobKey}.${bulletIdx}`;
+                const adds = tailored?.inlineAdditions?.[bulletKey];
+                return (
+                  <li key={bulletIdx}>
+                    {renderBullet(bullet, adds, showHighlights, bulletKey, originalBullets)}
+                  </li>
+                );
+              })}
+              {/* Kind B: New Bullets */}
+              {tailored?.newBullets?.[jobKey]?.map((nb, idx) => (
+                <li key={`nb-${idx}`} className={showHighlights ? "add-line" : ""}>
+                  {nb.text}
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      }
+
+      if (templateStyle === "tech") {
+        return (
+          <div key={jobKey} className="border-l-2 border-[#2a2a2e] pl-4 print:border-gray-200">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-baseline">
+              <h3 className="font-bold text-gray-100 text-sm print:text-black font-mono">
+                {item.title ? `${item.title} ` : ""}
+                <span className="text-green-400">@ {item.company}</span>
+              </h3>
+              <span className="text-xs text-gray-500 print:text-gray-600 font-semibold font-mono">{item.dates}</span>
+            </div>
+            <ul className="list-none space-y-1.5 mt-2 font-mono">
+              {item.bullets.map((bullet, bulletIdx) => {
+                const bulletKey = `${jobKey}.${bulletIdx}`;
+                const adds = tailored?.inlineAdditions?.[bulletKey];
+                return (
+                  <li key={bulletIdx} className="text-xs text-gray-300 leading-relaxed print:text-gray-800 flex items-start gap-1">
+                    <span className="text-green-500 select-none">-</span>
+                    <span>{renderBullet(bullet, adds, showHighlights, bulletKey, originalBullets)}</span>
+                  </li>
+                );
+              })}
+              {/* Kind B: New Bullets */}
+              {tailored?.newBullets?.[jobKey]?.map((nb, idx) => (
+                <li key={`nb-${idx}`} className={showHighlights ? "add-line text-xs flex items-start gap-1" : "text-xs text-gray-300 leading-relaxed print:text-gray-800 flex items-start gap-1"}>
+                  <span className="text-green-500 select-none">-</span>
+                  <span>{nb.text}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      }
+
+      if (templateStyle === "executive") {
+        return (
+          <div key={jobKey}>
+            <div className="flex justify-between items-baseline font-semibold font-sans">
+              <h3 className="text-sm text-[#111827]">
+                {item.title ? (
+                  <>
+                    {item.title} <span className="text-gray-500 font-normal">|</span>{" "}
+                  </>
+                ) : null}
+                <span className="text-[#1e3a8a] font-bold">{item.company}</span>
+              </h3>
+              <span className="text-xs text-gray-500 font-normal">{item.dates}</span>
+            </div>
+            <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed font-sans">
+              {item.bullets.map((bullet, bulletIdx) => {
+                const bulletKey = `${jobKey}.${bulletIdx}`;
+                const adds = tailored?.inlineAdditions?.[bulletKey];
+                return (
+                  <li key={bulletIdx}>
+                    <span className="text-gray-700">{renderBullet(bullet, adds, showHighlights, bulletKey, originalBullets)}</span>
+                  </li>
+                );
+              })}
+              {/* Kind B: New Bullets */}
+              {tailored?.newBullets?.[jobKey]?.map((nb, idx) => (
+                <li key={`nb-${idx}`} className={showHighlights ? "add-line" : ""}>
+                  <span className="text-gray-700">{nb.text}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      }
+
+      // Default/Classic style
+      return (
+        <div key={jobKey}>
+          <div className="flex justify-between items-baseline font-medium text-xs font-serif">
+            <span className="font-semibold text-gray-900 text-sm">
+              {item.title ? `${item.title} — ` : ""}
+              <span className="italic text-gray-700 font-normal">{item.company}</span>
+            </span>
+            <span className="text-gray-500 font-normal">{item.dates}</span>
+          </div>
+          <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed font-serif">
+            {item.bullets.map((bullet, bulletIdx) => {
+              const bulletKey = `${jobKey}.${bulletIdx}`;
+              const adds = tailored?.inlineAdditions?.[bulletKey];
+              return (
+                <li key={bulletIdx}>
+                  <span className="text-gray-700 font-normal">{renderBullet(bullet, adds, showHighlights, bulletKey, originalBullets)}</span>
+                </li>
+              );
+            })}
+            {/* Kind B: New Bullets */}
+            {tailored?.newBullets?.[jobKey]?.map((nb, idx) => (
+              <li key={`nb-${idx}`} className={showHighlights ? "add-line" : ""}>
+                <span className="text-gray-700 font-normal">{nb.text}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      );
+    }
+
+    if (item.kind === "edu") {
+      return (
+        <div key={jobKey} className="text-xs">
+          <div className="flex justify-between items-baseline font-semibold">
+            <h3 className="font-bold text-gray-900 print:text-black text-sm">{item.degree}</h3>
+            <span className="text-gray-500 font-normal">{item.dates}</span>
+          </div>
+          <p className="text-gray-600 font-medium">{item.school}</p>
+        </div>
+      );
+    }
+
+    return null;
+  };
+
+  /**
+   * Renders a full block
+   */
+  const renderBlock = (block: Block, blockIdx: number) => {
+    if (block.kind === "header") return null;
+
+    if (block.kind === "text") {
+      const isSummary = block.label?.toLowerCase().includes("summary") || block.label?.toLowerCase().includes("profile");
+      const adds = isSummary ? tailored?.inlineAdditions?.[`${blockIdx}.summary`] : undefined;
+
+      if (templateStyle === "two-column") {
+        return (
+          <div key={blockIdx}>
+            <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-2 font-sans">
+              {block.label || "Profile"}
+            </h2>
+            <p className="text-xs text-neutral-700 leading-relaxed font-serif">
+              {renderBullet(block.body, adds, showHighlights, `${blockIdx}.summary`, originalSummary ? [originalSummary] : [])}
+            </p>
+          </div>
+        );
+      }
+
+      if (templateStyle === "tech") {
+        return (
+          <div key={blockIdx} className="mb-6 font-mono">
+            <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-2 print:text-black">
+              // {block.label?.toUpperCase() || "SUMMARY"}
+            </h2>
+            <p className="text-xs leading-relaxed text-gray-300 print:text-gray-800 font-mono">
+              {renderBullet(block.body, adds, showHighlights, `${blockIdx}.summary`, originalSummary ? [originalSummary] : [])}
+            </p>
+          </div>
+        );
+      }
+
+      if (templateStyle === "executive") {
+        return (
+          <div key={blockIdx} className="mb-6 font-sans">
+            <h2 className="text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-2 print:text-black">
+              {block.label || "Executive Summary"}
+            </h2>
+            <p className="text-xs leading-relaxed text-gray-700 font-normal">
+              {renderBullet(block.body, adds, showHighlights, `${blockIdx}.summary`, originalSummary ? [originalSummary] : [])}
+            </p>
+          </div>
+        );
+      }
+
+      return (
+        <div key={blockIdx} className="mb-6 font-serif">
+          <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-2 border-b border-gray-300 pb-0.5">
+            {block.label || "Professional Summary"}
+          </h2>
+          <p className="text-xs leading-relaxed text-gray-750 font-serif">
+            {renderBullet(block.body, adds, showHighlights, `${blockIdx}.summary`, originalSummary ? [originalSummary] : [])}
+          </p>
+        </div>
+      );
+    }
+
+    if (block.kind === "section") {
+      const isSkills = block.label.toLowerCase() === "skills";
+      const isCertifications = block.label.toLowerCase() === "certifications";
+      const isLanguages = block.label.toLowerCase() === "languages";
+
+      if (isSkills) {
+        const checkSkillHighlight = (sk: string): string => {
+          if (!showHighlights || !normOriginal) return "";
+          if (originalSkills.includes(sk.toLowerCase())) return "";
+          return "add-skill";
+        };
+
+        if (templateStyle === "two-column") {
+          return (
+            <div key={blockIdx}>
+              <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
+                {block.label}
+              </h2>
+              <ul className="list-none space-y-2.5 text-xs text-neutral-700 font-sans font-semibold">
+                {block.items.map((skill, idx) => {
+                  const name = skill.kind === "skill" ? skill.name : "";
+                  const highlightCls = checkSkillHighlight(name);
+                  return (
+                    <li key={idx} className={highlightCls}>
+                      {name}
+                    </li>
+                  );
+                })}
+                {/* Kind C: New Skills */}
+                {tailored?.newSkills?.map((skill, idx) => (
+                  <li key={`ns-${idx}`} className={showHighlights ? "add-skill" : ""}>
+                    {skill}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        }
+
+        if (templateStyle === "tech") {
+          return (
+            <div key={blockIdx} className="mb-6 font-mono">
+              <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-2 print:text-black">
+                // SKILLS
+              </h2>
+              <div className="flex flex-wrap gap-2">
+                {block.items.map((skill, idx) => {
+                  const name = skill.kind === "skill" ? skill.name : "";
+                  const highlightCls = checkSkillHighlight(name);
+                  const isNew = highlightCls === "add-skill";
+                  return (
+                    <span
+                      key={idx}
+                      className={isNew
+                        ? "add-skill bg-[#e6efff] text-[#1f6feb] px-2 py-0.5 rounded text-xs border border-[#1f6feb] font-semibold"
+                        : "bg-[#2a2a2e] text-green-400 px-2 py-0.5 rounded text-xs border border-[#3e3e44] print:bg-gray-100 print:text-black print:border-gray-300"
+                      }
+                    >
+                      {name}
+                    </span>
+                  );
+                })}
+                {/* Kind C: New Skills */}
+                {tailored?.newSkills?.map((skill, idx) => (
+                  <span
+                    key={`ns-${idx}`}
+                    className={showHighlights 
+                      ? "add-skill bg-[#e6efff] text-[#1f6feb] px-2 py-0.5 rounded text-xs border border-[#1f6feb] font-semibold"
+                      : "bg-[#2a2a2e] text-green-400 px-2 py-0.5 rounded text-xs border border-[#3e3e44] print:bg-gray-100 print:text-black print:border-gray-300"
+                    }
+                  >
+                    {skill}
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        }
+
+        if (templateStyle === "executive") {
+          return (
+            <div key={blockIdx} className="mb-6 font-sans">
+              <h2 className="text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-2 print:text-black">
+                Key Expertise
+              </h2>
+              <div className="flex flex-wrap gap-1.5">
+                {block.items.map((skill, idx) => {
+                  const name = skill.kind === "skill" ? skill.name : "";
+                  const highlightCls = checkSkillHighlight(name);
+                  const isNew = highlightCls === "add-skill";
+                  return (
+                    <span
+                      key={idx}
+                      className={isNew
+                        ? "add-skill bg-[#e6efff] text-[#1f6feb] px-2.5 py-1 rounded text-xs font-bold border border-[#1f6feb]"
+                        : "bg-[#f0f4ff] text-[#1e3a8a] px-2.5 py-1 rounded text-xs font-semibold print:bg-gray-100 print:text-black print:border print:border-gray-200"
+                      }
+                    >
+                      {name}
+                    </span>
+                  );
+                })}
+                {/* Kind C: New Skills */}
+                {tailored?.newSkills?.map((skill, idx) => (
+                  <span
+                    key={`ns-${idx}`}
+                    className={showHighlights
+                      ? "add-skill bg-[#e6efff] text-[#1f6feb] px-2.5 py-1 rounded text-xs font-bold border border-[#1f6feb]"
+                      : "bg-[#f0f4ff] text-[#1e3a8a] px-2.5 py-1 rounded text-xs font-semibold print:bg-gray-100 print:text-black print:border print:border-gray-200"
+                    }
+                  >
+                    {skill}
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        }
+
+        // Classic/Default skills
+        return (
+          <div key={blockIdx} className="mb-6 font-sans">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-2 border-b border-gray-300 pb-0.5 font-sans">
+              Skills
+            </h2>
+            <div className="flex flex-wrap gap-x-2 gap-y-1 text-xs text-gray-700 leading-relaxed">
+              {block.items.map((skill, idx) => {
+                const name = skill.kind === "skill" ? skill.name : "";
+                const highlightCls = checkSkillHighlight(name);
+                const isNew = highlightCls === "add-skill";
+                return (
+                  <span key={idx} className={isNew ? "add-skill text-[#1f6feb] font-bold" : ""}>
+                    {name}{idx < block.items.length - 1 ? "," : ""}
+                  </span>
+                );
+              })}
+              {tailored?.newSkills?.map((skill, idx) => (
+                <span key={`ns-${idx}`} className={showHighlights ? "add-skill text-[#1f6feb] font-bold" : ""}>
+                  , {skill}
+                </span>
+              ))}
+            </div>
+          </div>
+        );
+      }
+
+      if (isCertifications || isLanguages) {
+        const title = block.label;
+        return (
+          <div key={blockIdx} className="mb-4">
+            <h2 className={templateStyle === "two-column" 
+              ? "text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans"
+              : templateStyle === "tech"
+              ? "text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-3 print:text-black font-mono"
+              : templateStyle === "executive"
+              ? "text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-3 print:text-black font-sans"
+              : "text-xs font-bold uppercase tracking-wider text-gray-900 mb-2 border-b border-gray-300 pb-0.5 font-sans"
+            }>
+              {templateStyle === "tech" ? `// ${title.toUpperCase()}` : title}
+            </h2>
+            <ul className="list-disc pl-5 space-y-1 text-xs text-neutral-700">
+              {block.items.map((it, idx) => (
+                <li key={idx} className={templateStyle === "tech" ? "list-none text-gray-300 font-mono" : "text-gray-700"}>
+                  {templateStyle === "tech" && <span className="text-green-500 select-none mr-2 font-mono">&#62;</span>}
+                  {it.kind === "line" ? it.text : ""}
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      }
+
+      // Experience, Education, Projects
+      return (
+        <div key={blockIdx} className="space-y-4 mb-6">
+          <h2 className={templateStyle === "two-column"
+            ? "text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans"
+            : templateStyle === "tech"
+            ? "text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-3 print:text-black font-mono"
+            : templateStyle === "executive"
+            ? "text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-3 print:text-black font-sans"
+            : "text-xs font-bold uppercase tracking-wider text-gray-900 mb-3 border-b border-gray-300 pb-0.5 font-sans"
+          }>
+            {templateStyle === "tech" ? `// ${block.label.toUpperCase()}` : block.label}
+          </h2>
+          <div className="space-y-6">
+            {block.items.map((item, itemIdx) => renderItem(item, blockIdx, itemIdx))}
+          </div>
+        </div>
+      );
+    }
+
+    return null;
+  };
+
+  // ── TWO-COLUMN GRID ASSEMBLY ──────────────────────────────────────────────
   if (templateStyle === "two-column") {
+    const leftBlocks = normResume.blocks.filter(b =>
+      b.kind === "text" ||
+      (b.kind === "section" && ["experience", "education", "projects", "achievements", "key achievements"].includes(b.label.toLowerCase()))
+    );
+
+    const rightBlocks = normResume.blocks.filter(b =>
+      b.kind === "section" && ["skills", "certifications", "languages"].includes(b.label.toLowerCase())
+    );
+
     return (
       <div
         id={id}
-        className="bg-white text-gray-900 p-8 max-w-[820px] mx-auto text-sm print:p-0 print:border-none print:shadow-none"
+        className="bg-white text-gray-900 p-8 max-w-[820px] mx-auto text-sm print:p-0 print:border-none print:shadow-none font-serif"
       >
         {/* Header */}
         <div className="flex justify-between items-start mb-8">
           <div className="text-left">
             <h1 className="text-4xl font-extrabold tracking-tight text-black font-serif">
-              {fullName || "Your Name"}
+              {fullName}
             </h1>
           </div>
           <div className="text-left text-xs text-black font-sans space-y-1.5 font-bold">
@@ -142,733 +622,123 @@ export default function ResumePreview({ resume, templateStyle, id = "resume-prev
 
         {/* Content columns */}
         <div className="grid grid-cols-1 md:grid-cols-12 gap-8 text-left">
-          {/* Left Column - Summary & Experience */}
+          {/* Left Column */}
           <div className="md:col-span-8 space-y-6">
-            {summary && (
-              <div>
-                <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-2 font-sans">
-                  Professional Summary
-                </h2>
-                <p className="text-xs text-neutral-700 leading-relaxed font-serif">
-                  {originalResume && originalResume.summary 
-                    ? renderInlineDiff(summary, [originalResume.summary])
-                    : summary}
-                </p>
-              </div>
-            )}
-
-            {workExperience && workExperience.length > 0 && (
-              <div>
-                <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
-                  Experience
-                </h2>
-                <div className="space-y-6">
-                  {workExperience.map((exp) => (
-                    <div key={exp.id} className="font-serif">
-                      <h3 className="font-bold text-black text-sm">
-                        <span>{exp.company}</span>
-                        <span className="text-gray-400 font-normal font-sans mx-1.5">—</span>
-                        <span className="italic font-bold text-neutral-800">{exp.role}</span>
-                      </h3>
-                      <p className="text-[11px] text-neutral-500 font-semibold font-sans mt-0.5">{exp.duration}</p>
-                      <ul className="list-disc pl-5 mt-2 space-y-1 text-xs text-neutral-700 leading-relaxed font-serif">
-                        {exp.description.map((bullet, idx) => {
-                          const originalCandidates = originalResume?.workExperience?.find(e => e.id === exp.id)?.description || [];
-                          return (
-                            <li key={idx} className="print:bg-transparent">
-                              <span className="text-neutral-700 leading-relaxed">
-                                {renderInlineDiff(bullet, originalCandidates)}
-                              </span>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {resume.projects && resume.projects.length > 0 && (
-              <div>
-                <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
-                  Projects
-                </h2>
-                <div className="space-y-4">
-                  {resume.projects.map((proj) => (
-                    <div key={proj.id} className="font-serif">
-                      <h3 className="font-bold text-black text-sm">{proj.name}</h3>
-                      <ul className="list-disc pl-5 mt-1.5 space-y-1 text-xs text-neutral-700 leading-relaxed font-serif">
-                        {proj.description.map((bullet, idx) => {
-                          const originalCandidates = originalResume?.projects?.find(p => p.id === proj.id)?.description || [];
-                          return (
-                            <li key={idx} className="print:bg-transparent">
-                              <span className="text-neutral-700 leading-relaxed">
-                                {renderInlineDiff(bullet, originalCandidates)}
-                              </span>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {education && education.length > 0 && (
-              <div>
-                <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
-                  Education
-                </h2>
-                <div className="space-y-4">
-                  {education.map((edu) => (
-                    <div key={edu.id} className="font-serif">
-                      <h3 className="font-bold text-black text-sm">{edu.degree}</h3>
-                      <p className="text-neutral-700 text-xs mt-0.5">{edu.school}</p>
-                      <p className="text-[10px] text-neutral-500 font-semibold font-sans mt-0.5">{edu.duration} {edu.gpa && <span>| GPA: {edu.gpa}</span>}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {resume.achievements && resume.achievements.length > 0 && (
-              <div className="mt-6">
-                <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
-                  Achievements & Awards
-                </h2>
-                <ul className="list-disc pl-5 space-y-1.5 text-xs text-neutral-700 leading-relaxed font-serif">
-                  {resume.achievements.map((ach, index) => (
-                    <li key={index}>
-                      <span>{ach}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            {leftBlocks.map((block) => renderBlock(block, normResume.blocks.indexOf(block)))}
           </div>
 
-          {/* Right Column - Skills & Languages */}
+          {/* Right Column */}
           <div className="md:col-span-4 space-y-6">
-            {skills && skills.length > 0 && (
-              <div>
-                <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
-                  Skills
-                </h2>
-                <ul className="list-none space-y-2.5 text-xs text-neutral-700 font-sans font-semibold">
-                  {skills.map((skill, index) => (
-                    <li key={index}>
-                      <span className={getSkillHighlight(skill) || ""}>
-                        {skill}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {resume.certifications && resume.certifications.length > 0 && (
-              <div>
-                <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
-                  Certifications
-                </h2>
-                <ul className="list-disc pl-5 space-y-2 text-xs text-neutral-700 font-sans font-semibold">
-                  {resume.certifications.map((cert, index) => (
-                    <li key={index}>{cert}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {resume.languages && resume.languages.length > 0 && (
-              <div>
-                <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
-                  Languages
-                </h2>
-                <ul className="list-disc pl-5 space-y-2 text-xs text-neutral-700 font-sans font-semibold">
-                  {resume.languages.map((lang, index) => (
-                    <li key={index}>{lang}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            {rightBlocks.map((block) => renderBlock(block, normResume.blocks.indexOf(block)))}
           </div>
         </div>
+
+        {/* Kind D: Appended New Sections */}
+        {tailored?.newSections?.map((sec, secIdx) => {
+          const sectionCls = showHighlights ? "add-block text-left mt-8" : "text-left mt-8";
+          return (
+            <section key={`new-sec-${secIdx}`} className={sectionCls}>
+              <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
+                {sec.label}
+              </h2>
+              <ul className="list-disc pl-5 space-y-1 text-xs text-neutral-700 font-serif">
+                {sec.items.map((it, itIdx) => (
+                  <li key={itIdx}>{it.kind === "line" ? it.text : ""}</li>
+                ))}
+              </ul>
+            </section>
+          );
+        })}
       </div>
     );
   }
 
-  // Render different styles based on template
-  if (templateStyle === "tech") {
-    return (
-      <div
-        id={id}
-        className="bg-[#121214] text-gray-200 p-8 font-mono max-w-[800px] mx-auto border border-[#27272a] shadow-lg rounded-lg text-sm print:bg-white print:text-black print:p-0 print:border-none print:shadow-none"
-      >
-        {/* Header */}
-        <div className="border-b-2 border-green-500 pb-4 mb-6">
-          <h1 className="text-2xl font-bold uppercase tracking-wider text-green-400 print:text-black">
-            {fullName || "Your Name"}
-          </h1>
-          <p className="text-xs text-gray-400 mt-1 uppercase tracking-widest">
-            {workExperience?.[0]?.role || "Resume Profile"}
-          </p>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs text-gray-400 print:text-gray-700">
-            {email && (
-              <span className="flex items-center gap-1">
-                <span className="text-green-500 font-bold">&#62;</span> {email}
-              </span>
-            )}
-            {phone && (
-              <span className="flex items-center gap-1">
-                <span className="text-green-500 font-bold">&#62;</span> {phone}
-              </span>
-            )}
-            {linkedin && (
-              <span className="flex items-center gap-1">
-                <span className="text-green-500 font-bold">&#62;</span> {linkedin.replace(/https?:\/\/(www\.)?/, "")}
-              </span>
-            )}
-            {website && (
-              <span className="flex items-center gap-1">
-                <span className="text-green-500 font-bold">&#62;</span> {website.replace(/https?:\/\/(www\.)?/, "")}
-              </span>
-            )}
-          </div>
-        </div>
+  // ── SINGLE COLUMN ASSEMBLY ────────────────────────────────────────────────
+  const containerClass = templateStyle === "tech"
+    ? "bg-[#121214] text-gray-200 p-8 font-mono max-w-[800px] mx-auto border border-[#27272a] shadow-lg rounded-lg text-sm print:bg-white print:text-black print:p-0 print:border-none print:shadow-none"
+    : templateStyle === "executive"
+    ? "bg-white text-gray-950 p-8 font-sans max-w-[800px] mx-auto border-t-8 border-[#1e3a8a] shadow-lg rounded-lg text-sm print:p-0 print:border-none print:shadow-none"
+    : "bg-white text-gray-900 p-8 font-serif max-w-[800px] mx-auto border border-gray-200 shadow-md rounded-lg text-sm print:p-0 print:border-none print:shadow-none";
 
-        {/* Profile Summary */}
-        {summary && (
-          <div className="mb-6">
-            <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-2 print:text-black">
-              // SUMMARY
-            </h2>
-            <p className="text-xs leading-relaxed text-gray-300 print:text-gray-800">
-              {renderInlineDiff(summary, originalResume ? [originalResume.summary] : [])}
-            </p>
-          </div>
-        )}
+  const headerClass = templateStyle === "tech"
+    ? "border-b-2 border-green-500 pb-4 mb-6 text-left"
+    : templateStyle === "executive"
+    ? "text-center pb-6 mb-6 border-b border-gray-200"
+    : "text-center pb-5 mb-5 border-b border-gray-200";
 
-        {/* Skills Console */}
-        {skills && skills.length > 0 && (
-          <div className="mb-6">
-            <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-2 print:text-black">
-              // SKILLS
-            </h2>
-            <div className="flex flex-wrap gap-2">
-              {skills.map((skill, index) => (
-                <span
-                  key={index}
-                  className={`bg-[#2a2a2e] text-green-400 px-2 py-0.5 rounded text-xs border border-[#3e3e44] print:bg-gray-100 print:text-black print:border-gray-300 ${getHighlightStyle("skills", skill)}`}
-                >
-                  {skill}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Experience Section */}
-        {workExperience && workExperience.length > 0 && (
-          <div className="mb-6">
-            <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-3 print:text-black">
-              // WORK EXPERIENCE
-            </h2>
-            <div className="space-y-4">
-              {workExperience.map((exp) => (
-                <div key={exp.id} className="border-l-2 border-[#2a2a2e] pl-4 print:border-gray-200">
-                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-baseline">
-                    <h3 className="font-bold text-gray-100 text-sm print:text-black">
-                      {exp.role} <span className="text-green-500">@ {exp.company}</span>
-                    </h3>
-                    <span className="text-xs text-gray-500 print:text-gray-600 font-semibold">{exp.duration}</span>
-                  </div>
-                  <ul className="list-none space-y-1.5 mt-2">
-                    {exp.description.map((bullet, idx) => {
-                      const origBullets = originalResume?.workExperience?.find(e => e.id === exp.id)?.description
-                        ?? (originalResume?.workExperience || []).flatMap(e => e.description);
-                      return (
-                        <li key={idx} className="text-xs text-gray-300 leading-relaxed print:text-gray-800 flex items-start gap-1">
-                          <span className="text-green-500 select-none">-</span>
-                          <span>{renderInlineDiff(bullet, origBullets)}</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Projects Section */}
-        {resume.projects && resume.projects.length > 0 && (
-          <div className="mb-6">
-            <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-3 print:text-black">
-              // SELECTED PROJECTS
-            </h2>
-            <div className="space-y-4">
-              {resume.projects.map((proj) => (
-                <div key={proj.id} className="border-l-2 border-[#2a2a2e] pl-4 print:border-gray-200">
-                  <h3 className="font-bold text-gray-100 text-sm print:text-black">
-                    {proj.name}
-                  </h3>
-                  <ul className="list-none space-y-1.5 mt-2">
-                    {proj.description.map((bullet, idx) => {
-                      const origBullets = originalResume?.projects?.find(p => p.id === proj.id)?.description
-                        ?? (originalResume?.projects || []).flatMap(p => p.description);
-                      return (
-                        <li key={idx} className="text-xs text-gray-300 leading-relaxed print:text-gray-800 flex items-start gap-1">
-                          <span className="text-green-500 select-none">-</span>
-                          <span>{renderInlineDiff(bullet, origBullets)}</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Education Section */}
-        {education && education.length > 0 && (
-          <div className="mb-6">
-            <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-3 print:text-black">
-              // EDUCATION
-            </h2>
-            <div className="space-y-3">
-              {education.map((edu) => (
-                <div key={edu.id} className="text-xs">
-                  <div className="flex justify-between items-baseline">
-                    <h3 className="font-bold text-gray-200 print:text-black">{edu.degree}</h3>
-                    <span className="text-gray-500 print:text-gray-600">{edu.duration}</span>
-                  </div>
-                  <p className="text-gray-400 print:text-gray-700">
-                    {edu.school} {edu.gpa && <span className="text-green-500">| GPA: {edu.gpa}</span>}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Certifications Section */}
-        {resume.certifications && resume.certifications.length > 0 && (
-          <div className="mb-4">
-            <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-3 print:text-black">
-              // CERTIFICATIONS
-            </h2>
-            <ul className="list-none space-y-1.5 text-xs text-gray-300 print:text-gray-800">
-              {resume.certifications.map((cert, index) => (
-                <li key={index} className="flex items-start gap-1">
-                  <span className="text-green-500 select-none">&#62;</span>
-                  <span>{cert}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {/* Languages Section */}
-        {resume.languages && resume.languages.length > 0 && (
-          <div className="mb-4">
-            <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-3 print:text-black">
-              // LANGUAGES
-            </h2>
-            <ul className="list-none space-y-1.5 text-xs text-gray-300 print:text-gray-800">
-              {resume.languages.map((lang, index) => (
-                <li key={index} className="flex items-start gap-1">
-                  <span className="text-green-500 select-none">&#62;</span>
-                  <span>{lang}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {resume.achievements && resume.achievements.length > 0 && (
-          <div className="mb-4">
-            <h2 className="text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-3 print:text-black">
-              // ACHIEVEMENTS
-            </h2>
-            <ul className="list-none space-y-1.5 text-xs text-gray-300 print:text-gray-800">
-              {resume.achievements.map((ach, index) => (
-                <li key={index} className="flex items-start gap-1">
-                  <span className="text-green-500 select-none">&#62;</span>
-                  <span>{ach}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  if (templateStyle === "executive") {
-    return (
-      <div
-        id={id}
-        className="bg-white text-gray-950 p-8 font-sans max-w-[800px] mx-auto border-t-8 border-[#1e3a8a] shadow-lg rounded-lg print:p-0 print:border-none print:shadow-none"
-      >
-        {/* Header */}
-        <div className="text-center pb-6 mb-6 border-b border-gray-200">
-          <h1 className="text-3xl font-extrabold tracking-tight text-[#1e3a8a] print:text-black">
-            {fullName || "Your Name"}
-          </h1>
-          <div className="flex flex-wrap justify-center gap-x-4 gap-y-1 mt-3 text-xs text-gray-600 print:text-gray-700">
-            {email && (
-              <span className="flex items-center gap-1 font-medium">
-                <Mail className="w-3.5 h-3.5 text-[#1e3a8a]" /> {email}
-              </span>
-            )}
-            {phone && (
-              <span className="flex items-center gap-1 font-medium">
-                <Phone className="w-3.5 h-3.5 text-[#1e3a8a]" /> {phone}
-              </span>
-            )}
-            {linkedin && (
-              <span className="flex items-center gap-1 font-medium">
-                <Linkedin className="w-3.5 h-3.5 text-[#1e3a8a]" /> {linkedin.replace(/https?:\/\/(www\.)?/, "")}
-              </span>
-            )}
-            {website && (
-              <span className="flex items-center gap-1 font-medium">
-                <Globe className="w-3.5 h-3.5 text-[#1e3a8a]" /> {website.replace(/https?:\/\/(www\.)?/, "")}
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Profile Summary */}
-        {summary && (
-          <div className="mb-6">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-2 print:text-black">
-              Executive Summary
-            </h2>
-            <p className="text-xs leading-relaxed text-gray-700 font-normal">
-              {renderInlineDiff(summary, originalResume ? [originalResume.summary] : [])}
-            </p>
-          </div>
-        )}
-
-        {/* Skills Section */}
-        {skills && skills.length > 0 && (
-          <div className="mb-6">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-2 print:text-black">
-              Key Expertise
-            </h2>
-            <div className="flex flex-wrap gap-1.5">
-              {skills.map((skill, index) => (
-                <span
-                  key={index}
-                  className={`bg-[#f0f4ff] text-[#1e3a8a] px-2.5 py-1 rounded text-xs font-semibold print:bg-gray-100 print:text-black print:border print:border-gray-200 ${getHighlightStyle("skills", skill)}`}
-                >
-                  {skill}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Experience Section */}
-        {workExperience && workExperience.length > 0 && (
-          <div className="mb-6">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-3 print:text-black">
-              Professional Experience
-            </h2>
-            <div className="space-y-4">
-              {workExperience.map((exp) => (
-                <div key={exp.id}>
-                  <div className="flex justify-between items-baseline font-semibold">
-                    <h3 className="text-sm text-[#111827]">
-                      {exp.role} <span className="text-gray-500 font-normal">|</span> <span className="text-[#1e3a8a] font-bold">{exp.company}</span>
-                    </h3>
-                    <span className="text-xs text-gray-500 font-normal">{exp.duration}</span>
-                  </div>
-                  <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed">
-                    {exp.description.map((bullet, idx) => {
-                      const origBullets = originalResume?.workExperience?.find(e => e.id === exp.id)?.description
-                        ?? (originalResume?.workExperience || []).flatMap(e => e.description);
-                      return (
-                        <li key={idx}>
-                          <span className="text-gray-700">{renderInlineDiff(bullet, origBullets)}</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Projects Section */}
-        {resume.projects && resume.projects.length > 0 && (
-          <div className="mb-6">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-3 print:text-black">
-              Key Projects
-            </h2>
-            <div className="space-y-4">
-              {resume.projects.map((proj) => (
-                <div key={proj.id}>
-                  <h3 className="text-sm font-bold text-[#111827]">{proj.name}</h3>
-                  <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed">
-                    {proj.description.map((bullet, idx) => {
-                      const origBullets = originalResume?.projects?.find(p => p.id === proj.id)?.description
-                        ?? (originalResume?.projects || []).flatMap(p => p.description);
-                      return (
-                        <li key={idx}>
-                          <span className="text-gray-700">{renderInlineDiff(bullet, origBullets)}</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Education Section */}
-        {education && education.length > 0 && (
-          <div className="mb-6">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-3 print:text-black">
-              Education
-            </h2>
-            <div className="space-y-3">
-              {education.map((edu) => (
-                <div key={edu.id} className="text-xs">
-                  <div className="flex justify-between items-baseline">
-                    <h3 className="font-bold text-gray-800 print:text-black">{edu.degree}</h3>
-                    <span className="text-gray-500">{edu.duration}</span>
-                  </div>
-                  <p className="text-gray-600 font-medium">
-                    {edu.school} {edu.gpa && <span className="text-[#1e3a8a] font-semibold">| GPA: {edu.gpa}</span>}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Certifications Section */}
-        {resume.certifications && resume.certifications.length > 0 && (
-          <div className="mb-4">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-3 print:text-black">
-              Certifications
-            </h2>
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {resume.certifications.map((cert, index) => (
-                <span key={index} className="bg-gray-50 text-gray-700 border border-gray-200 px-2.5 py-1 rounded text-xs font-semibold print:bg-gray-100 print:text-black">
-                  {cert}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Languages Section */}
-        {resume.languages && resume.languages.length > 0 && (
-          <div className="mb-4">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-3 print:text-black">
-              Languages
-            </h2>
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {resume.languages.map((lang, index) => (
-                <span key={index} className="bg-gray-50 text-gray-700 border border-gray-200 px-2.5 py-1 rounded text-xs font-semibold print:bg-gray-100 print:text-black">
-                  {lang}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-        {resume.achievements && resume.achievements.length > 0 && (
-          <div className="mb-4">
-            <h2 className="text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-3 print:text-black">
-              Key Achievements
-            </h2>
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {resume.achievements.map((ach, index) => (
-                <span key={index} className="bg-gray-50 text-gray-700 border border-gray-200 px-2.5 py-1 rounded text-xs font-semibold print:bg-gray-100 print:text-black">
-                  {ach}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // Classic Minimalist
   return (
-    <div
-      id={id}
-      className="bg-white text-gray-900 p-8 font-serif max-w-[800px] mx-auto border border-gray-200 shadow-md rounded-lg text-sm print:p-0 print:border-none print:shadow-none"
-    >
-      {/* Header */}
-      <div className="text-center pb-5 mb-5 border-b border-gray-200">
-        <h1 className="text-3xl font-normal tracking-wide text-gray-900 uppercase">
-          {fullName || "Your Name"}
-        </h1>
-        <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 mt-2.5 text-xs text-gray-500 font-sans">
-          {email && <span>{email}</span>}
-          {email && (phone || linkedin || website) && <span className="text-gray-300">|</span>}
-          {phone && <span>{phone}</span>}
-          {phone && (linkedin || website) && <span className="text-gray-300">|</span>}
-          {linkedin && <span>{linkedin.replace(/https?:\/\/(www\.)?/, "")}</span>}
-          {linkedin && website && <span className="text-gray-300">|</span>}
-          {website && <span>{website.replace(/https?:\/\/(www\.)?/, "")}</span>}
-        </div>
+    <div id={id} className={containerClass}>
+      <div className={headerClass}>
+        {templateStyle === "tech" ? (
+          <>
+            <h1 className="text-2xl font-bold uppercase tracking-wider text-green-400 print:text-black font-mono">
+              {fullName}
+            </h1>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs text-gray-400 print:text-gray-700 font-mono">
+              {email && <span><span className="text-green-500 font-bold">&#62;</span> {email}</span>}
+              {phone && <span><span className="text-green-500 font-bold">&#62;</span> {phone}</span>}
+              {linkedin && <span><span className="text-green-500 font-bold">&#62;</span> {linkedin.replace(/https?:\/\/(www\.)?/, "")}</span>}
+              {website && <span><span className="text-green-500 font-bold">&#62;</span> {website.replace(/https?:\/\/(www\.)?/, "")}</span>}
+            </div>
+          </>
+        ) : templateStyle === "executive" ? (
+          <>
+            <h1 className="text-3xl font-extrabold tracking-tight text-[#1e3a8a] print:text-black font-sans">
+              {fullName}
+            </h1>
+            <div className="flex flex-wrap justify-center gap-x-4 gap-y-1 mt-3 text-xs text-gray-600 print:text-gray-700 font-sans">
+              {email && <span className="flex items-center gap-1 font-medium"><Mail className="w-3.5 h-3.5 text-[#1e3a8a]" /> {email}</span>}
+              {phone && <span className="flex items-center gap-1 font-medium"><Phone className="w-3.5 h-3.5 text-[#1e3a8a]" /> {phone}</span>}
+              {linkedin && <span className="flex items-center gap-1 font-medium"><Linkedin className="w-3.5 h-3.5 text-[#1e3a8a]" /> {linkedin.replace(/https?:\/\/(www\.)?/, "")}</span>}
+              {website && <span className="flex items-center gap-1 font-medium"><Globe className="w-3.5 h-3.5 text-[#1e3a8a]" /> {website.replace(/https?:\/\/(www\.)?/, "")}</span>}
+            </div>
+          </>
+        ) : (
+          <>
+            <h1 className="text-3xl font-normal tracking-wide text-gray-900 uppercase font-serif">
+              {fullName}
+            </h1>
+            <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 mt-2.5 text-xs text-gray-500 font-sans">
+              {email && <span>{email}</span>}
+              {email && (phone || linkedin || website) && <span className="text-gray-300">|</span>}
+              {phone && <span>{phone}</span>}
+              {phone && (linkedin || website) && <span className="text-gray-300">|</span>}
+              {linkedin && <span>{linkedin.replace(/https?:\/\/(www\.)?/, "")}</span>}
+              {linkedin && website && <span className="text-gray-300">|</span>}
+              {website && <span>{website.replace(/https?:\/\/(www\.)?/, "")}</span>}
+            </div>
+          </>
+        )}
       </div>
 
-      {/* Profile Summary */}
-      {summary && (
-        <div className="mb-6 font-sans">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-2 border-b border-gray-300 pb-0.5">
-            Professional Summary
-          </h2>
-          <p className="text-xs leading-relaxed text-gray-700">
-            {renderInlineDiff(summary, originalResume ? [originalResume.summary] : [])}
-          </p>
-        </div>
-      )}
+      <div className="text-left space-y-6">
+        {normResume.blocks.map((block, idx) => renderBlock(block, idx))}
+      </div>
 
-      {/* Experience Section */}
-      {workExperience && workExperience.length > 0 && (
-        <div className="mb-6 font-sans">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-3 border-b border-gray-300 pb-0.5">
-            Experience
-          </h2>
-          <div className="space-y-4">
-            {workExperience.map((exp) => (
-              <div key={exp.id}>
-                <div className="flex justify-between items-baseline font-medium text-xs">
-                  <span className="font-semibold text-gray-900 text-sm">
-                    {exp.role} — <span className="italic text-gray-700 font-normal">{exp.company}</span>
-                  </span>
-                  <span className="text-gray-500 font-normal">{exp.duration}</span>
-                </div>
-                <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed">
-                  {exp.description.map((bullet, idx) => {
-                    const origBullets = originalResume?.workExperience?.find(e => e.id === exp.id)?.description
-                      ?? (originalResume?.workExperience || []).flatMap(e => e.description);
-                    return (
-                      <li key={idx}>
-                        <span className="text-gray-700 font-normal">{renderInlineDiff(bullet, origBullets)}</span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Projects Section */}
-      {resume.projects && resume.projects.length > 0 && (
-        <div className="mb-6 font-sans">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-3 border-b border-gray-300 pb-0.5">
-            Projects
-          </h2>
-          <div className="space-y-4">
-            {resume.projects.map((proj) => (
-              <div key={proj.id}>
-                <div className="font-semibold text-gray-900 text-sm">{proj.name}</div>
-                <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed">
-                  {proj.description.map((bullet, idx) => {
-                    const origBullets = originalResume?.projects?.find(p => p.id === proj.id)?.description
-                      ?? (originalResume?.projects || []).flatMap(p => p.description);
-                    return (
-                      <li key={idx}>
-                        <span className="text-gray-700 font-normal">{renderInlineDiff(bullet, origBullets)}</span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Skills Section */}
-      {skills && skills.length > 0 && (
-        <div className="mb-6 font-sans">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-2 border-b border-gray-300 pb-0.5">
-            Skills
-          </h2>
-          <div className="flex flex-wrap gap-x-2 gap-y-1 text-xs text-gray-700 leading-relaxed">
-            {skills.map((skill, idx) => (
-              <span key={idx} className={getHighlightStyle("skills", skill)}>
-                {skill}{idx < skills.length - 1 ? "," : ""}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Education Section */}
-      {education && education.length > 0 && (
-        <div className="mb-6 font-sans">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-3 border-b border-gray-300 pb-0.5">
-            Education
-          </h2>
-          <div className="space-y-3">
-            {education.map((edu) => (
-              <div key={edu.id} className="text-xs">
-                <div className="flex justify-between items-baseline">
-                  <h3 className="font-bold text-gray-800">{edu.degree}</h3>
-                  <span className="text-gray-500">{edu.duration}</span>
-                </div>
-                <p className="text-gray-600">
-                  {edu.school} {edu.gpa && <span>| GPA: {edu.gpa}</span>}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Certifications Section */}
-      {resume.certifications && resume.certifications.length > 0 && (
-        <div className="mb-4 font-sans">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-2 border-b border-gray-300 pb-0.5">
-            Certifications
-          </h2>
-          <p className="text-xs text-gray-700 leading-relaxed">
-            {resume.certifications.join(", ")}
-          </p>
-        </div>
-      )}
-
-      {/* Languages Section */}
-      {resume.languages && resume.languages.length > 0 && (
-        <div className="mb-4 font-sans">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-2 border-b border-gray-300 pb-0.5">
-            Languages
-          </h2>
-          <p className="text-xs text-gray-700 leading-relaxed">
-            {resume.languages.join(", ")}
-          </p>
-        </div>
-      )}
-
-      {/* Achievements Section */}
-      {resume.achievements && resume.achievements.length > 0 && (
-        <div className="mb-4 font-sans">
-          <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-2 border-b border-gray-300 pb-0.5">
-            Key Achievements
-          </h2>
-          <p className="text-xs text-gray-700 leading-relaxed">
-            {resume.achievements.join(", ")}
-          </p>
-        </div>
-      )}
+      {/* Kind D: Appended New Sections */}
+      {tailored?.newSections?.map((sec, secIdx) => {
+        const sectionCls = showHighlights ? "add-block text-left mt-6" : "text-left mt-6";
+        return (
+          <section key={`new-sec-${secIdx}`} className={sectionCls}>
+            <h2 className={templateStyle === "tech"
+              ? "text-xs font-bold uppercase tracking-widest text-[#00ff66] mb-3 print:text-black font-mono"
+              : templateStyle === "executive"
+              ? "text-sm font-bold uppercase tracking-wider text-[#1e3a8a] border-b border-gray-200 pb-1 mb-3 print:text-black font-sans"
+              : "text-xs font-bold uppercase tracking-wider text-gray-900 mb-2 border-b border-gray-300 pb-0.5 font-sans"
+            }>
+              {templateStyle === "tech" ? `// ${sec.label.toUpperCase()}` : sec.label}
+            </h2>
+            <ul className="list-disc pl-5 space-y-1 text-xs text-neutral-700">
+              {sec.items.map((it, itIdx) => (
+                <li key={itIdx} className={templateStyle === "tech" ? "list-none text-gray-300 font-mono" : "text-gray-700 font-sans"}>
+                  {templateStyle === "tech" && <span className="text-green-500 select-none mr-2">&#62;</span>}
+                  {it.kind === "line" ? it.text : ""}
+                </li>
+              ))}
+            </ul>
+          </section>
+        );
+      })}
     </div>
   );
 }

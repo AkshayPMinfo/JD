@@ -54,8 +54,10 @@ import {
   ResumeSuggestion,
   ATSCheckResult,
   SavedResumeVersion,
-  SavedResume
+  SavedResume,
+  TailoredResume
 } from "./types";
+import { resumeStructureToResume, mergeResumeWithAdditions } from "./utils/resumeConverter";
 import { DEMO_RESUMES, DEMO_JDS } from "./demoData";
 import ResumePreview from "./components/ResumePreview";
 import { supabaseAuth, supabaseData } from "./lib/supabase";
@@ -445,6 +447,8 @@ export default function App() {
   } | null>(null);
   const [tailoredResultResume, setTailoredResultResume] = useState<ResumeStructure | null>(null);
   const [tailoredResultVersion, setTailoredResultVersion] = useState<SavedResumeVersion | null>(null);
+  const [tailoredResult, setTailoredResult] = useState<TailoredResume | null>(null);
+  const [printTailoredResult, setPrintTailoredResult] = useState<TailoredResume | null>(null);
   const [tailoredAtsScore, setTailoredAtsScore] = useState<number | null>(null);
   const [showHighlights, setShowHighlights] = useState(true);
 
@@ -1575,9 +1579,12 @@ export default function App() {
 
       // 2. Generate Tailored
       setTailorProcessingStage("Applying AI Improvements");
-      console.log("[Tailor] Sending resume to /api/tailor-resume:", {
+      // 2. Generate Tailored
+      setTailorProcessingStage("Applying AI Improvements");
+      const specResume = resumeStructureToResume(selectedResume);
+      console.log("[Tailor] Sending resume blocks to /api/tailor-resume:", {
         resumeName: selectedResume.fullName,
-        resumeFields: Object.keys(selectedResume),
+        blocksCount: specResume.blocks.length,
         jdTextLength: simplifiedJdText.length
       });
       
@@ -1587,7 +1594,7 @@ export default function App() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            resume: selectedResume,
+            resume: specResume,
             jdText: simplifiedJdText
           })
         });
@@ -1597,14 +1604,12 @@ export default function App() {
       }
       
       if (!tailorRes.ok) {
-        // Read the actual error from the server response body
         let serverError = `Server returned ${tailorRes.status}`;
         try {
           const errorBody = await tailorRes.json();
           serverError = errorBody.error || errorBody.message || serverError;
           console.error("[Tailor] Server error response:", errorBody);
         } catch {
-          // Response body wasn't JSON
           try {
             const errorText = await tailorRes.text();
             console.error("[Tailor] Server error text:", errorText);
@@ -1613,26 +1618,31 @@ export default function App() {
         }
         throw new Error(serverError);
       }
-      const result = await tailorRes.json();
+      const result: TailoredResume = await tailorRes.json();
       
-      if (result.tailoredResume) {
-        // Calculate realistic tailored ATS Score, Match Percentage and Gaps
+      // Store the spec-compliant TailoredResume result
+      setTailoredResult(result);
+
+      // Merge additions into clean ResumeStructure for backwards compatibility and export
+      const mergedTailoredResume = mergeResumeWithAdditions(selectedResume, result);
+      
+      if (mergedTailoredResume) {
         setTailorProcessingStage("Comparing Resume vs JD");
-        const tailoredAtsEvaluation = calculateRealisticAtsScore(result.tailoredResume, simplifiedJd);
-        const diffResult = generateResumeDiff(selectedResume, result.tailoredResume);
+        const tailoredAtsEvaluation = calculateRealisticAtsScore(mergedTailoredResume, simplifiedJd);
+        const diffResult = generateResumeDiff(selectedResume, mergedTailoredResume);
 
         const newVersion: SavedResumeVersion = {
           id: `ver-${Date.now()}`,
           companyName: companyVal,
           jobTitle: extractedRole,
           savedAt: formatResumeCreatedDate(new Date().toISOString()),
-          resumeData: result.tailoredResume,
+          resumeData: mergedTailoredResume,
           originalResumeData: selectedResume,
           originalJobDescription: jdTextVal,
-          appliedSuggestionsCount: result.suggestions?.length || 0,
+          appliedSuggestionsCount: (result.newSkills?.length || 0) + (result.newSections?.length || 0),
           atsScore: tailoredAtsEvaluation.score,
           matchPercentage: tailoredAtsEvaluation.matchPercentage,
-          improvements: (result.suggestions || []).map((s: any) => s.reason).filter(Boolean).slice(0, 5),
+          improvements: result.missingKeywords.slice(0, 5),
           missingRequirements: tailoredAtsEvaluation.missingKeywords,
           missingQualifications: [],
           diffAdded: diffResult.added,
@@ -1640,9 +1650,9 @@ export default function App() {
           diffUnchanged: diffResult.unchanged
         };
 
-        setTailoredResultResume(result.tailoredResume);
+        setTailoredResultResume(mergedTailoredResume);
         setTailoredResultVersion(newVersion);
-        setTailoredAtsScore(tailoredAtsEvaluation.score);
+        setTailoredAtsScore(result.score || tailoredAtsEvaluation.score);
 
         // Update locally saved versions
         setSavedVersions(prev => {
@@ -1651,8 +1661,6 @@ export default function App() {
           return updated;
         });
 
-
-        
         setTailorWizardStep(3);
       }
     } catch (err: any) {
@@ -2682,11 +2690,12 @@ WORK EXPERIENCE
     return rows.length ? rows : [""];
   };
 
-  const handlePrintOrSavePDF = (resume: ResumeStructure, original?: ResumeStructure, headline = "") => {
+  const handlePrintOrSavePDF = (resume: ResumeStructure, original?: ResumeStructure, headline = "", tailored?: TailoredResume) => {
     try {
       logDownloadEvent("Download Started", { type: "PDF" });
       setPrintResume(resume);
       setPrintOriginalResume(original);
+      setPrintTailoredResult(tailored || null);
       
       // Let React update the hidden print container DOM with printResume, then trigger print dialog
       setTimeout(() => {
@@ -5180,7 +5189,8 @@ WORK EXPERIENCE
             resume={printResume || activeResume}
             templateStyle={selectedStyle}
             id="resume-preview-sheet-print"
-            originalResume={printOriginalResume}
+            tailored={printTailoredResult || undefined}
+            showHighlights={false}
           />
         </div>
       )}
@@ -5831,10 +5841,11 @@ WORK EXPERIENCE
                         </div>
                         <div className="overflow-y-auto bg-neutral-50" style={{height: '60vh'}}>
                           <ResumePreview
-                            resume={tailoredResume}
+                            resume={originalResume}
+                            tailored={tailoredResult || undefined}
                             templateStyle={selectedStyle}
                             id="step-3-preview-tailored"
-                            originalResume={showHighlights ? originalResume : undefined}
+                            showHighlights={showHighlights}
                           />
                         </div>
                       </div>

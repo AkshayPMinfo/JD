@@ -10,6 +10,48 @@ export interface ResumeWorkExperience {
   description: string[]; // List of bullet points
 }
 
+// ── Tailored Resume — Syntax Spec Types ────────────────────────────────────
+export type Block =
+  | { kind: "header"; name: string; contact: string[] }
+  | { kind: "section"; label: string; items: Item[] }
+  | { kind: "text"; label?: string; body: string };
+
+export type Item =
+  | { kind: "job"; company: string; title: string; dates: string; bullets: string[] }
+  | { kind: "edu"; school: string; degree: string; dates: string }
+  | { kind: "skill"; name: string }
+  | { kind: "line"; text: string };
+
+export interface Resume {
+  raw: string;
+  blocks: Block[];
+}
+
+export interface JobDescription {
+  company: string;
+  role: string;
+  text: string;
+}
+
+export interface TailoredResume {
+  score: number;
+  matchedKeywords: string[];
+  missingKeywords: string[];
+  inlineAdditions: {
+    [bulletKey: string]: Array<{
+      insertAfter: number;
+      text: string;
+      cls: "add-kw" | "add-mx" | "add-both";
+    }>;
+  };
+  newBullets: {
+    [jobKey: string]: Array<{ text: string; cls: "add-kw" | "add-mx" | "add-both" }>;
+  };
+  newSkills: string[];
+  newSections: Array<{ label: string; items: Item[] }>;
+}
+
+
 export interface ResumeProject {
   id: string;
   name: string;

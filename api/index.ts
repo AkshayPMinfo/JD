@@ -667,6 +667,13 @@ function sanitizeResumeTextFields(resume: any): any {
       .map((cert: string) => cert.trim());
   }
 
+  // Sanitize languages
+  if (Array.isArray(resume.languages)) {
+    resume.languages = resume.languages
+      .filter((lang: any) => typeof lang === "string" && !shouldStrip(lang))
+      .map((lang: string) => lang.trim());
+  }
+
   // Sanitize achievements
   if (Array.isArray(resume.achievements)) {
     resume.achievements = resume.achievements
@@ -1002,6 +1009,7 @@ app.post("/api/tailor-resume", async (req, res) => {
 
     if (!USE_GEMINI) {
       const result = rulesBasedTailorResume(resume, jdText);
+      console.log("[Rules Tailor: ResumeStructure Tailored]", JSON.stringify(result.tailoredResume, null, 2));
       res.json(result);
       return;
     }
@@ -1362,6 +1370,7 @@ app.post("/api/analyze-uploaded-resume", async (req, res) => {
 
     if (!USE_GEMINI) {
       const validationResult = rulesBasedParseResume(extractedText, fileName);
+      console.log("[Rules Parser: ResumeStructure Parsed]", JSON.stringify(validationResult.detectedProfile, null, 2));
       if (validationResult && validationResult.detectedProfile) {
         validationResult.detectedProfile = sanitizeResumeTextFields(validationResult.detectedProfile);
       }

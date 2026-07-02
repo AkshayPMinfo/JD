@@ -837,7 +837,15 @@ function mergeAndSanitizeTailoredResume(original: any, tailored: any): any {
 app.post("/api/tailor-resume", async (req, res) => {
   try {
     const { resume, jdText } = req.body;
+    console.log("[tailor-resume] Request received:", {
+      hasResume: !!resume,
+      resumeName: resume?.fullName || "N/A",
+      resumeKeys: resume ? Object.keys(resume) : [],
+      jdTextLength: jdText?.length || 0,
+      jdTextPreview: jdText?.slice(0, 100) || "N/A"
+    });
     if (!resume || !jdText) {
+      console.error("[tailor-resume] Missing required fields:", { hasResume: !!resume, hasJdText: !!jdText });
       res.status(400).json({ error: "Both resume structure and job description are required" });
       return;
     }
@@ -1039,7 +1047,12 @@ Format your response strictly as JSON matching this schema:
     }
     res.json(parsed);
   } catch (error: any) {
-    console.error("Error in tailor-resume:", error);
+    console.error("[tailor-resume] ERROR:", {
+      name: error?.name,
+      message: error?.message?.slice(0, 500),
+      status: error?.status || error?.statusCode,
+      stack: error?.stack?.slice(0, 300)
+    });
     res.status(500).json({ error: cleanErrorMessage(error) });
   }
 });

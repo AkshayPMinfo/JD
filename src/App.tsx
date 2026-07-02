@@ -1561,16 +1561,44 @@ export default function App() {
 
       // 2. Generate Tailored
       setTailorProcessingStage("Applying AI Improvements");
-      const tailorRes = await fetch("/api/tailor-resume", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          resume: selectedResume,
-          jdText: simplifiedJdText
-        })
+      console.log("[Tailor] Sending resume to /api/tailor-resume:", {
+        resumeName: selectedResume.fullName,
+        resumeFields: Object.keys(selectedResume),
+        jdTextLength: simplifiedJdText.length
       });
       
-      if (!tailorRes.ok) throw new Error("Failed to tailor resume");
+      let tailorRes;
+      try {
+        tailorRes = await fetch("/api/tailor-resume", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            resume: selectedResume,
+            jdText: simplifiedJdText
+          })
+        });
+      } catch (networkErr: any) {
+        console.error("[Tailor] Network error calling /api/tailor-resume:", networkErr);
+        throw new Error(`Network error: Could not reach the server. ${networkErr.message || ""}`);
+      }
+      
+      if (!tailorRes.ok) {
+        // Read the actual error from the server response body
+        let serverError = `Server returned ${tailorRes.status}`;
+        try {
+          const errorBody = await tailorRes.json();
+          serverError = errorBody.error || errorBody.message || serverError;
+          console.error("[Tailor] Server error response:", errorBody);
+        } catch {
+          // Response body wasn't JSON
+          try {
+            const errorText = await tailorRes.text();
+            console.error("[Tailor] Server error text:", errorText);
+            if (errorText) serverError = errorText.slice(0, 200);
+          } catch {}
+        }
+        throw new Error(serverError);
+      }
       const result = await tailorRes.json();
       
       if (result.tailoredResume) {

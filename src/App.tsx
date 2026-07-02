@@ -1387,12 +1387,19 @@ export default function App() {
     sanitized.workExperience = originalExp.map((orig, idx) => {
       const exp = (sanitized.workExperience || []).find(e => e.id === orig.id) || (sanitized.workExperience || [])[idx];
       const rewrittenBullets = (exp?.description || []).filter(Boolean).map(desc => desc.trim()).filter(d => !/unknown|undefined/i.test(d));
+      
+      const finalBullets = [...rewrittenBullets];
+      if (finalBullets.length < orig.description.length) {
+        const extra = orig.description.slice(finalBullets.length);
+        finalBullets.push(...extra);
+      }
+      
       return {
         id: orig.id || `exp-${idx}`,
         role: orig.role,
         company: orig.company,
         duration: orig.duration,
-        description: rewrittenBullets.length > 0 ? rewrittenBullets : orig.description
+        description: finalBullets.length > 0 ? finalBullets : orig.description
       };
     });
 
@@ -1405,10 +1412,17 @@ export default function App() {
     sanitized.projects = originalProj.map((orig, idx) => {
       const proj = (sanitized.projects || []).find(p => p.id === orig.id) || (sanitized.projects || [])[idx];
       const rewrittenBullets = (proj?.description || []).filter(Boolean).map(desc => desc.trim()).filter(d => !/unknown|undefined/i.test(d));
+      
+      const finalBullets = [...rewrittenBullets];
+      if (finalBullets.length < orig.description.length) {
+        const extra = orig.description.slice(finalBullets.length);
+        finalBullets.push(...extra);
+      }
+      
       return {
         ...orig,
         id: orig.id || `proj-${idx}`,
-        description: rewrittenBullets.length > 0 ? rewrittenBullets : orig.description
+        description: finalBullets.length > 0 ? finalBullets : orig.description
       };
     });
 

@@ -78,6 +78,20 @@ function normalizeWhitespace(text: string): string {
   return text.replace(/\r/g, "\n").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+async function extractTextFromPdfProxy(pdfData: any): Promise<string> {
+  const numPages = pdfData.numPages;
+  let fullText = '';
+  for (let i = 1; i <= numPages; i++) {
+    const page = await pdfData.getPage(i);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items
+      .map((item: any) => item.str || "")
+      .join(" ");
+    fullText += (fullText ? "\n\n" : "") + pageText;
+  }
+  return fullText;
+}
+
 function detectUploadedResumeType(fileName = "", fileType = ""): "pdf" | "docx" | null {
   const lowerName = fileName.toLowerCase();
   if (fileType === "application/pdf" || lowerName.endsWith(".pdf")) return "pdf";
@@ -237,7 +251,7 @@ Format your response strictly as JSON matching this schema:
                 languages: { type: Type.ARRAY, items: { type: Type.STRING } },
                 achievements: { type: Type.ARRAY, items: { type: Type.STRING } }
               },
-              required: ["fullName", "email", "phone", "summary", "workExperience", "education", "skills", "projects", "certifications"]
+              required: ["fullName", "email", "phone", "summary", "workExperience", "education", "skills", "projects", "certifications", "languages", "achievements"]
             }
           },
           required: ["isResume", "confidenceScore", "reason", "detectedProfile"]
@@ -686,8 +700,7 @@ app.post("/api/simplify-jd", async (req, res) => {
         try {
           const buffer = Buffer.from(fileBase64, "base64");
           const pdfData = await getDocumentProxy(new Uint8Array(buffer));
-          const parsed = await extractText(pdfData, { mergePages: true });
-          jdText = parsed.text || "";
+          jdText = await extractTextFromPdfProxy(pdfData);
         } catch (err: any) {
           console.error("PDF text extraction failed for JD:", err);
           res.status(500).json({ error: "Failed to extract text from PDF job description." });
@@ -899,28 +912,38 @@ function mergeAndSanitizeTailoredResume(original: any, tailored: any): any {
     result.skills = [...(original.skills || []), ...addedSkills];
   }
 
-  // 3. Merge Work Experience (strictly copy only the description bullet points).
+  // 3. Merge Work Experience (strictly copy only the description bullet points, keeping remaining original bullets if tailored has fewer).
   if (Array.isArray(original.workExperience)) {
     result.workExperience = original.workExperience.map((origExp: any, index: number) => {
       const tailExp = (tailored.workExperience || []).find((e: any) => e && e.id === origExp.id) || tailored.workExperience?.[index];
       if (tailExp && Array.isArray(tailExp.description)) {
+        const mergedDescription = [...tailExp.description];
+        if (mergedDescription.length < origExp.description.length) {
+          const extraBullets = origExp.description.slice(mergedDescription.length);
+          mergedDescription.push(...extraBullets);
+        }
         return {
           ...origExp,
-          description: tailExp.description
+          description: mergedDescription
         };
       }
       return origExp;
     });
   }
 
-  // 4. Merge Projects (strictly copy only the description bullet points).
+  // 4. Merge Projects (strictly copy only the description bullet points, keeping remaining original bullets if tailored has fewer).
   if (Array.isArray(original.projects)) {
     result.projects = original.projects.map((origProj: any, index: number) => {
       const tailProj = (tailored.projects || []).find((p: any) => p && p.id === origProj.id) || tailored.projects?.[index];
       if (tailProj && Array.isArray(tailProj.description)) {
+        const mergedDescription = [...tailProj.description];
+        if (mergedDescription.length < origProj.description.length) {
+          const extraBullets = origProj.description.slice(mergedDescription.length);
+          mergedDescription.push(...extraBullets);
+        }
         return {
           ...origProj,
-          description: tailProj.description
+          description: mergedDescription
         };
       }
       return origProj;
@@ -1266,8 +1289,7 @@ app.post("/api/analyze-uploaded-resume", async (req, res) => {
       const buffer = Buffer.from(base64Data, "base64");
       if (detectedFileType === "pdf") {
         const pdfData = await getDocumentProxy(new Uint8Array(buffer));
-        const parsed = await extractText(pdfData, { mergePages: true });
-        return parsed.text || "";
+        return await extractTextFromPdfProxy(pdfData);
       }
       const extractResult = await mammoth.extractRawText({ buffer });
       return extractResult.value || "";

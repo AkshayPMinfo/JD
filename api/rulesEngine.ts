@@ -1,3 +1,5 @@
+import { Block } from '../src/types';
+
 // Predefined dictionary of popular technical, business, and soft skills
 const SKILL_DICTIONARY = [
   // Programming Languages
@@ -334,9 +336,18 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
 
     // ── SKILLS SECTION ────────────────────────────────────────────────────────
     if (currentSection === 'skills') {
-      const parts = line.split(/[,•|·\t]/).map(s => s.replace(/^[-*•●▪o▪]\s*/, '').trim()).filter(s => s.length > 1 && s.length < 60);
-      for (const p of parts) {
-        if (!skills.includes(p)) skills.push(p);
+      const isLineBullet = isBullet || /^[-*•●▪o▪]/.test(line);
+      const parts = line.split(/[,•|·\t]/).map(s => s.replace(/^[-*•●▪o▪]\s*/, '').trim()).filter(s => s.length > 0 && s.length < 60);
+      
+      if (!isLineBullet && skills.length > 0 && parts.length === 1 && !line.includes(',')) {
+        skills[skills.length - 1] = (skills[skills.length - 1] + " " + parts[0]).trim();
+      } else {
+        for (const p of parts) {
+          const cleanP = p.trim();
+          if (cleanP.length > 1 && !skills.includes(cleanP)) {
+            skills.push(cleanP);
+          }
+        }
       }
       continue;
     }

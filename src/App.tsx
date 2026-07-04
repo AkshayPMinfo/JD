@@ -3612,12 +3612,12 @@ WORK EXPERIENCE
                   </div>
                 ) : (
                   /* EXQUISITE JD CARD LAYOUT REPRESENTING CREATED JDS AS DEPICTED IN THE WIREFRAME */
-                  <div className="space-y-3 max-w-xl mx-auto text-left mt-2 animate-fadeIn w-full pb-4">
+                  <div className="space-y-3 max-w-3xl mr-auto text-left mt-2 animate-fadeIn w-full pb-4">
                     {savedVersions.map((version) => (
                       <div
                         key={version.id}
                         id={`jd-item-${version.id}`}
-                        className="w-full bg-white border-4 border-black rounded-3xl p-5 sm:p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all duration-200 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 text-left"
+                        className="w-full bg-white border-2 border-black rounded-2xl p-5 sm:p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all duration-200 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 text-left"
                       >
                         <div className="space-y-1.5 min-w-0 flex-1">
                           <h3 className="text-lg font-black text-black tracking-tight font-sans truncate">
@@ -4128,13 +4128,13 @@ WORK EXPERIENCE
                       </div>
                     </div>
                   ) : (
-                    <div className="relative flex flex-col justify-start items-center text-left p-2 animate-fadeIn w-full">
+                    <div className="relative flex flex-col justify-start items-start text-left p-2 animate-fadeIn w-full">
                       {/* Resume Library Card List and Floating Add Button Wrapper */}
-                      <div className="max-w-xl w-full relative space-y-3 pb-4 mx-auto">
+                      <div className="max-w-3xl w-full relative space-y-3 pb-4">
                         {savedUserResumes.map((savedResume) => (
                           <div
                             key={savedResume.id}
-                            className="w-full bg-white border-4 border-black rounded-3xl p-5 sm:p-6 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-all duration-200 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4"
+                            className="w-full bg-white border-2 border-black rounded-2xl p-5 sm:p-6 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-all duration-200 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4"
                           >
                             <div className="space-y-1.5 min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">

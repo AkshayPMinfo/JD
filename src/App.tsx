@@ -3612,7 +3612,7 @@ WORK EXPERIENCE
                   </div>
                 ) : (
                   /* EXQUISITE JD CARD LAYOUT REPRESENTING CREATED JDS AS DEPICTED IN THE WIREFRAME */
-                  <div className="space-y-3 max-w-3xl mr-auto text-left mt-2 animate-fadeIn w-full pb-4">
+                  <div className="space-y-3 max-w-xl mx-auto text-left mt-2 animate-fadeIn w-full pb-4">
                     {savedVersions.map((version) => (
                       <div
                         key={version.id}
@@ -4128,9 +4128,9 @@ WORK EXPERIENCE
                       </div>
                     </div>
                   ) : (
-                    <div className="relative flex flex-col justify-start items-start text-left p-2 animate-fadeIn w-full">
+                    <div className="relative flex flex-col justify-start items-center text-left p-2 animate-fadeIn w-full">
                       {/* Resume Library Card List and Floating Add Button Wrapper */}
-                      <div className="max-w-3xl w-full relative space-y-3 pb-4">
+                      <div className="max-w-xl w-full relative space-y-3 pb-4 mx-auto">
                         {savedUserResumes.map((savedResume) => (
                           <div
                             key={savedResume.id}

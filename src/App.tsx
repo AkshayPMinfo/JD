@@ -437,6 +437,8 @@ export default function App() {
   const [tailorProcessingStage, setTailorProcessingStage] = useState("Reading Resume");
   const tailorProgressTimerRef = useRef<number | null>(null);
   const [tailorAnalysisError, setTailorAnalysisError] = useState<string | null>(null);
+  // Inline validation message shown inside the wizard (toasts disappear before people read them)
+  const [tailorStepError, setTailorStepError] = useState<string | null>(null);
   const [tailorAnalysisResult, setTailorAnalysisResult] = useState<{
     matchedKeywords: string[];
     missingKeywords: string[];
@@ -1004,6 +1006,7 @@ export default function App() {
 
   const handleOpenTailorWizard = () => {
     setTailorCompany("");
+    setTailorStepError(null);
     setTailorRole("");
     setTailorJdText("");
     setTailorJdImages([]);
@@ -1536,22 +1539,29 @@ export default function App() {
     const jdTextVal = tailorJdText || "";
 
     if (!companyVal.trim()) {
-      showNotification("Please enter the company name.", "error");
+      setTailorStepError("Please enter the company name.");
+      setTailorWizardStep(1);
       return;
     }
     if (!jdTextVal.trim()) {
-      showNotification("Please paste a job description.", "error");
+      setTailorStepError("Please paste a job description.");
       return;
     }
     const jdValidation = validateJobDescriptionText(jdTextVal);
     if (jdValidation.isTooLong) {
-      showNotification(`Job description is too long. Please keep it under 1500 words.`, "error");
+      setTailorStepError(`Job description is too long. Please keep it under ${JD_MAX_WORDS} words.`);
       return;
     }
     if (!jdValidation.isValid) {
-      showNotification(INVALID_JD_MESSAGE, "error");
+      const wordCount = jdTextVal.trim().split(/\s+/).length;
+      setTailorStepError(
+        wordCount < JD_MIN_WORDS
+          ? `This looks too short for a job description (${wordCount} words). Paste the full posting — at least ${JD_MIN_WORDS} words.`
+          : INVALID_JD_MESSAGE
+      );
       return;
     }
+    setTailorStepError(null);
 
     setTailorIsAnalyzing(true);
     startTailorProgress("Analyzing & Tailoring Resume...");
@@ -1633,6 +1643,20 @@ export default function App() {
         const tailoredAtsEvaluation = calculateRealisticAtsScore(mergedTailoredResume, simplifiedJd);
         const diffResult = generateResumeDiff(selectedResume, mergedTailoredResume);
 
+        // Keep the JD analysis so the results screen scores against the same keywords
+        // as the saved version (it previously fell back to an empty JD and always showed ~70%).
+        const originalAtsEvaluation = calculateRealisticAtsScore(selectedResume, simplifiedJd);
+        setTailorAnalysisResult({
+          matchedKeywords: tailoredAtsEvaluation.matchedKeywords,
+          missingKeywords: tailoredAtsEvaluation.missingKeywords,
+          missingQualifications: [],
+          improvements: result.newSkills || [],
+          simplifiedText: simplifiedJdText,
+          originalAtsScore: originalAtsEvaluation.score,
+          originalMatchPct: originalAtsEvaluation.matchPercentage,
+          simplifiedJdObject: simplifiedJd
+        });
+
         const newVersion: SavedResumeVersion = {
           id: `ver-${Date.now()}`,
           companyName: companyVal,
@@ -1644,7 +1668,7 @@ export default function App() {
           appliedSuggestionsCount: (result.newSkills?.length || 0) + (result.newSections?.length || 0),
           atsScore: tailoredAtsEvaluation.score,
           matchPercentage: tailoredAtsEvaluation.matchPercentage,
-          improvements: result.missingKeywords.slice(0, 5),
+          improvements: result.newSkills || [],
           missingRequirements: tailoredAtsEvaluation.missingKeywords,
           missingQualifications: [],
           diffAdded: diffResult.added,
@@ -2955,12 +2979,57 @@ WORK EXPERIENCE
     showNotification("Downloaded JSON schema format resume!", "success");
   };
 
+  // Shared by the desktop sidebar and the mobile tab bar
+  const handleWorkspaceNav = (step: "resume" | "dashboard") => {
+    if (step !== "resume" && !isUnlocked && !hasResume) {
+      handleLockedInteraction();
+      return;
+    }
+    if (hasResume && !isUnlocked) {
+      setIsUnlocked(true);
+      sessionStorage.setItem("auralis_platform_unlocked", "true");
+    }
+    setCurrentStep(step);
+  };
+
+  const workspaceNavItems = [
+    { step: "resume" as const, label: "Resume Setup", icon: FileText },
+    { step: "dashboard" as const, label: "Tailored Resumes", icon: FolderOpen }
+  ];
+
+  // Escape closes the open dialog (but never interrupts a running analysis)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (showDeleteSavedVersionConfirmModal) {
+        setShowDeleteSavedVersionConfirmModal(false);
+      } else if (showDeleteConfirmModal) {
+        setShowDeleteConfirmModal(false);
+      } else if (isTailorWizardOpen) {
+        if (!tailorIsAnalyzing) setIsTailorWizardOpen(false);
+      } else if (isUploadModalOpen) {
+        if (!isAnalyzing) {
+          setIsUploadModalOpen(false);
+          setTempFile(null);
+          setUploadError(null);
+          setAnalysisResult(null);
+        }
+      } else if (showResumePreviewModal) {
+        setShowResumePreviewModal(false);
+      } else if (showSavedVersionPreviewModal) {
+        setShowSavedVersionPreviewModal(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isTailorWizardOpen, tailorIsAnalyzing, isUploadModalOpen, isAnalyzing, showResumePreviewModal, showSavedVersionPreviewModal, showDeleteSavedVersionConfirmModal, showDeleteConfirmModal]);
+
   return (
     <div className="min-h-screen font-sans antialiased overflow-x-hidden selection:bg-neutral-200 selection:text-black pb-12 print:bg-white print:pb-0 bg-white text-black">
       {currentStep === "auth" ? (
         <>
           {/* Top Navigation Bar specifically for Login/Auth page */}
-          <nav id="navbar-top" className="fixed top-0 w-full z-50 border-b border-neutral-200 bg-white transition-all shadow-sm print-hide">
+          <nav id="navbar-top" className="fixed top-0 w-full z-50 border-b border-neutral-200 bg-white print-hide">
             <div className="max-w-[1280px] mx-auto px-6 h-20 flex justify-between items-center">
               <a className="text-xl font-bold tracking-tighter text-black cursor-pointer" href="#" onClick={(e) => e.preventDefault()}>
                 Auralis <span className="text-xs font-normal tracking-tight px-2 py-0.5 rounded-full border border-neutral-300 text-neutral-700 bg-neutral-100 whitespace-nowrap">Resumes</span>
@@ -2992,7 +3061,7 @@ WORK EXPERIENCE
               <div className="lg:col-span-6 space-y-6 text-left flex flex-col justify-center pt-4 lg:pt-8">
                 {/* Feature Pill Tag */}
                 <div className="inline-flex items-center space-x-2 bg-neutral-100 px-4 py-2 rounded-full border border-neutral-300 shadow-xs self-start">
-                  <span className="bg-black text-white text-[10px] uppercase font-mono font-bold tracking-wider px-2.5 py-0.5 rounded-full">New</span>
+                  <span className="bg-black text-white text-xs font-bold px-2.5 py-0.5 rounded-full">New</span>
                   <span className="text-xs font-semibold text-black">Auralis Resumes v2.0 is now live</span>
                   <span className="text-xs text-neutral-400">→</span>
                 </div>
@@ -3011,15 +3080,14 @@ WORK EXPERIENCE
 
               {/* Right Column: Login options */}
               <div className="lg:col-span-6 w-full flex justify-center">
-                <div id="auth-panel" className="bg-white border-2 border-black rounded-3xl shadow-xl p-6 sm:p-10 relative overflow-hidden w-full max-w-[520px]">
-                  <div className="absolute top-0 left-0 w-full h-1.5 bg-black" />
+                <div id="auth-panel" className="bg-white border border-neutral-200 rounded-2xl p-6 sm:p-10 relative overflow-hidden w-full max-w-[480px]">
                   
                   <div className="space-y-6">
                     <button
                       id="btn-quick-guest"
                       onClick={handleGuestAccess}
                       disabled={isAuthSubmitting}
-                      className={`w-full py-3.5 bg-black hover:bg-neutral-800 text-white text-sm font-bold rounded-xl transition duration-150 shadow-md ${
+                      className={`w-full py-3 bg-black hover:bg-neutral-800 text-white text-sm font-medium rounded-lg transition-colors duration-150 ${
                         isAuthSubmitting ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
                       }`}
                     >
@@ -3028,20 +3096,20 @@ WORK EXPERIENCE
    
                     <div className="relative flex py-1 items-center">
                       <div className="flex-grow border-t border-neutral-300"></div>
-                      <span className="flex-shrink mx-4 text-neutral-500 text-[10px] uppercase font-mono font-bold tracking-widest">
+                      <span className="flex-shrink mx-4 text-neutral-500 text-xs font-bold">
                         OR
                       </span>
                       <div className="flex-grow border-t border-neutral-300"></div>
                     </div>
    
                     <form onSubmit={handleAuth} noValidate className="space-y-4 text-left">
-                      <h2 className="text-xl font-black text-black tracking-tight">
+                      <h2 className="text-xl font-semibold text-black tracking-tight">
                         {isResetPassword ? "Reset Password" : isForgotPassword ? "Forgot Password" : isSignUp ? "Create Account" : "Sign In"}
                       </h2>
    
                       {!isResetPassword && (
                         <div>
-                          <label className="block text-[10px] text-black uppercase font-mono mb-1.5 font-bold">Email Address</label>
+                          <label className="block text-xs text-black mb-1.5 font-bold">Email Address</label>
                           <input
                             id="input-auth-email"
                             type="email"
@@ -3052,14 +3120,14 @@ WORK EXPERIENCE
                               setAuthEmail(e.target.value);
                               setAuthMessage(null);
                             }}
-                            className="w-full pl-3 pr-3 py-2 bg-white border border-neutral-300 rounded-lg text-xs text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
+                            className="w-full pl-3 pr-3 py-2.5 bg-white border border-neutral-300 rounded-lg text-sm text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
                           />
                         </div>
                       )}
    
                       {!isForgotPassword && (
                         <div>
-                          <label className="block text-[10px] text-black uppercase font-mono mb-1.5 font-bold">{isResetPassword ? "New Password" : "Password"}</label>
+                          <label className="block text-xs text-black mb-1.5 font-bold">{isResetPassword ? "New Password" : "Password"}</label>
                           <div className="relative">
                             <input
                               id="input-auth-password"
@@ -3071,7 +3139,7 @@ WORK EXPERIENCE
                                 setAuthPassword(e.target.value);
                                 setAuthMessage(null);
                               }}
-                              className="w-full pl-3 pr-10 py-2 bg-white border border-neutral-300 rounded-lg text-xs text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
+                              className="w-full pl-3 pr-10 py-2.5 bg-white border border-neutral-300 rounded-lg text-sm text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
                             />
                             <button
                               type="button"
@@ -3106,7 +3174,7 @@ WORK EXPERIENCE
 
                       {(isSignUp || isResetPassword) && (
                         <div>
-                          <label className="block text-[10px] text-black uppercase font-mono mb-1.5 font-bold">Confirm Password</label>
+                          <label className="block text-xs text-black mb-1.5 font-bold">Confirm Password</label>
                           <div className="relative">
                             <input
                               id="input-auth-confirm-password"
@@ -3118,7 +3186,7 @@ WORK EXPERIENCE
                                 setAuthConfirmPassword(e.target.value);
                                 setAuthMessage(null);
                               }}
-                              className="w-full pl-3 pr-10 py-2 bg-white border border-neutral-300 rounded-lg text-xs text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
+                              className="w-full pl-3 pr-10 py-2.5 bg-white border border-neutral-300 rounded-lg text-sm text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
                             />
                             <button
                               type="button"
@@ -3160,7 +3228,7 @@ WORK EXPERIENCE
                         id="btn-auth-submit"
                         type="submit"
                         disabled={isAuthSubmitting || (isForgotPassword && resetCooldownSeconds > 0)}
-                        className={`w-full py-2.5 text-white text-xs font-semibold rounded-lg transition mt-4 shadow-md ${
+                        className={`w-full py-3 text-white text-sm font-medium rounded-lg transition mt-4 ${
                           isAuthSubmitting || (isForgotPassword && resetCooldownSeconds > 0)
                             ? "bg-neutral-400 cursor-not-allowed"
                             : "bg-black hover:bg-neutral-800 cursor-pointer"
@@ -3227,7 +3295,7 @@ WORK EXPERIENCE
                 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                   {/* Card 1: Lance Jarvis */}
-                  <div className="bg-white rounded-3xl border border-neutral-200/60 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between relative">
+                  <div className="bg-white rounded-2xl border border-neutral-200/60 flex flex-col justify-between relative">
                     <div className="text-left px-8 pt-8">
                       <span className="text-4xl font-serif text-[#1abc9c] font-bold">“</span>
                     </div>
@@ -3242,7 +3310,7 @@ WORK EXPERIENCE
                         <path d="M0,40 C480,100 960,100 1440,40 L1440,120 L0,120 Z" fill="#1abc9c" />
                       </svg>
                       <div className="bg-[#1abc9c] pb-6 pt-1 text-center text-white rounded-b-3xl">
-                        <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full border-4 border-white bg-white overflow-hidden shadow-md">
+                        <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full border border-white bg-white overflow-hidden">
                           <img 
                             src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&h=150&fit=crop&crop=faces" 
                             alt="Lance Jarvis" 
@@ -3261,7 +3329,7 @@ WORK EXPERIENCE
                   </div>
 
                   {/* Card 2: Ericka Lynda */}
-                  <div className="bg-white rounded-3xl border border-neutral-200/60 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between relative">
+                  <div className="bg-white rounded-2xl border border-neutral-200/60 flex flex-col justify-between relative">
                     <div className="text-left px-8 pt-8">
                       <span className="text-4xl font-serif text-[#8e44ad] font-bold">“</span>
                     </div>
@@ -3276,7 +3344,7 @@ WORK EXPERIENCE
                         <path d="M0,40 C480,100 960,100 1440,40 L1440,120 L0,120 Z" fill="#8e44ad" />
                       </svg>
                       <div className="bg-[#8e44ad] pb-6 pt-1 text-center text-white rounded-b-3xl">
-                        <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full border-4 border-white bg-white overflow-hidden shadow-md">
+                        <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full border border-white bg-white overflow-hidden">
                           <img 
                             src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&h=150&fit=crop&crop=faces" 
                             alt="Ericka Lynda" 
@@ -3295,7 +3363,7 @@ WORK EXPERIENCE
                   </div>
 
                   {/* Card 3: Neil Wilford */}
-                  <div className="bg-white rounded-3xl border border-neutral-200/60 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between relative">
+                  <div className="bg-white rounded-2xl border border-neutral-200/60 flex flex-col justify-between relative">
                     <div className="text-left px-8 pt-8">
                       <span className="text-4xl font-serif text-[#3498db] font-bold">“</span>
                     </div>
@@ -3310,7 +3378,7 @@ WORK EXPERIENCE
                         <path d="M0,40 C480,100 960,100 1440,40 L1440,120 L0,120 Z" fill="#3498db" />
                       </svg>
                       <div className="bg-[#3498db] pb-6 pt-1 text-center text-white rounded-b-3xl">
-                        <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full border-4 border-white bg-white overflow-hidden shadow-md">
+                        <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full border border-white bg-white overflow-hidden">
                           <img 
                             src="https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&h=150&fit=crop&crop=faces" 
                             alt="Neil Wilford" 
@@ -3341,25 +3409,25 @@ WORK EXPERIENCE
       {/* Collapsible Left Sidebar */}
       <aside 
         id="sidebar-menu"
-        className={`flex flex-col border-r-2 border-black bg-white transition-all duration-300 z-30 h-screen relative flex-shrink-0 ${
+        className={`flex flex-col border-r border-neutral-200 bg-white transition-all duration-300 z-30 h-screen relative flex-shrink-0 ${
           isSidebarCollapsed ? "w-20" : "w-64"
         }`}
       >
         <div>
           {/* Logo & Chevron toggle button */}
-          <div className="h-20 flex items-center justify-between px-5 border-b-2 border-black">
+          <div className="h-16 flex items-center justify-between px-5 border-b border-neutral-200">
             {!isSidebarCollapsed ? (
-              <span className="text-lg font-black tracking-tighter text-black flex items-center gap-1.5 selection:bg-transparent">
-                <Sparkles className="w-5 h-5 text-emerald-600 animate-pulse flex-shrink-0" />
-                <span>AURALIS</span>
+              <span className="text-base font-semibold tracking-tight text-black flex items-center gap-2 selection:bg-transparent">
+                <Sparkles className="w-[18px] h-[18px] text-emerald-600 flex-shrink-0" />
+                <span>Auralis</span>
               </span>
             ) : (
-              <Sparkles className="w-6 h-6 text-emerald-600 mx-auto animate-pulse flex-shrink-0" />
+              <Sparkles className="w-5 h-5 text-emerald-600 mx-auto flex-shrink-0" />
             )}
             
             <button
               onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-              className="p-1.5 rounded-lg border-2 border-black text-black hover:bg-neutral-100 transition-all cursor-pointer flex-shrink-0"
+              className="p-1.5 rounded-md text-neutral-500 hover:text-black hover:bg-neutral-100 transition-colors cursor-pointer flex-shrink-0"
               title={isSidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
             >
               <ChevronRight className={`w-4 h-4 transition-transform duration-300 ${isSidebarCollapsed ? "rotate-0" : "rotate-180"}`} />
@@ -3367,35 +3435,22 @@ WORK EXPERIENCE
           </div>
 
           {/* Navigation Links inside Collapsible Sidebar */}
-          <nav className="p-4 space-y-2">
-            {[
-              { step: "resume", label: "Resume Setup", icon: FileText },
-              { step: "dashboard", label: "Tailored Resumes", icon: FolderOpen }
-            ].map((item) => {
+          <nav className="px-3 py-4 space-y-0.5">
+            {workspaceNavItems.map((item) => {
               const IconComponent = item.icon;
               const isActive = currentStep === item.step;
               return (
                 <button
                   key={item.step}
                   id={`sidebar-link-${item.step}`}
-                  onClick={() => {
-                    if (item.step !== "resume" && !isUnlocked && !hasResume) {
-                      handleLockedInteraction();
-                    } else {
-                      if (hasResume && !isUnlocked) {
-                        setIsUnlocked(true);
-                        sessionStorage.setItem("auralis_platform_unlocked", "true");
-                      }
-                      setCurrentStep(item.step as "resume" | "dashboard");
-                    }
-                  }}
-                  className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-black tracking-wide uppercase transition-all duration-200 cursor-pointer border-2 ${
-                    isActive 
-                      ? "bg-black border-black text-white shadow-[3px_3px_0px_0px_rgba(0,0,0,0.15)]"
-                      : "bg-transparent border-transparent hover:border-black text-neutral-600 hover:text-black"
+                  onClick={() => handleWorkspaceNav(item.step)}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors duration-150 cursor-pointer ${
+                    isActive
+                      ? "bg-neutral-100 text-black font-medium"
+                      : "text-neutral-600 hover:bg-neutral-50 hover:text-black"
                   }`}
                 >
-                  <IconComponent className="w-5 h-5 flex-shrink-0 text-current" />
+                  <IconComponent className="w-[18px] h-[18px] flex-shrink-0 text-current" />
                   {!isSidebarCollapsed && (
                     <div className="flex justify-between items-center w-full min-w-0">
                       <span className="truncate">{item.label}</span>
@@ -3408,15 +3463,15 @@ WORK EXPERIENCE
         </div>
 
         {/* Persona identifier block */}
-        <div className="p-4 border-t-2 border-black bg-white mt-auto">
+        <div className="p-4 border-t border-neutral-200 bg-white mt-auto">
           <div className="flex items-center gap-3 overflow-hidden">
-            <div className="w-8 h-8 rounded-full bg-black border-2 border-black flex items-center justify-center text-white text-xs font-black flex-shrink-0">
+            <div className="w-8 h-8 rounded-full bg-black flex items-center justify-center text-white text-xs font-semibold flex-shrink-0">
               {currentUser?.name.charAt(0).toUpperCase()}
             </div>
             {!isSidebarCollapsed && (
               <div className="truncate text-left min-w-0">
-                <p className="text-xs font-black text-black truncate leading-tight">{currentUser?.name}</p>
-                <p className="text-[10px] text-neutral-550 truncate mt-0.5">{currentUser?.email}</p>
+                <p className="text-sm font-medium text-black truncate leading-tight">{currentUser?.name}</p>
+                <p className="text-xs text-neutral-500 truncate mt-0.5">{currentUser?.email}</p>
               </div>
             )}
           </div>
@@ -3427,82 +3482,75 @@ WORK EXPERIENCE
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
         
         {/* Top Header Menu */}
-        <header className="h-20 border-b-2 border-black bg-white/95 backdrop-blur-md flex justify-between items-center px-6 z-20 flex-shrink-0">
+        <header className="h-16 border-b border-neutral-200 bg-white flex justify-between items-center px-8 z-20 flex-shrink-0">
           
           {/* Left indicator label or mobile Brand */}
           <div className="flex items-center gap-3 text-left">
-            <span className="text-sm font-black tracking-tighter text-black flex items-center gap-1.5 lg:hidden">
-              <Sparkles className="w-4 h-4 text-emerald-600 animate-pulse flex-shrink-0" />
-              <span>AURALIS</span>
-            </span>
-            <span className="hidden lg:inline text-xs font-mono font-bold uppercase tracking-wider text-neutral-550">
-              WORKSPACE / {currentStep.toUpperCase()}
+                        <span className="text-sm text-neutral-500">
+              Workspace <span className="mx-1.5 text-neutral-300">/</span>
+              <span className="text-black font-medium">{currentStep === "dashboard" ? "Tailored Resumes" : "Resume Setup"}</span>
             </span>
             {!isUnlocked && (
-              <span className="bg-amber-100 text-amber-850 border border-amber-300 text-[10px] font-bold font-mono px-2.5 py-1 rounded-full animate-pulse">
-                PROFILES LOCKED
+              <span className="bg-amber-50 text-amber-800 text-xs font-medium px-2 py-0.5 rounded-md">
+                Profiles locked
               </span>
             )}
           </div>
 
           {/* Right Header Navigation Panel controls */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-1">
             
             {/* Notification alert Bell triggering dropdown menu */}
             <div className="relative">
               <button
                 id="btn-notifications-menu"
                 onClick={toggleNotifications}
-                className="p-2.5 rounded-xl border-2 border-black text-black bg-white hover:bg-neutral-100 transition-all cursor-pointer relative shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[1px_1px_0px_0px_rgba(0,0,0,1)]"
+                className="p-2 rounded-lg text-neutral-600 hover:text-black hover:bg-neutral-100 transition-colors cursor-pointer relative"
                 title="Toggle Notifications Alert"
               >
-                <Bell className="w-5 h-5 text-black" />
+                <Bell className="w-[18px] h-[18px]" />
                 {notifications.some(n => !n.read) && (
-                  <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 border-2 border-black flex items-center justify-center text-[9px] font-mono font-black text-white shadow-sm animate-bounce">
+                  <span className="absolute top-0.5 right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-rose-500 ring-2 ring-white flex items-center justify-center text-[10px] font-semibold text-white">
                     {notifications.filter(n => !n.read).length}
                   </span>
                 )}
               </button>
 
               {isNotificationsOpen && (
-                <div className="absolute right-0 mt-3 w-80 bg-white border-2 border-black rounded-2xl shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] z-50 p-4 text-left animate-fadeIn">
-                  <div className="flex justify-between items-center border-b-2 border-black pb-2.5 mb-3">
-                    <span className="text-xs font-mono font-black uppercase tracking-wider text-black flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                <div className="absolute right-0 mt-2 w-80 bg-white border border-neutral-200 rounded-xl shadow-lg z-50 p-4 text-left animate-fadeIn">
+                  <div className="flex justify-between items-center border-b border-neutral-200 pb-2.5 mb-3">
+                    <span className="text-xs font-semibold text-black flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
                       <span>Notifications ({notifications.filter(n => !n.read).length})</span>
                     </span>
                     {notifications.some(n => !n.read) && (
                       <button 
                         onClick={markAllNotificationsAsRead} 
-                        className="text-[9px] font-mono font-black uppercase text-black hover:bg-neutral-100 border-2 border-black px-2 py-1 rounded-lg transition-all cursor-pointer shadow-[1px_1px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-0.5px] hover:translate-y-[-0.5px] hover:shadow-[1.5px_1.5px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                        className="text-xs text-neutral-500 hover:text-black px-2 py-1 rounded-md hover:bg-neutral-100 transition-colors cursor-pointer"
                       >
-                        Clear All
+                        Mark all read
                       </button>
                     )}
                   </div>
                   
-                  <div className="space-y-3 max-h-64 overflow-y-auto pr-1">
+                  <div className="divide-y divide-neutral-100 max-h-64 overflow-y-auto pr-1">
                     {notifications.length === 0 ? (
                       <div className="text-center py-6">
-                        <p className="text-xs text-neutral-500 font-semibold font-mono">No notifications</p>
+                        <p className="text-xs text-neutral-500 font-semibold">No notifications</p>
                       </div>
                     ) : (
                       notifications.map((notif) => (
                         <div 
                           key={notif.id} 
-                          className={`p-3 rounded-xl text-xs border-2 transition-all duration-150 ${
-                            notif.read 
-                              ? "bg-neutral-50 border-neutral-200 text-neutral-600" 
-                              : "bg-amber-50 border-black text-neutral-900 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
-                          }`}
+                          className={`py-2.5 text-sm ${notif.read ? "text-neutral-500" : "text-neutral-900"}`}
                         >
                           <div className="flex items-start gap-2">
                             {!notif.read && (
                               <span className="w-1.5 h-1.5 rounded-full bg-rose-500 mt-1.5 flex-shrink-0" />
                             )}
                             <div className="min-w-0 flex-1">
-                              <p className="font-bold leading-normal">{notif.text}</p>
-                              <span className="text-[9px] text-neutral-550 font-mono mt-1.5 block font-bold">
+                              <p className="leading-snug">{notif.text}</p>
+                              <span className="text-xs text-neutral-400 mt-1 block">
                                 {notif.time}
                               </span>
                             </div>
@@ -3566,7 +3614,7 @@ WORK EXPERIENCE
 
                 showNotification("Logged out securely.", "info");
               }}
-              className="bg-white hover:bg-neutral-50 text-black font-bold text-xs px-4 py-2.5 rounded-xl border-2 border-black transition duration-150 cursor-pointer shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+              className="text-sm font-medium text-neutral-600 hover:text-black hover:bg-neutral-100 px-3 py-2 rounded-lg transition-colors cursor-pointer"
             >
               Sign Out
             </button>
@@ -3574,13 +3622,13 @@ WORK EXPERIENCE
         </header>
 
         {/* Scrollable Workspace Container */}
-        <main className="flex-1 overflow-y-auto p-6 relative">
+        <main className="flex-1 overflow-y-auto px-8 py-8 pb-28 relative">
           
           {/* Notification Toast within Workspace */}
           {notification && (
             <div
               id="toast-notification-workspace"
-              className="fixed top-24 right-6 z-55 flex items-center gap-3 p-4 rounded-xl border-2 border-black dark:border-neutral-800 bg-white dark:bg-neutral-950 text-neutral-950 dark:text-white shadow-xl text-xs font-bold animate-slideIn"
+              className="fixed top-24 right-6 z-55 flex items-center gap-3 p-4 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-950 text-neutral-950 dark:text-white shadow-xl text-xs font-bold animate-slideIn"
             >
               {notification.type === "error" ? (
                 <XCircle className="w-4 h-4 text-rose-500" />
@@ -3598,43 +3646,59 @@ WORK EXPERIENCE
               <div>
                 {savedVersions.length === 0 ? (
                   /* FIRST TIME USER BLANK SCREEN STYLED SIMILAR TO LOGIN CARD WITH THICK BLACK BORDER */
-                  <div className="max-w-xl w-full mx-auto my-6 animate-fadeIn">
-                    <div className="flex flex-col items-center justify-center py-16 px-8 bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] text-center w-full transition-all duration-300">
-                      <div className="w-16 h-16 rounded-full border-2 border-dashed border-neutral-400 flex items-center justify-center mb-6">
-                        <FolderOpen className="w-8 h-8 text-black" />
+                  <div className="max-w-xl w-full mx-auto my-16 animate-fadeIn">
+                    <div className="flex flex-col items-center justify-center px-8 text-center w-full">
+                      <div className="w-12 h-12 rounded-full bg-neutral-100 flex items-center justify-center mb-4">
+                        <FolderOpen className="w-5 h-5 text-neutral-600" />
                       </div>
-                      {/* Shortened empty state text as requested */}
-                      <h3 className="text-xl font-black tracking-tight text-black uppercase font-mono">No Resumes Tailored</h3>
-                      <p className="text-sm text-neutral-650 mt-3 max-w-sm leading-relaxed font-semibold">
+                      <h3 className="text-base font-semibold text-black">No tailored resumes yet</h3>
+                      <p className="text-sm text-neutral-500 mt-1.5 max-w-sm leading-relaxed">
                         Add a resume in Resume Setup, then create and download a tailored resume here.
                       </p>
                     </div>
                   </div>
                 ) : (
                   /* EXQUISITE JD CARD LAYOUT REPRESENTING CREATED JDS AS DEPICTED IN THE WIREFRAME */
-                  <div className="space-y-3 max-w-3xl mr-auto text-left mt-2 animate-fadeIn w-full pb-4">
-                    {savedVersions.map((version) => (
+                  <div className="max-w-3xl mx-auto text-left animate-fadeIn w-full pb-4">
+                    <div className="mb-6">
+                      <h1 className="text-2xl font-semibold tracking-tight text-black">Tailored resumes</h1>
+                      <p className="text-sm text-neutral-500 mt-1">
+                        Each one is a copy of your resume matched to a specific job. Your original resume stays unchanged.
+                      </p>
+                    </div>
+                    <div className="border-t border-neutral-200 divide-y divide-neutral-200">
+                    {savedVersions.map((version) => {
+                      const showRole = !!version.jobTitle && version.jobTitle !== "Tailored Position";
+                      const sourceName = version.originalResumeData?.fullName;
+                      return (
                       <div
                         key={version.id}
                         id={`jd-item-${version.id}`}
-                        className="w-full bg-white border-2 border-black rounded-2xl p-5 sm:p-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all duration-200 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 text-left"
+                        className="w-full py-4 flex justify-between items-center gap-4 text-left"
                       >
-                        <div className="space-y-1.5 min-w-0 flex-1">
-                          <h3 className="text-lg font-black text-black tracking-tight font-sans truncate">
-                            {version.companyName} — <span className="italic text-neutral-800 font-medium">{version.jobTitle}</span>
+                        <div className="space-y-0.5 min-w-0 flex-1">
+                          <h3 className="text-[15px] font-medium text-black truncate">
+                            {version.companyName}
+                            {showRole && <span className="text-neutral-500 font-normal"> · {version.jobTitle}</span>}
                           </h3>
-                          <p className="text-[10px] font-mono font-bold text-neutral-550 tracking-wider">
-                            Created: {version.savedAt}
+                          <p className="text-sm text-neutral-500 flex flex-wrap items-center gap-x-1.5">
+                            {typeof version.atsScore === "number" && (
+                              <>
+                                <span className="text-emerald-700 font-medium">ATS {version.atsScore}%</span>
+                                <span aria-hidden="true">·</span>
+                              </>
+                            )}
+                            <span>{sourceName ? `From ${sourceName} · ` : ""}Created {version.savedAt}</span>
                           </p>
                         </div>
-                        <div className="flex items-center gap-3 flex-shrink-0">
+                        <div className="flex items-center gap-1 flex-shrink-0">
                           <button
                             type="button"
                             onClick={() => {
                               setSelectedSavedVersion(version);
                               setShowSavedVersionPreviewModal(true);
                             }}
-                            className="px-4 py-2 bg-black text-white rounded-xl text-xs font-black uppercase tracking-widest border-2 border-black hover:bg-neutral-800 transition-all cursor-pointer"
+                            className="px-3 py-1.5 text-sm font-medium text-black rounded-lg border border-neutral-200 hover:bg-neutral-50 transition-colors cursor-pointer"
                           >
                             View
                           </button>
@@ -3645,13 +3709,15 @@ WORK EXPERIENCE
                               setVersionToDeleteId(version.id);
                               setShowDeleteSavedVersionConfirmModal(true);
                             }}
-                            className="px-4 py-2 bg-white text-rose-600 rounded-xl text-xs font-black uppercase tracking-widest border-2 border-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
+                            className="px-3 py-1.5 text-sm font-medium text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
                           >
                             Delete
                           </button>
                         </div>
                       </div>
-                    ))}
+                      );
+                    })}
+                    </div>
                   </div>
                 )}
               </div>
@@ -3670,7 +3736,7 @@ WORK EXPERIENCE
                     handleOpenTailorWizard();
                   }
                 }}
-                className="fixed bottom-8 right-8 z-40 px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border border-transparent flex items-center gap-1.5"
+                className="fixed bottom-5 right-5 sm:bottom-8 sm:right-8 z-40 px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-sm rounded-xl transition-colors duration-150 cursor-pointer border border-transparent flex items-center gap-1.5"
               >
                 <Plus className="w-4 h-4 text-white" strokeWidth={3} />
                 <span>Create New</span>
@@ -3682,7 +3748,7 @@ WORK EXPERIENCE
         {/* -------------------- STEP 1: RESUME SETUP / BUILDER -------------------- */}
         {false && (
           <div className="fixed inset-0 bg-black/55 dark:bg-black/75 backdrop-blur-md flex items-center justify-center p-4 z-50 overflow-y-auto animate-fadeIn">
-            <div className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-3xl shadow-2xl p-6 sm:p-8 w-full max-w-2xl max-h-[85vh] overflow-y-auto relative animate-scaleIn space-y-6">
+            <div className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 sm:p-8 w-full max-w-2xl max-h-[85vh] overflow-y-auto relative animate-scaleIn space-y-6">
               <input
                 id="onboarding-ref-file-input"
                 type="file"
@@ -3705,14 +3771,14 @@ WORK EXPERIENCE
                   sessionStorage.setItem("auralis_onboarding_dismissed", "true");
                   localStorage.setItem("jd_resume_customizer_onboarding_done", "true");
                 }}
-                className="absolute top-4 right-4 text-[10px] uppercase font-bold text-neutral-400 hover:text-neutral-900 dark:hover:text-white transition cursor-pointer px-2 py-1 rounded bg-neutral-100 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800"
+                className="absolute top-4 right-4 text-xs font-bold text-neutral-400 hover:text-neutral-900 dark:hover:text-white transition cursor-pointer px-2 py-1 rounded bg-neutral-100 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800"
               >
                 Dismiss ✕
               </button>
 
               {!isUnlocked && (
                 <div className="bg-neutral-50 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-4 text-center space-y-1">
-                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold font-mono tracking-wider bg-neutral-200 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200">
+                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-bold bg-neutral-200 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200">
                     🔒 LOCK STATE ACTIVE
                   </span>
                   <p className="text-xs font-semibold text-neutral-800 dark:text-neutral-200 mt-1">
@@ -3796,7 +3862,7 @@ WORK EXPERIENCE
                   >
                     ← Back to Choice
                   </button>
-                  <span className="text-[10px] font-bold font-mono text-neutral-400 uppercase tracking-widest">Option B</span>
+                  <span className="text-xs font-bold text-neutral-400">Option B</span>
                 </div>
 
                 <div className="space-y-1.5 text-center">
@@ -3841,10 +3907,10 @@ WORK EXPERIENCE
                 >
                   {/* Contact Block */}
                   <div className="space-y-3 bg-neutral-50 dark:bg-neutral-900/50 p-4 rounded-xl border border-neutral-200 dark:border-neutral-800">
-                    <h3 className="text-xs font-bold text-neutral-900 dark:text-white font-mono uppercase tracking-wider border-b border-neutral-200 dark:border-neutral-800 pb-1.5">1. Contact & Identity</h3>
+                    <h3 className="text-xs font-bold text-neutral-900 dark:text-white border-b border-neutral-200 dark:border-neutral-800 pb-1.5">1. Contact & Identity</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-[9px] font-mono font-semibold uppercase text-neutral-500">Full Name *</label>
+                        <label className="block text-sm font-medium text-neutral-700">Full Name *</label>
                         <input
                           type="text"
                           required
@@ -3855,7 +3921,7 @@ WORK EXPERIENCE
                         />
                       </div>
                       <div>
-                        <label className="block text-[9px] font-mono font-semibold uppercase text-neutral-500">Email Address *</label>
+                        <label className="block text-sm font-medium text-neutral-700">Email Address *</label>
                         <input
                           type="email"
                           required
@@ -3868,7 +3934,7 @@ WORK EXPERIENCE
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div>
-                        <label className="block text-[9px] font-mono font-semibold uppercase text-neutral-500">Phone Number *</label>
+                        <label className="block text-sm font-medium text-neutral-700">Phone Number *</label>
                         <input
                           type="text"
                           required
@@ -3879,7 +3945,7 @@ WORK EXPERIENCE
                         />
                       </div>
                       <div>
-                        <label className="block text-[9px] font-mono font-semibold uppercase text-neutral-500">LinkedIn URL</label>
+                        <label className="block text-sm font-medium text-neutral-700">LinkedIn URL</label>
                         <input
                           type="text"
                           placeholder="e.g. linkedin.com/in/alex"
@@ -3889,7 +3955,7 @@ WORK EXPERIENCE
                         />
                       </div>
                       <div>
-                        <label className="block text-[9px] font-mono font-semibold uppercase text-neutral-500">Portfolio / Website</label>
+                        <label className="block text-sm font-medium text-neutral-700">Portfolio / Website</label>
                         <input
                           type="text"
                           placeholder="e.g. alexrivera.dev"
@@ -3903,9 +3969,9 @@ WORK EXPERIENCE
 
                   {/* Summary Block */}
                   <div className="space-y-3 bg-neutral-50 dark:bg-neutral-900/50 p-4 rounded-xl border border-neutral-200 dark:border-neutral-800">
-                    <h3 className="text-xs font-bold text-neutral-900 dark:text-white font-mono uppercase tracking-wider border-b border-neutral-200 dark:border-neutral-800 pb-1.5">2. Professional Pitch</h3>
+                    <h3 className="text-xs font-bold text-neutral-900 dark:text-white border-b border-neutral-200 dark:border-neutral-800 pb-1.5">2. Professional Pitch</h3>
                     <div>
-                      <label className="block text-[9px] font-mono font-semibold uppercase text-neutral-500">Summary Summary *</label>
+                      <label className="block text-sm font-medium text-neutral-700">Summary Summary *</label>
                       <textarea
                         required
                         rows={3}
@@ -3919,19 +3985,19 @@ WORK EXPERIENCE
 
                   {/* Skills Block */}
                   <div className="space-y-3 bg-neutral-50 dark:bg-neutral-900/50 p-4 rounded-xl border border-neutral-200 dark:border-neutral-800">
-                    <h3 className="text-xs font-bold text-neutral-900 dark:text-white font-mono uppercase tracking-wider border-b border-neutral-200 dark:border-neutral-800 pb-1.5">3. Skill Tag Keywords</h3>
+                    <h3 className="text-xs font-bold text-neutral-900 dark:text-white border-b border-neutral-200 dark:border-neutral-800 pb-1.5">3. Skill Tag Keywords</h3>
                     <div>
-                      <div className="flex flex-wrap gap-1.5 mb-3 bg-white dark:bg-black p-2.5 rounded-lg border border-neutral-200 dark:border-neutral-850 min-h-12 items-center">
+                      <div className="flex flex-wrap gap-1.5 mb-3 bg-white dark:bg-black p-2.5 rounded-lg border border-transparent dark:border-neutral-850 min-h-12 items-center">
                         {activeResume.skills.map((tag) => (
                           <span
                             key={tag}
-                            className="text-[10px] bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-neutral-800 dark:text-neutral-200 px-2 py-0.5 rounded-full flex items-center gap-1 font-sans"
+                            className="text-xs bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-neutral-800 dark:text-neutral-200 px-2 py-0.5 rounded-full flex items-center gap-1 font-sans"
                           >
                             {tag}
                             <button
                               type="button"
                               onClick={() => handleRemoveSkillTag(tag)}
-                              className="text-neutral-400 hover:text-neutral-900 dark:hover:text-white font-black"
+                              className="text-neutral-400 hover:text-neutral-900 dark:hover:text-white font-semibold"
                             >
                               ×
                             </button>
@@ -3963,15 +4029,15 @@ WORK EXPERIENCE
 
                   {/* Work Experience */}
                   <div className="space-y-3 bg-neutral-50 dark:bg-neutral-900/50 p-4 rounded-xl border border-neutral-200 dark:border-neutral-800">
-                    <h3 className="text-xs font-bold text-neutral-900 dark:text-white font-mono uppercase tracking-wider border-b border-neutral-200 dark:border-neutral-800 pb-1.5">4. Jobs & Academic Projects</h3>
+                    <h3 className="text-xs font-bold text-neutral-900 dark:text-white border-b border-neutral-200 dark:border-neutral-800 pb-1.5">4. Jobs & Academic Projects</h3>
                     
                     {activeResume.workExperience.length > 0 && (
                       <div className="space-y-2 mb-3">
                         {activeResume.workExperience.map((exp) => (
-                          <div key={exp.id} className="p-2.5 bg-white dark:bg-black rounded-lg border border-neutral-200 dark:border-neutral-800 text-xs flex justify-between items-center">
+                          <div key={exp.id} className="p-2.5 bg-white dark:bg-black rounded-lg border border-transparent dark:border-neutral-800 text-xs flex justify-between items-center">
                             <div>
                               <p className="font-bold text-neutral-900 dark:text-white">{exp.role}</p>
-                              <p className="text-[10px] text-neutral-400">{exp.company} • {exp.duration}</p>
+                              <p className="text-xs text-neutral-400">{exp.company} • {exp.duration}</p>
                             </div>
                             <button
                               type="button"
@@ -3985,8 +4051,8 @@ WORK EXPERIENCE
                       </div>
                     )}
 
-                    <div className="bg-white dark:bg-black rounded-xl p-3 border border-neutral-200 dark:border-neutral-800 space-y-2.5 text-xs">
-                      <p className="text-[9px] font-mono tracking-wider text-neutral-400 font-bold uppercase">Add Experience Entry</p>
+                    <div className="bg-white dark:bg-black rounded-xl p-3 border border-transparent dark:border-neutral-800 space-y-2.5 text-xs">
+                      <p className="text-[11px] text-neutral-400 font-bold">Add Experience Entry</p>
                       <div className="grid grid-cols-2 gap-2">
                         <input
                           type="text"
@@ -4031,15 +4097,15 @@ WORK EXPERIENCE
 
                   {/* Education */}
                   <div className="space-y-3 bg-neutral-50 dark:bg-neutral-900/50 p-4 rounded-xl border border-neutral-200 dark:border-neutral-800">
-                    <h3 className="text-xs font-bold text-neutral-900 dark:text-white font-mono uppercase tracking-wider border-b border-neutral-200 dark:border-neutral-800 pb-1.5">5. Academic Credentials</h3>
+                    <h3 className="text-xs font-bold text-neutral-900 dark:text-white border-b border-neutral-200 dark:border-neutral-800 pb-1.5">5. Academic Credentials</h3>
                     
                     {activeResume.education.length > 0 && (
                       <div className="space-y-2 mb-3">
                         {activeResume.education.map((edu) => (
-                          <div key={edu.id} className="p-2.5 bg-white dark:bg-black rounded-lg border border-neutral-200 dark:border-neutral-805 text-xs flex justify-between items-center">
+                          <div key={edu.id} className="p-2.5 bg-white dark:bg-black rounded-lg border border-transparent dark:border-neutral-805 text-xs flex justify-between items-center">
                             <div>
                               <p className="font-bold text-neutral-900 dark:text-white">{edu.degree}</p>
-                              <p className="text-[10px] text-neutral-400">{edu.school} • {edu.duration} {edu.gpa ? `• GPA: ${edu.gpa}` : ""}</p>
+                              <p className="text-xs text-neutral-400">{edu.school} • {edu.duration} {edu.gpa ? `• GPA: ${edu.gpa}` : ""}</p>
                             </div>
                             <button
                               type="button"
@@ -4053,8 +4119,8 @@ WORK EXPERIENCE
                       </div>
                     )}
 
-                    <div className="bg-white dark:bg-black rounded-xl p-3 border border-neutral-200 dark:border-neutral-800 space-y-2.5 text-xs">
-                      <p className="text-[9px] font-mono tracking-wider text-neutral-400 font-bold uppercase">Add Education Degree</p>
+                    <div className="bg-white dark:bg-black rounded-xl p-3 border border-transparent dark:border-neutral-800 space-y-2.5 text-xs">
+                      <p className="text-[11px] text-neutral-400 font-bold">Add Education Degree</p>
                       <div className="grid grid-cols-2 gap-2">
                         <input
                           type="text"
@@ -4100,7 +4166,7 @@ WORK EXPERIENCE
                   <div className="pt-4 text-center">
                     <button
                       type="submit"
-                      className="px-8 py-4 bg-neutral-950 dark:bg-neutral-100 hover:opacity-90 text-white dark:text-black font-bold text-xs uppercase tracking-wider rounded-xl transition duration-150 shadow-sm cursor-pointer"
+                      className="px-8 py-4 bg-neutral-950 dark:bg-neutral-100 hover:opacity-90 text-white dark:text-black font-bold text-xs rounded-xl transition duration-150 cursor-pointer"
                     >
                       Generate & View My Resume
                     </button>
@@ -4115,38 +4181,49 @@ WORK EXPERIENCE
               <div id="step-resume-panel" className="max-w-5xl mx-auto space-y-6 min-h-[70vh] flex flex-col justify-between">
                 <div>
                   {resumeSelectionMode === "create" ? null : !hasResume ? (
-                    <div className="max-w-xl w-full mx-auto my-6 animate-fadeIn">
-                      {/* Center empty state box matching the wireframe precisely */}
-                      <div className="flex flex-col items-center justify-center py-16 px-8 bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] text-center w-full transition-all duration-300">
-                        <div className="w-16 h-16 rounded-full border-2 border-dashed border-neutral-400 flex items-center justify-center mb-6">
-                          <FolderOpen className="w-8 h-8 text-black" />
+                    <div className="max-w-xl w-full mx-auto my-16 animate-fadeIn">
+                      <div className="flex flex-col items-center justify-center px-8 text-center w-full">
+                        <div className="w-12 h-12 rounded-full bg-neutral-100 flex items-center justify-center mb-4">
+                          <FolderOpen className="w-5 h-5 text-neutral-600" />
                         </div>
-                        <h3 className="text-xl font-black tracking-tight text-black uppercase font-mono">No Resumes Setup</h3>
-                        <p className="text-sm text-neutral-650 mt-3 max-w-sm leading-relaxed font-semibold">
-                          Click on the 'Create New' button to upload your resume.
+                        <h3 className="text-base font-semibold text-black">No resumes yet</h3>
+                        <p className="text-sm text-neutral-500 mt-1.5 max-w-sm leading-relaxed">
+                          Upload your resume as a PDF or Word file to get started. Use the Create New button below.
                         </p>
                       </div>
                     </div>
                   ) : (
-                    <div className="relative flex flex-col justify-start items-start text-left p-2 animate-fadeIn w-full">
+                    <div className="relative flex flex-col justify-start items-center text-left animate-fadeIn w-full">
                       {/* Resume Library Card List and Floating Add Button Wrapper */}
-                      <div className="max-w-3xl w-full relative space-y-3 pb-4">
-                        {savedUserResumes.map((savedResume) => (
+                      <div className="max-w-3xl w-full relative pb-4">
+                        <div className="mb-6">
+                          <h1 className="text-2xl font-semibold tracking-tight text-black">Your resumes</h1>
+                          <p className="text-sm text-neutral-500 mt-1">
+                            Upload a resume once, then tailor it to as many jobs as you like.
+                          </p>
+                        </div>
+                        <div className="border-t border-neutral-200 divide-y divide-neutral-200">
+                        {savedUserResumes.map((savedResume) => {
+                          const jobCount = savedResume.data?.workExperience?.length || 0;
+                          const skillCount = savedResume.data?.skills?.length || 0;
+                          const summaryBits = [
+                            jobCount ? `${jobCount} ${jobCount === 1 ? "job" : "jobs"}` : null,
+                            skillCount ? `${skillCount} ${skillCount === 1 ? "skill" : "skills"}` : null
+                          ].filter(Boolean).join(" · ");
+                          return (
                           <div
                             key={savedResume.id}
-                            className="w-full bg-white border-2 border-black rounded-2xl p-5 sm:p-6 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] transition-all duration-200 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4"
+                            className="w-full py-4 flex justify-between items-center gap-4"
                           >
-                            <div className="space-y-1.5 min-w-0">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <h3 className="text-base font-black text-black tracking-tight font-sans truncate">
-                                  {getResumeCardDisplayName(savedResume)}
-                                </h3>
-                              </div>
-                              <p className="text-[10px] font-mono font-bold text-neutral-550 tracking-wider">
-                                Created: {formatResumeCreatedDate(savedResume.uploadedAt)}
+                            <div className="space-y-0.5 min-w-0">
+                              <h3 className="text-[15px] font-medium text-black truncate">
+                                {getResumeCardDisplayName(savedResume)}
+                              </h3>
+                              <p className="text-sm text-neutral-500">
+                                {[summaryBits, `Added ${formatResumeCreatedDate(savedResume.uploadedAt)}`].filter(Boolean).join(" · ")}
                               </p>
                             </div>
-                            <div className="flex items-center gap-3 flex-shrink-0">
+                            <div className="flex items-center gap-1 flex-shrink-0">
                               <button
                                 type="button"
                                 onClick={() => {
@@ -4154,7 +4231,7 @@ WORK EXPERIENCE
                                   setPreviewResumeId(savedResume.id);
                                   setShowResumePreviewModal(true);
                                 }}
-                                className="px-4 py-2 bg-black text-white rounded-xl text-xs font-black uppercase tracking-widest border-2 border-black hover:bg-neutral-800 transition-all cursor-pointer"
+                                className="px-3 py-1.5 text-sm font-medium text-black rounded-lg border border-neutral-200 hover:bg-neutral-50 transition-colors cursor-pointer"
                               >
                                 View
                               </button>
@@ -4165,13 +4242,15 @@ WORK EXPERIENCE
                                   setResumeToDeleteId(savedResume.id);
                                   setShowDeleteConfirmModal(true);
                                 }}
-                                className="px-4 py-2 bg-white text-rose-600 rounded-xl text-xs font-black uppercase tracking-widest border-2 border-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
+                                className="px-3 py-1.5 text-sm font-medium text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
                               >
                                 Delete
                               </button>
                             </div>
                           </div>
-                        ))}
+                          );
+                        })}
+                        </div>
                       </div>
                     </div>
                   )}
@@ -4180,7 +4259,7 @@ WORK EXPERIENCE
                 {resumeSelectionMode !== "create" && (
                   <>
                     {!hasResume ? (
-                      <div className="fixed bottom-8 right-8 z-40 group inline-block animate-fadeIn">
+                      <div className="fixed bottom-5 right-5 sm:bottom-8 sm:right-8 z-40 group inline-block animate-fadeIn">
                         <button
                           id="btn-first-time-create-resume"
                           onClick={() => {
@@ -4189,13 +4268,13 @@ WORK EXPERIENCE
                             setAnalysisResult(null);
                             setIsUploadModalOpen(true);
                           }}
-                          className="px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border border-transparent flex items-center gap-2"
+                          className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-sm rounded-xl transition-colors duration-150 cursor-pointer border border-transparent flex items-center gap-2"
                           title="Start here to unlock Auralis."
                         >
                           <Plus className="w-4 h-4 text-white" strokeWidth={3} />
                           <span>Create New</span>
                         </button>
-                        <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block bg-black text-white text-[10px] font-bold uppercase tracking-wider py-1 px-2.5 rounded border border-white whitespace-nowrap shadow-[2px_2px_0px_0px_rgba(255,255,255,1)] pointer-events-none z-35 font-sans">
+                        <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block bg-black text-white text-xs font-bold py-1 px-2.5 rounded border border-white whitespace-nowrap pointer-events-none z-35 font-sans">
                           Start here to unlock Auralis.
                         </div>
                       </div>
@@ -4208,7 +4287,7 @@ WORK EXPERIENCE
                           setAnalysisResult(null);
                           setIsUploadModalOpen(true);
                         }}
-                        className="fixed bottom-8 right-8 z-40 px-6 py-4 bg-[#2563eb] hover:bg-blue-600 active:scale-95 text-white font-black text-xs uppercase tracking-widest rounded-2xl transition-all duration-200 shadow-xl cursor-pointer border border-transparent flex items-center gap-2"
+                        className="fixed bottom-5 right-5 sm:bottom-8 sm:right-8 z-40 px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-sm rounded-xl transition-colors duration-150 cursor-pointer border border-transparent flex items-center gap-2"
                       >
                         <Plus className="w-4 h-4 text-white" strokeWidth={3} />
                         <span>Add Resume</span>
@@ -4219,10 +4298,10 @@ WORK EXPERIENCE
 
                 {/* Render Manual Build Form Fields Directly */}
                 {resumeSelectionMode === "create" && (
-                  <div className="max-w-3xl bg-white border-2 border-black rounded-3xl p-6 sm:p-8 shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] animate-fadeIn">
+                  <div className="max-w-3xl bg-white border border-neutral-200 rounded-2xl p-6 sm:p-8 animate-fadeIn">
                     <div className="mb-6 pb-4 border-b border-neutral-250 text-left flex justify-between items-center">
                       <div>
-                        <h3 className="text-lg font-black text-neutral-900 tracking-tight">
+                        <h3 className="text-lg font-semibold text-neutral-900 tracking-tight">
                           {hasResume ? "Edit your resume" : "Let's create your resume"}
                         </h3>
                         <p className="text-xs text-neutral-550 mt-1 font-medium font-sans">Fill out the fields below to construct a robust, ATS-compliant professional profile.</p>
@@ -4231,7 +4310,7 @@ WORK EXPERIENCE
                         <button
                           type="button"
                           onClick={() => setResumeSelectionMode(null)}
-                          className="px-4 py-2 bg-neutral-150 hover:bg-neutral-200 text-neutral-700 hover:text-black rounded-lg text-xs font-bold transition cursor-pointer border-2 border-black"
+                          className="px-4 py-2 bg-neutral-150 hover:bg-neutral-200 text-neutral-700 hover:text-black rounded-lg text-xs font-bold transition cursor-pointer border border-neutral-200"
                         >
                           Cancel
                         </button>
@@ -4278,10 +4357,10 @@ WORK EXPERIENCE
                     >
                       {/* Contact Block */}
                       <div className="space-y-3 bg-neutral-50 p-4 rounded-xl border border-neutral-200">
-                        <h3 className="text-xs font-bold text-neutral-900 font-mono uppercase tracking-wider border-b border-neutral-200 pb-1.5">1. Contact & Identity</h3>
+                        <h3 className="text-xs font-bold text-neutral-900 border-b border-neutral-200 pb-1.5">1. Contact & Identity</h3>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div>
-                            <label className="block text-[9px] font-mono font-semibold uppercase text-neutral-550">Full Name *</label>
+                            <label className="block text-sm font-medium text-neutral-700">Full Name *</label>
                             <input
                               type="text"
                               required
@@ -4292,7 +4371,7 @@ WORK EXPERIENCE
                             />
                           </div>
                           <div>
-                            <label className="block text-[9px] font-mono font-semibold uppercase text-neutral-550">Email Address *</label>
+                            <label className="block text-sm font-medium text-neutral-700">Email Address *</label>
                             <input
                               type="email"
                               required
@@ -4305,7 +4384,7 @@ WORK EXPERIENCE
                         </div>
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                           <div>
-                            <label className="block text-[9px] font-mono font-semibold uppercase text-neutral-550">Phone Number *</label>
+                            <label className="block text-sm font-medium text-neutral-700">Phone Number *</label>
                             <input
                               type="text"
                               required
@@ -4316,7 +4395,7 @@ WORK EXPERIENCE
                             />
                           </div>
                           <div>
-                            <label className="block text-[9px] font-mono font-semibold uppercase text-neutral-550">LinkedIn URL</label>
+                            <label className="block text-sm font-medium text-neutral-700">LinkedIn URL</label>
                             <input
                               type="text"
                               placeholder="e.g. linkedin.com/in/alex"
@@ -4326,7 +4405,7 @@ WORK EXPERIENCE
                             />
                           </div>
                           <div>
-                            <label className="block text-[9px] font-mono font-semibold uppercase text-neutral-550">Portfolio / Website</label>
+                            <label className="block text-sm font-medium text-neutral-700">Portfolio / Website</label>
                             <input
                               type="text"
                               placeholder="e.g. alexrivera.dev"
@@ -4340,9 +4419,9 @@ WORK EXPERIENCE
 
                       {/* Summary Block */}
                       <div className="space-y-3 bg-neutral-50 p-4 rounded-xl border border-neutral-200">
-                        <h3 className="text-xs font-bold text-neutral-900 font-mono uppercase tracking-wider border-b border-neutral-200 pb-1.5">2. Professional Pitch</h3>
+                        <h3 className="text-xs font-bold text-neutral-900 border-b border-neutral-200 pb-1.5">2. Professional Pitch</h3>
                         <div>
-                          <label className="block text-[9px] font-mono font-semibold uppercase text-neutral-550">Professional Summary *</label>
+                          <label className="block text-sm font-medium text-neutral-700">Professional Summary *</label>
                           <textarea
                             required
                             rows={3}
@@ -4356,19 +4435,19 @@ WORK EXPERIENCE
 
                       {/* Skills Block */}
                       <div className="space-y-3 bg-neutral-50 p-4 rounded-xl border border-neutral-200">
-                        <h3 className="text-xs font-bold text-neutral-900 font-mono uppercase tracking-wider border-b border-neutral-200 pb-1.5">3. Skill Tag Keywords</h3>
+                        <h3 className="text-xs font-bold text-neutral-900 border-b border-neutral-200 pb-1.5">3. Skill Tag Keywords</h3>
                         <div>
                           <div className="flex flex-wrap gap-1.5 mb-3 bg-white p-2.5 rounded-lg border border-neutral-200 min-h-12 items-center">
                             {activeResume.skills.map((tag) => (
                               <span
                                 key={tag}
-                                className="text-[10px] bg-neutral-100 border border-neutral-200 text-neutral-800 px-2 py-0.5 rounded-full flex items-center gap-1 font-sans font-bold"
+                                className="text-xs bg-neutral-100 border border-neutral-200 text-neutral-800 px-2 py-0.5 rounded-full flex items-center gap-1 font-sans font-bold"
                               >
                                 {tag}
                                 <button
                                   type="button"
                                   onClick={() => handleRemoveSkillTag(tag)}
-                                  className="text-neutral-400 hover:text-neutral-900 font-black cursor-pointer"
+                                  className="text-neutral-400 hover:text-neutral-900 font-semibold cursor-pointer"
                                 >
                                   ×
                                 </button>
@@ -4400,7 +4479,7 @@ WORK EXPERIENCE
 
                       {/* Work Experience */}
                       <div className="space-y-3 bg-neutral-50 p-4 rounded-xl border border-neutral-200">
-                        <h3 className="text-xs font-bold text-neutral-900 font-mono uppercase tracking-wider border-b border-neutral-200 pb-1.5">4. Jobs & Academic Projects</h3>
+                        <h3 className="text-xs font-bold text-neutral-900 border-b border-neutral-200 pb-1.5">4. Jobs & Academic Projects</h3>
                         
                         {activeResume.workExperience.length > 0 && (
                           <div className="space-y-2 mb-3">
@@ -4408,7 +4487,7 @@ WORK EXPERIENCE
                               <div key={exp.id} className="p-2.5 bg-white rounded-lg border border-neutral-200 text-xs flex justify-between items-center">
                                 <div>
                                   <p className="font-bold text-neutral-900">{exp.role}</p>
-                                  <p className="text-[10px] text-neutral-400 font-bold">{exp.company} • {exp.duration}</p>
+                                  <p className="text-xs text-neutral-400 font-bold">{exp.company} • {exp.duration}</p>
                                 </div>
                                 <button
                                   type="button"
@@ -4423,7 +4502,7 @@ WORK EXPERIENCE
                         )}
 
                         <div className="bg-white rounded-xl p-3 border border-neutral-200 space-y-2.5 text-xs">
-                          <p className="text-[9px] font-mono tracking-wider text-neutral-400 font-bold uppercase">Add Experience Entry</p>
+                          <p className="text-[11px] text-neutral-400 font-bold">Add Experience Entry</p>
                           <div className="grid grid-cols-2 gap-2">
                             <input
                               type="text"
@@ -4468,7 +4547,7 @@ WORK EXPERIENCE
 
                       {/* Education */}
                       <div className="space-y-3 bg-neutral-50 p-4 rounded-xl border border-neutral-200">
-                        <h3 className="text-xs font-bold text-neutral-900 font-mono uppercase tracking-wider border-b border-neutral-200 pb-1.5">5. Academic Credentials</h3>
+                        <h3 className="text-xs font-bold text-neutral-900 border-b border-neutral-200 pb-1.5">5. Academic Credentials</h3>
                         
                         {activeResume.education.length > 0 && (
                           <div className="space-y-2 mb-3">
@@ -4476,7 +4555,7 @@ WORK EXPERIENCE
                               <div key={edu.id} className="p-2.5 bg-white rounded-lg border border-neutral-200 text-xs flex justify-between items-center">
                                 <div>
                                   <p className="font-bold text-neutral-900">{edu.degree}</p>
-                                  <p className="text-[10px] text-neutral-450 font-bold">{edu.school} • {edu.duration} {edu.gpa ? `• GPA: ${edu.gpa}` : ""}</p>
+                                  <p className="text-xs text-neutral-450 font-bold">{edu.school} • {edu.duration} {edu.gpa ? `• GPA: ${edu.gpa}` : ""}</p>
                                 </div>
                                 <button
                                   type="button"
@@ -4491,7 +4570,7 @@ WORK EXPERIENCE
                         )}
 
                         <div className="bg-white rounded-xl p-3 border border-neutral-200 space-y-2.5 text-xs">
-                          <p className="text-[9px] font-mono tracking-wider text-neutral-400 font-bold uppercase">Add Education Degree</p>
+                          <p className="text-[11px] text-neutral-400 font-bold">Add Education Degree</p>
                           <div className="grid grid-cols-2 gap-2">
                             <input
                               type="text"
@@ -4537,7 +4616,7 @@ WORK EXPERIENCE
                       <div className="pt-4 text-center">
                         <button
                           type="submit"
-                          className="px-8 py-4 bg-neutral-950 hover:bg-neutral-900 text-white font-black text-xs uppercase tracking-wider rounded-xl transition duration-150 shadow-md cursor-pointer border-2 border-black"
+                          className="px-8 py-4 bg-neutral-950 hover:bg-neutral-900 text-white font-semibold text-xs rounded-xl transition duration-150 cursor-pointer border border-neutral-200"
                         >
                           Generate & Save My Resume
                         </button>
@@ -4560,7 +4639,7 @@ WORK EXPERIENCE
               >
                 <div 
                   id="upload-resume-modal" 
-                  className="bg-white border-2 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] max-w-xl w-full overflow-hidden p-6 sm:p-8 animate-scaleUp text-left space-y-5 relative"
+                  className="bg-white border border-neutral-200 rounded-2xl max-w-xl w-full overflow-hidden p-6 sm:p-8 animate-scaleUp text-left space-y-5 relative"
                   onClick={(e) => e.stopPropagation()}
                 >
                   {/* Close button top right */}
@@ -4572,7 +4651,7 @@ WORK EXPERIENCE
                       setUploadError(null);
                       setAnalysisResult(null);
                     }}
-                    className="absolute top-4 right-4 p-1.5 rounded-lg border-2 border-transparent hover:border-black text-neutral-550 hover:text-black transition cursor-pointer"
+                    className="absolute top-4 right-4 p-1.5 rounded-lg text-neutral-500 hover:text-black hover:bg-neutral-100 transition-colors cursor-pointer"
                     title="Close"
                   >
                     <X className="w-5 h-5" />
@@ -4580,15 +4659,15 @@ WORK EXPERIENCE
 
                   {/* Header Titles Based on State */}
                   <div className="space-y-1">
-                    <h3 className="text-xl font-black font-sans tracking-tight text-neutral-900 leading-tight">
+                    <h3 className="text-lg font-semibold tracking-tight text-black leading-tight">
                       {isAnalyzing
                         ? "Checking your resume..."
                         : analysisResult && !analysisResult.isResume
-                          ? "Not a Valid Resume"
+                          ? "Not a resume"
                           : "Upload your resume"
                       }
                     </h3>
-                    <p className="text-xs text-neutral-550 font-sans font-medium">
+                    <p className="text-sm text-neutral-500">
                       {isAnalyzing
                         ? "Please wait while we check your file..."
                         : analysisResult && !analysisResult.isResume
@@ -4600,14 +4679,14 @@ WORK EXPERIENCE
 
                   {/* 1. Loader View */}
                   {isAnalyzing && (
-                    <div className="border-2 border-black rounded-2xl p-8 flex flex-col items-center justify-center space-y-4 bg-blue-50/10 min-h-[220px]">
+                    <div className="border border-neutral-200 rounded-xl p-8 flex flex-col items-center justify-center space-y-4 min-h-[200px]">
                       <div className="relative w-14 h-14 flex items-center justify-center">
                         <Loader2 className="w-10 h-10 text-blue-600 animate-spin absolute" />
-                        <span className="w-4 h-4 rounded-full bg-blue-500 animate-pulse"></span>
+                        <span className="w-4 h-4 rounded-full bg-blue-500"></span>
                       </div>
                       <div className="space-y-1.5 text-center max-w-sm">
-                        <p className="text-sm font-black text-neutral-800 font-mono uppercase tracking-wide">Checking file...</p>
-                        <p className="text-[11px] text-neutral-550 font-sans leading-relaxed font-semibold">
+                        <p className="text-sm font-semibold text-neutral-800">Checking file...</p>
+                        <p className="text-sm text-neutral-500 leading-relaxed">
                           Verifying that your file is a resume. This only takes a few seconds.
                         </p>
                       </div>
@@ -4630,12 +4709,12 @@ WORK EXPERIENCE
                       <label
                         htmlFor="file-uploader-popup-input"
                         id="drag-drop-zone-popup"
-                        className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all duration-300 cursor-pointer flex flex-col items-center justify-center space-y-4 relative min-h-[180px] ${
+                        className={`border border-dashed rounded-xl p-8 text-center transition-colors duration-150 cursor-pointer flex flex-col items-center justify-center space-y-4 relative min-h-[180px] ${
                           dragActive 
-                            ? "border-blue-500 bg-blue-50/20 scale-[101%]" 
+                            ? "border-blue-500 bg-blue-50/40" 
                             : tempFile 
                               ? "border-emerald-500 bg-emerald-50/10" 
-                              : "border-neutral-300 hover:border-neutral-500 bg-neutral-50/30 font-sans"
+                              : "border-neutral-300 hover:border-neutral-400 hover:bg-neutral-50"
                         }`}
                         onDragEnter={handleDragOverOrEnter}
                         onDragOver={handleDragOverOrEnter}
@@ -4643,15 +4722,15 @@ WORK EXPERIENCE
                         onDrop={handleFileDrop}
                       >
                         <div className="flex flex-col items-center space-y-3">
-                          <div className="w-12 h-12 rounded-full bg-blue-50 border-2 border-blue-500 flex items-center justify-center text-blue-500">
+                          <div className="w-10 h-10 rounded-full bg-neutral-100 flex items-center justify-center text-neutral-600">
                             <Upload className="w-5 h-5" />
                           </div>
                           <div className="space-y-1">
-                            <p className="text-sm font-bold text-neutral-800 tracking-tight font-sans">
-                              Drag and drop file here, or browse files
+                            <p className="text-sm font-medium text-black">
+                              Drop your file here, or <span className="text-blue-600">browse</span>
                             </p>
-                            <p className="text-[10px] text-neutral-450 font-mono uppercase tracking-wider font-bold">
-                              Supported formats: PDF, DOCX
+                            <p className="text-xs text-neutral-500">
+                              PDF or Word (.docx)
                             </p>
                           </div>
                         </div>
@@ -4661,13 +4740,13 @@ WORK EXPERIENCE
 
                   {/* Invalid resume error */}
                   {showInvalidResumeCard && (
-                    <div className="border-2 border-rose-500 bg-rose-50/20 rounded-2xl p-5 space-y-3.5">
+                    <div className="bg-rose-50 rounded-xl p-4 space-y-3">
                       <div className="flex items-start gap-3">
                         <XCircle className="w-5 h-5 text-rose-500 mt-0.5 flex-shrink-0" />
                         <div>
-                          <p className="text-sm font-black text-rose-950 uppercase font-mono tracking-wide">Not a Valid Resume</p>
-                          <p className="text-[11px] text-neutral-700 font-semibold mt-1 font-sans leading-relaxed">
-                            This file does not appear to be a valid resume. Please upload a resume.
+                          <p className="text-sm font-medium text-rose-900">This doesn't look like a resume</p>
+                          <p className="text-sm text-neutral-600 mt-1 leading-relaxed">
+                            We couldn't find resume sections like experience, education or skills. Try another file.
                           </p>
                         </div>
                       </div>
@@ -4679,9 +4758,9 @@ WORK EXPERIENCE
                             setUploadError(null);
                             setAnalysisResult(null);
                           }}
-                          className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition cursor-pointer"
+                          className="px-3 py-1.5 bg-white hover:bg-neutral-50 text-black text-sm font-medium rounded-lg border border-neutral-200 transition-colors cursor-pointer"
                         >
-                          Try Another File
+                          Try another file
                         </button>
                       </div>
                     </div>
@@ -4689,7 +4768,7 @@ WORK EXPERIENCE
 
                   {/* File format / upload error */}
                   {uploadError && !isAnalyzing && !showInvalidResumeCard && (
-                    <div className="flex items-center gap-2 p-3.5 rounded-xl border-2 border-rose-500 bg-rose-50 text-rose-950 text-xs font-bold animate-fadeIn font-sans">
+                    <div className="flex items-center gap-2 p-3 rounded-lg bg-rose-50 text-rose-900 text-sm animate-fadeIn">
                       <AlertTriangle className="w-4 h-4 text-rose-500 flex-shrink-0" />
                       <span>{formatFriendlyError(uploadError)}</span>
                     </div>
@@ -4707,7 +4786,7 @@ WORK EXPERIENCE
                         setUploadError(null);
                         setAnalysisResult(null);
                       }}
-                      className="w-full sm:w-auto px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition duration-150 cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="w-full sm:w-auto px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg transition duration-150 cursor-pointer border border-neutral-200 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       Cancel
                     </button>
@@ -4721,7 +4800,7 @@ WORK EXPERIENCE
         {/* -------------------- STEP 2: PASTE JOB DESCRIPTION & JD SIMPLIFIER -------------------- */}
         {false && (
           <div id="step-jd-panel" className="max-w-4xl mx-auto space-y-6">
-            <div className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 shadow-sm relative">
+            <div className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 relative">
               <div className="mb-4">
                 <h3 className="text-sm font-bold text-neutral-900 dark:text-white tracking-tight flex items-center gap-2 font-display">
                   <BookOpen className="w-4 h-4 text-neutral-800 dark:text-neutral-200" /> Paste Job Description (JD)
@@ -4734,7 +4813,7 @@ WORK EXPERIENCE
               {/* Target labels */}
               <div className="grid grid-cols-2 gap-4 mb-4">
                 <div>
-                  <label className="block text-[10px] uppercase font-mono text-neutral-500 dark:text-neutral-400 tracking-wider font-semibold">Target Company Name</label>
+                  <label className="block text-xs text-neutral-500 dark:text-neutral-400 font-semibold">Target Company Name</label>
                   <input
                     id="input-target-company"
                     type="text"
@@ -4746,7 +4825,7 @@ WORK EXPERIENCE
                   />
                 </div>
                 <div>
-                  <label className="block text-[10px] uppercase font-mono text-neutral-500 dark:text-neutral-400 tracking-wider font-semibold">Target Job Role/Title</label>
+                  <label className="block text-xs text-neutral-500 dark:text-neutral-400 font-semibold">Target Job Role/Title</label>
                   <input
                     id="input-target-role"
                     type="text"
@@ -4761,7 +4840,7 @@ WORK EXPERIENCE
 
               {/* Presets load bar */}
               <div className="flex flex-wrap items-center gap-2 mb-4 p-3 bg-neutral-50 dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800">
-                <span className="text-[10px] uppercase font-mono text-neutral-400 dark:text-neutral-500 font-semibold">Load Sample Job Template:</span>
+                <span className="text-xs text-neutral-400 dark:text-neutral-500 font-semibold">Load Sample Job Template:</span>
                 <button
                   id="btn-load-jd-frontend"
                   onClick={() => loadPresetJD("frontend_eng")}
@@ -4780,7 +4859,7 @@ WORK EXPERIENCE
 
               {/* Raw Text inputs */}
               <div className="space-y-2">
-                <label className="block text-[10px] uppercase font-mono text-neutral-500 dark:text-neutral-400 tracking-wider font-semibold">Full Raw Job Post Content</label>
+                <label className="block text-xs text-neutral-500 dark:text-neutral-400 font-semibold">Full Raw Job Post Content</label>
                 <textarea
                   id="textarea-jd"
                   rows={8}
@@ -4822,15 +4901,15 @@ WORK EXPERIENCE
 
             {/* Simplification Result Box */}
             {simplifiedJd && (
-              <div id="simplified-jd-section" className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 shadow-sm space-y-6">
+              <div id="simplified-jd-section" className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 space-y-6">
                 <h3 className="text-sm font-bold text-neutral-900 dark:text-white tracking-tight flex items-center gap-2 font-display">
                   <CheckCircle2 className="w-5 h-5 text-neutral-900 dark:text-neutral-150" /> Simplified Job Analysis
                 </h3>
 
                 {/* Company Pitch */}
                 <div className="bg-neutral-50 dark:bg-neutral-900 p-4 rounded-xl border border-neutral-200 dark:border-neutral-800">
-                  <h4 className="text-xs font-bold text-neutral-800 dark:text-neutral-300 uppercase font-mono tracking-wider mb-1">Company Elevator Pitch (No Jargon)</h4>
-                  <p className="text-xs tracking-wide leading-relaxed text-neutral-750 dark:text-neutral-300 font-normal">
+                  <h4 className="text-xs font-bold text-neutral-800 dark:text-neutral-300 mb-1">Company Elevator Pitch (No Jargon)</h4>
+                  <p className="text-xs leading-relaxed text-neutral-750 dark:text-neutral-300 font-normal">
                     {simplifiedJd.companyPitch}
                   </p>
                 </div>
@@ -4838,29 +4917,29 @@ WORK EXPERIENCE
                 {/* Skills mapped out */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <h4 className="text-xs font-bold text-neutral-500 uppercase font-mono tracking-wider mb-2">High Priority Required Core Stack</h4>
+                    <h4 className="text-xs font-bold text-neutral-500 mb-2">High Priority Required Core Stack</h4>
                     <div className="flex flex-wrap gap-1.5">
                       {simplifiedJd.requiredSkills.filter(s => s.priority === "high").map((s, idx) => (
-                        <span key={idx} className="bg-neutral-950 dark:bg-white text-white dark:text-black border border-neutral-800 text-[10px] px-2.5 py-1 rounded-lg flex items-center gap-1 font-semibold">
+                        <span key={idx} className="bg-neutral-950 dark:bg-white text-white dark:text-black border border-neutral-800 text-xs px-2.5 py-1 rounded-lg flex items-center gap-1 font-semibold">
                           <span className="w-1.5 h-1.5 rounded-full bg-white dark:bg-black font-semibold"></span> {s.name}
                         </span>
                       ))}
                       {simplifiedJd.requiredSkills.filter(s => s.priority === "high").length === 0 && (
-                        <span className="text-[10px] text-neutral-450 font-normal">None found.</span>
+                        <span className="text-xs text-neutral-450 font-normal">None found.</span>
                       )}
                     </div>
                   </div>
 
                   <div>
-                    <h4 className="text-xs font-bold text-neutral-500 uppercase font-mono tracking-wider mb-2">Medium Priority / Preferred Skillsets</h4>
+                    <h4 className="text-xs font-bold text-neutral-500 mb-2">Medium Priority / Preferred Skillsets</h4>
                     <div className="flex flex-wrap gap-1.5">
                       {simplifiedJd.requiredSkills.filter(s => s.priority === "medium").map((s, idx) => (
-                        <span key={idx} className="bg-neutral-105 border border-neutral-200 dark:bg-neutral-900 dark:border-neutral-800 text-neutral-800 dark:text-neutral-200 text-[10px] px-2.5 py-1 rounded-lg flex items-center gap-1 font-semibold">
+                        <span key={idx} className="bg-neutral-105 border border-neutral-200 dark:bg-neutral-900 dark:border-neutral-800 text-neutral-800 dark:text-neutral-200 text-xs px-2.5 py-1 rounded-lg flex items-center gap-1 font-semibold">
                           <span className="w-1.5 h-1.5 rounded-full bg-neutral-500"></span> {s.name}
                         </span>
                       ))}
                       {simplifiedJd.requiredSkills.filter(s => s.priority === "medium").length === 0 && (
-                        <span className="text-[10px] text-neutral-450 font-normal">None found.</span>
+                        <span className="text-xs text-neutral-450 font-normal">None found.</span>
                       )}
                     </div>
                   </div>
@@ -4869,7 +4948,7 @@ WORK EXPERIENCE
                 {/* Responsibilities list */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <h4 className="text-xs font-bold text-neutral-800 dark:text-neutral-300 uppercase font-mono tracking-wider mb-2">What they expect you to do daily</h4>
+                    <h4 className="text-xs font-bold text-neutral-800 dark:text-neutral-300 mb-2">What they expect you to do daily</h4>
                     <ul className="list-none space-y-1.5">
                       {simplifiedJd.keyResponsibilities.map((resp, idx) => (
                         <li key={idx} className="text-xs text-neutral-700 dark:text-neutral-300 leading-relaxed flex items-start gap-1.5">
@@ -4881,7 +4960,7 @@ WORK EXPERIENCE
                   </div>
 
                   <div>
-                    <h4 className="text-xs font-bold text-neutral-800 dark:text-neutral-300 uppercase font-mono tracking-wider mb-2">Graduate Behavioral Expectations</h4>
+                    <h4 className="text-xs font-bold text-neutral-800 dark:text-neutral-300 mb-2">Graduate Behavioral Expectations</h4>
                     <ul className="list-none space-y-1.5">
                       {simplifiedJd.candidateExpectations.map((exp, idx) => (
                         <li key={idx} className="text-xs text-neutral-700 dark:text-neutral-300 leading-relaxed flex items-start gap-1.5">
@@ -4895,10 +4974,10 @@ WORK EXPERIENCE
 
                 {/* Automation keywords tags */}
                 <div className="border-t border-neutral-200 dark:border-neutral-800 pt-4">
-                  <h4 className="text-xs font-bold text-neutral-500 uppercase font-mono tracking-wider mb-2">Target ATS Keyword Search Terms (Pass Filters)</h4>
+                  <h4 className="text-xs font-bold text-neutral-500 mb-2">Target ATS Keyword Search Terms (Pass Filters)</h4>
                   <div className="flex flex-wrap gap-1.5">
                     {simplifiedJd.keywordsToTarget.map((kw, idx) => (
-                      <span key={idx} className="text-[10px] bg-neutral-100 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-850 text-neutral-800 dark:text-neutral-300 px-2.5 py-1 rounded-full font-mono font-semibold">
+                      <span key={idx} className="text-xs bg-neutral-100 dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-850 text-neutral-800 dark:text-neutral-300 px-2.5 py-1 rounded-full font-semibold">
                         # {kw}
                       </span>
                     ))}
@@ -4912,7 +4991,7 @@ WORK EXPERIENCE
                     onClick={() => {
                       triggerResumeTailor();
                     }}
-                    className="py-3 px-6 bg-neutral-950 dark:bg-white hover:opacity-90 text-white dark:text-black text-xs font-bold rounded-xl transition active:scale-[98%] flex inline-flex items-center gap-1 justify-center cursor-pointer shadow-xs"
+                    className="py-3 px-6 bg-neutral-950 dark:bg-white hover:opacity-90 text-white dark:text-black text-xs font-bold rounded-xl transition flex inline-flex items-center gap-1 justify-center cursor-pointer shadow-xs"
                   >
                     <span>Proceed to Custom Tailoring Engine</span>
                     <ArrowRight className="w-4 h-4" />
@@ -4929,7 +5008,7 @@ WORK EXPERIENCE
             {/* Left Column: Interactive Suggestion list & ATS Auditing tool */}
             <div className="lg:col-span-5 space-y-6">
               {/* Main Tailoring Trigger / Status Widget */}
-              <div className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 shadow-sm relative overflow-hidden">
+              <div className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 relative overflow-hidden">
                 <div className="mb-4">
                   <h3 className="text-sm font-bold text-neutral-900 dark:text-white tracking-tight flex items-center gap-1.5 font-display">
                     <Sparkles className="w-4 h-4 text-neutral-800 dark:text-neutral-200" /> Resume Personalization
@@ -4974,16 +5053,16 @@ WORK EXPERIENCE
               </div>
 
               {/* Suggestions Desk List */}
-              <div className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 shadow-sm space-y-4">
+              <div className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 space-y-4">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-mono font-bold text-neutral-900 dark:text-white uppercase tracking-wider">
+                  <h4 className="text-xs font-bold text-neutral-900 dark:text-white">
                     AI Recommendations ({suggestions.filter(s => !s.applied).length} pending)
                   </h4>
                   {suggestions.some(s => !s.applied) && (
                     <button
                       id="btn-apply-all-suggestions"
                       onClick={handleApplyAllSuggestions}
-                      className="text-[10px] font-bold text-neutral-805 hover:text-black dark:text-neutral-300 dark:hover:text-white hover:underline flex items-center gap-1"
+                      className="text-xs font-bold text-neutral-805 hover:text-black dark:text-neutral-300 dark:hover:text-white hover:underline flex items-center gap-1"
                     >
                       <span>Apply All ({suggestions.filter(s => !s.applied).length})</span>
                     </button>
@@ -5012,15 +5091,15 @@ WORK EXPERIENCE
                         className={`p-3.5 rounded-xl border text-xs leading-relaxed transition ${
                           sug.applied
                             ? "bg-neutral-50 dark:bg-neutral-900 border-neutral-200 dark:border-neutral-800 opacity-60 text-neutral-500"
-                            : "bg-white dark:bg-black border-neutral-200 dark:border-neutral-800 text-neutral-800 dark:text-neutral-200"
+                            : "bg-white dark:bg-black border-transparent dark:border-neutral-800 text-neutral-800 dark:text-neutral-200"
                         }`}
                       >
                         <div className="flex items-center justify-between mb-2">
-                          <span className="text-[10px] font-bold uppercase font-mono tracking-wider text-neutral-500 dark:text-neutral-400">
+                          <span className="text-xs font-bold text-neutral-500 dark:text-neutral-400">
                             {sug.section} suggestion • {sug.type} Standard
                           </span>
                           {sug.applied ? (
-                            <span className="text-[10px] font-semibold text-neutral-800 dark:text-neutral-200 flex items-center gap-1 font-sans">
+                            <span className="text-xs font-semibold text-neutral-800 dark:text-neutral-200 flex items-center gap-1 font-sans">
                               <Check className="w-3 h-3" /> Implemented
                             </span>
                           ) : (
@@ -5028,14 +5107,14 @@ WORK EXPERIENCE
                               <button
                                 id={`btn-reject-sug-${sug.id}`}
                                 onClick={() => handleRejectSuggestion(sug.id)}
-                                className="text-[10px] font-bold text-neutral-400 hover:text-neutral-600"
+                                className="text-xs font-bold text-neutral-400 hover:text-neutral-600"
                               >
                                 Skip
                               </button>
                               <button
                                 id={`btn-accept-sug-${sug.id}`}
                                 onClick={() => handleAcceptSuggestion(sug)}
-                                className="text-[10px] font-bold text-neutral-900 dark:text-white hover:underline"
+                                className="text-xs font-bold text-neutral-900 dark:text-white hover:underline"
                               >
                                 Accept & Apply
                               </button>
@@ -5062,9 +5141,9 @@ WORK EXPERIENCE
               </div>
 
               {/* ATS Checker Compliance Desk */}
-              <div className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 shadow-sm space-y-4">
+              <div className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 space-y-4">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-bold text-neutral-900 dark:text-white uppercase tracking-widest font-mono">
+                  <h4 className="text-xs font-bold text-neutral-900 dark:text-white">
                     ATS Audit Simulator
                   </h4>
                   <button
@@ -5087,9 +5166,9 @@ WORK EXPERIENCE
                 {atsResult ? (
                   <div id="ats-scan-feedback" className="space-y-4 animate-pulse-once">
                     {/* Score speed dial */}
-                    <div className="flex items-center gap-4 bg-neutral-50 dark:bg-black p-3.5 rounded-xl border border-neutral-200 dark:border-neutral-800">
+                    <div className="flex items-center gap-4 bg-neutral-50 dark:bg-black p-3.5 rounded-xl border border-transparent dark:border-neutral-800">
                       <div className="relative w-14 h-14 flex items-center justify-center rounded-full bg-neutral-950 dark:bg-white border border-neutral-800 dark:border-neutral-200 shadow-xs">
-                        <span className="text-sm font-black text-white dark:text-black">
+                        <span className="text-sm font-semibold text-white dark:text-black">
                           {atsResult.score}%
                         </span>
                       </div>
@@ -5097,7 +5176,7 @@ WORK EXPERIENCE
                         <p className="text-xs font-bold text-neutral-900 dark:text-white">
                           Verdict: {atsResult.passed ? "Strong Candidate (Passed)" : "Optimization Needed"}
                         </p>
-                        <p className="text-[10px] text-neutral-500 mt-0.5 font-normal">Automated screening metrics verified against corporate filters</p>
+                        <p className="text-xs text-neutral-500 mt-0.5 font-normal">Automated screening metrics verified against corporate filters</p>
                       </div>
                     </div>
 
@@ -5107,12 +5186,12 @@ WORK EXPERIENCE
                         <div key={idx} className="p-2.5 bg-neutral-50 dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-850 text-xs">
                           <div className="flex justify-between items-center mb-1">
                             <span className="font-bold text-neutral-805 dark:text-neutral-200 text-[11px]">{item.name}</span>
-                            <span className={`text-[10px] font-bold ${item.passed ? "text-neutral-900 dark:text-neutral-100" : "text-neutral-450 dark:text-neutral-500"}`}>
+                            <span className={`text-xs font-bold ${item.passed ? "text-neutral-900 dark:text-neutral-100" : "text-neutral-450 dark:text-neutral-500"}`}>
                               {item.passed ? "Passed" : "Action Required"}
                             </span>
                           </div>
-                          <p className="text-[10px] text-neutral-500 mb-1 leading-normal font-sans">{item.description}</p>
-                          <p className="text-xs text-neutral-700 dark:text-neutral-300 bg-white dark:bg-black border border-neutral-200 dark:border-neutral-800 p-2 rounded leading-relaxed">{item.feedback}</p>
+                          <p className="text-xs text-neutral-500 mb-1 leading-normal font-sans">{item.description}</p>
+                          <p className="text-xs text-neutral-700 dark:text-neutral-300 bg-white dark:bg-black border border-transparent dark:border-neutral-800 p-2 rounded leading-relaxed">{item.feedback}</p>
                         </div>
                       ))}
                     </div>
@@ -5133,7 +5212,7 @@ WORK EXPERIENCE
                   <button
                     id="save-version-cta"
                     onClick={handleSaveCurrentVersion}
-                    className="px-4 py-2 bg-neutral-950 dark:bg-white text-white dark:text-black hover:opacity-90 text-xs font-bold rounded-xl flex items-center gap-1.5 transition active:scale-[97%] cursor-pointer"
+                    className="px-4 py-2 bg-neutral-950 dark:bg-white text-white dark:text-black hover:opacity-90 text-xs font-bold rounded-xl flex items-center gap-1.5 transition cursor-pointer"
                     title="Store this customized configuration for specific target"
                   >
                     <Save className="w-3.5 h-3.5" />
@@ -5163,7 +5242,7 @@ WORK EXPERIENCE
                   <button
                     id="btn-print-pdf-direct"
                     onClick={handlePrintDownload}
-                    className="px-4 py-2 bg-neutral-950 dark:bg-white text-white dark:text-black hover:opacity-90 text-xs font-bold rounded-xl flex items-center gap-1.5 transition active:scale-[97%] cursor-pointer"
+                    className="px-4 py-2 bg-neutral-950 dark:bg-white text-white dark:text-black hover:opacity-90 text-xs font-bold rounded-xl flex items-center gap-1.5 transition cursor-pointer"
                   >
                     <Download className="w-3.5 h-3.5" />
                     <span>Save as PDF</span>
@@ -5172,9 +5251,9 @@ WORK EXPERIENCE
               </div>
 
               {/* Template Style Switcher inside preview box */}
-              <div className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-4 shadow-sm flex items-center justify-between">
-                <span className="text-xs text-neutral-500 font-mono">Real-time Designer Canvas:</span>
-                <div className="flex gap-1 bg-neutral-50 dark:bg-black p-1 rounded-xl border border-neutral-200 dark:border-neutral-800 text-xs">
+              <div className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-4 flex items-center justify-between">
+                <span className="text-xs text-neutral-500">Real-time Designer Canvas:</span>
+                <div className="flex gap-1 bg-neutral-50 dark:bg-black p-1 rounded-xl border border-transparent dark:border-neutral-800 text-xs">
                   <button
                     onClick={() => setSelectedStyle("tech")}
                     className={`px-3 py-1 rounded-lg transition ${selectedStyle === "tech" ? "bg-white dark:bg-neutral-800 text-neutral-950 dark:text-white font-bold" : "text-neutral-400 hover:text-neutral-900"}`}
@@ -5213,7 +5292,7 @@ WORK EXPERIENCE
         {/* -------------------- STEP: SAVED COPIES / VERSIONS LIST -------------------- */}
         {false && (
           <div id="step-versions-panel" className="max-w-4xl mx-auto space-y-6">
-            <div className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 shadow-sm relative">
+            <div className="bg-white dark:bg-neutral-950 border border-neutral-200 dark:border-neutral-800 rounded-2xl p-6 relative">
               <div className="mb-6">
                 <h3 className="text-sm font-bold text-neutral-900 dark:text-white tracking-tight flex items-center gap-2 font-display">
                   <FolderOpen className="w-5 h-5 text-neutral-800 dark:text-neutral-200" /> Saved Resume Versions ({savedVersions.length})
@@ -5224,7 +5303,7 @@ WORK EXPERIENCE
               </div>
 
               {savedVersions.length === 0 ? (
-                <div className="text-center py-12 bg-neutral-50 dark:bg-black rounded-2xl border border-neutral-200 dark:border-neutral-800">
+                <div className="text-center py-12 bg-neutral-50 dark:bg-black rounded-2xl border border-transparent dark:border-neutral-800">
                   <FileText className="w-10 h-10 text-neutral-400 mx-auto mb-3" />
                   <h4 className="text-xs font-bold text-neutral-700 dark:text-neutral-300">No versions saved yet</h4>
                   <p className="text-[11px] text-neutral-500 max-w-xs mx-auto mt-1">
@@ -5244,11 +5323,11 @@ WORK EXPERIENCE
                     <div
                       key={version.id}
                       onClick={() => handleLoadVersion(version)}
-                      className="p-4 bg-neutral-50 dark:bg-black border border-neutral-200 dark:border-neutral-800 rounded-xl hover:border-neutral-900 hover:bg-neutral-100/50 dark:hover:bg-neutral-900 cursor-pointer transition relative group flex flex-col justify-between"
+                      className="p-4 bg-neutral-50 dark:bg-black border border-transparent dark:border-neutral-800 rounded-xl hover:border-neutral-900 hover:bg-neutral-100/50 dark:hover:bg-neutral-900 cursor-pointer transition relative group flex flex-col justify-between"
                     >
                       <div>
                         <div className="flex justify-between items-start mb-2">
-                          <span className="font-mono text-[9px] uppercase font-bold text-neutral-500 bg-white dark:bg-neutral-900 px-2.5 py-1 rounded border border-neutral-200 dark:border-neutral-800">
+                          <span className="font-mono text-[11px] font-bold text-neutral-500 bg-white dark:bg-neutral-900 px-2.5 py-1 rounded border border-neutral-200 dark:border-neutral-800">
                             {version.savedAt}
                           </span>
                           <button
@@ -5264,12 +5343,12 @@ WORK EXPERIENCE
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
                         </div>
-                        <h4 className="text-xs font-black text-neutral-900 dark:text-white font-display mt-2">{version.companyName}</h4>
+                        <h4 className="text-xs font-semibold text-neutral-900 dark:text-white font-display mt-2">{version.companyName}</h4>
                         <p className="text-[11px] text-neutral-600 dark:text-neutral-400 font-semibold mt-0.5">{version.jobTitle}</p>
-                        <p className="text-[10px] text-neutral-500 mt-2 font-mono">Candidate: {version.resumeData.fullName}</p>
+                        <p className="text-xs text-neutral-500 mt-2">Candidate: {version.resumeData.fullName}</p>
                       </div>
 
-                      <div className="border-t border-neutral-200 dark:border-neutral-800 pt-3.5 mt-4 flex items-center justify-between text-[10px] text-neutral-500">
+                      <div className="border-t border-neutral-200 dark:border-neutral-800 pt-3.5 mt-4 flex items-center justify-between text-xs text-neutral-500">
                         <span className="flex items-center gap-1 font-semibold text-neutral-900 dark:text-neutral-100">
                           <CheckCircle2 className="w-3.5 h-3.5" /> {version.appliedSuggestionsCount} items tailored
                         </span>
@@ -5287,11 +5366,11 @@ WORK EXPERIENCE
               {/* Footer Design inside workspace */}
               {false && (
                 <footer id="app-footer" className="mt-20 border-t border-neutral-205 dark:border-neutral-800 pt-8 pb-12 text-center text-neutral-500 text-xs print-hide">
-                  <p className="font-mono text-[9px] text-neutral-500 dark:text-neutral-400 uppercase tracking-widest font-semibold">Crafted for Future Professionals</p>
+                  <p className="font-mono text-[11px] text-neutral-500 dark:text-neutral-400 font-semibold">Crafted for Future Professionals</p>
                   <p className="text-[11px] text-neutral-600 dark:text-neutral-400 mt-1 max-w-sm mx-auto font-normal">
                     Optimizes graduate portfolios against modern recruitment trackers with absolute confidence.
                   </p>
-                  <p className="text-[10px] text-neutral-500 mt-4">&copy; {new Date().getFullYear()} JD to Resume Customizer. Open Source Licensing.</p>
+                  <p className="text-xs text-neutral-500 mt-4">&copy; {new Date().getFullYear()} JD to Resume Customizer. Open Source Licensing.</p>
                 </footer>
               )}
             </main>
@@ -5318,15 +5397,15 @@ WORK EXPERIENCE
         >
           <div 
             id="custom-no-resume-alert-modal"
-            className="bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 sm:p-8 w-full max-w-md text-center space-y-6 relative animate-scaleIn animate-fadeIn"
+            className="bg-white border border-neutral-200 rounded-2xl p-6 sm:p-8 w-full max-w-md text-center space-y-6 relative animate-scaleIn animate-fadeIn"
           >
-            <div className="mx-auto w-16 h-16 rounded-full border-2 border-black flex items-center justify-center bg-amber-100 text-black">
-              <AlertTriangle className="w-8 h-8 text-amber-600 animate-bounce" />
+            <div className="mx-auto w-16 h-16 rounded-full border border-neutral-200 flex items-center justify-center bg-amber-100 text-black">
+              <AlertTriangle className="w-8 h-8 text-amber-600" />
             </div>
             
             <div className="space-y-2">
-              <h3 className="text-lg font-black tracking-tight text-black uppercase font-mono">Resume Setup Required</h3>
-              <p className="text-xs text-neutral-800 leading-relaxed font-bold font-sans">
+              <h3 className="text-lg font-semibold tracking-tight text-black">Resume Setup Required</h3>
+              <p className="text-sm text-neutral-500 leading-relaxed">
                 Please upload or create your resume first.
               </p>
             </div>
@@ -5338,14 +5417,14 @@ WORK EXPERIENCE
                   setShowNoResumeAlert(false);
                   setCurrentStep("resume");
                 }}
-                className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                className="px-4 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-sm rounded-lg transition cursor-pointer border border-transparent"
               >
                 Go to Resume Setup
               </button>
               <button
                 id="btn-alert-dismiss"
                 onClick={() => setShowNoResumeAlert(false)}
-                className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                className="px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg transition cursor-pointer border border-neutral-200"
               >
                 Cancel
               </button>
@@ -5363,27 +5442,27 @@ WORK EXPERIENCE
         >
           <div 
             id="resume-preview-popup-modal"
-            className="bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 sm:p-8 w-full max-w-2xl text-left relative animate-scaleIn flex flex-col max-h-[90vh]"
+            className="bg-white border border-neutral-200 rounded-2xl p-6 sm:p-8 w-full max-w-2xl text-left relative animate-scaleIn flex flex-col max-h-[90vh]"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close button */}
             <button
               id="btn-close-preview-popup"
               onClick={() => setShowResumePreviewModal(false)}
-              className="absolute top-4 right-4 p-1.5 rounded-lg border-2 border-transparent hover:border-black text-neutral-550 hover:text-black transition cursor-pointer"
+              className="absolute top-4 right-4 p-1.5 rounded-lg text-neutral-500 hover:text-black hover:bg-neutral-100 transition-colors cursor-pointer"
               title="Close Preview"
             >
               <X className="w-5 h-5" />
             </button>
 
             {/* Header */}
-            <div className="mb-4 text-left border-b-2 border-black pb-3">
-              <h3 className="text-lg font-black tracking-tight text-black uppercase font-mono">Original Resume Document</h3>
-              <p className="text-xs text-neutral-550 font-medium font-sans">Preview the original un-tailored resume details.</p>
+            <div className="mb-5 text-left">
+              <h3 className="text-lg font-semibold tracking-tight text-black">Original resume</h3>
+              <p className="text-sm text-neutral-500 mt-0.5">As uploaded, before any tailoring.</p>
             </div>
 
             {/* Body: scrollable preview */}
-            <div className="flex-1 overflow-y-auto pr-1 border border-neutral-250 rounded-xl mb-6 bg-neutral-50 p-4">
+            <div className="flex-1 overflow-y-auto pr-1 border border-neutral-200 rounded-xl mb-6 bg-neutral-50 p-4">
               {(() => {
                 const previewResume = savedUserResumes.find(r => r.id === previewResumeId);
                 if (!previewResume) return <p className="text-sm text-neutral-500">No resume selected.</p>;
@@ -5401,7 +5480,7 @@ WORK EXPERIENCE
                   setShowResumePreviewModal(false);
                   setShowDeleteConfirmModal(true);
                 }}
-                className="px-5 py-3 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center gap-1.5"
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-medium text-sm rounded-lg transition cursor-pointer border border-transparent flex items-center justify-center gap-1.5"
               >
                 <Trash2 className="w-4 h-4" />
                 <span>Delete Resume</span>
@@ -5420,25 +5499,25 @@ WORK EXPERIENCE
         >
           <div 
             id="delete-resume-confirm-modal"
-            className="bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 sm:p-8 w-full max-w-md text-center space-y-6 relative animate-scaleIn animate-fadeIn"
+            className="bg-white border border-neutral-200 rounded-2xl p-6 sm:p-8 w-full max-w-md text-center space-y-6 relative animate-scaleIn animate-fadeIn"
             onClick={(e) => e.stopPropagation()}
           >
             <button
               id="btn-close-delete-confirm"
               onClick={() => setShowDeleteConfirmModal(false)}
-              className="absolute top-4 right-4 p-1.5 rounded-lg border-2 border-transparent hover:border-black text-neutral-550 hover:text-black transition cursor-pointer"
+              className="absolute top-4 right-4 p-1.5 rounded-lg text-neutral-500 hover:text-black hover:bg-neutral-100 transition-colors cursor-pointer"
               title="Cancel"
             >
               <X className="w-5 h-5" />
             </button>
 
-            <div className="mx-auto w-16 h-16 rounded-full border-2 border-black flex items-center justify-center bg-rose-100 text-rose-600">
-              <Trash2 className="w-8 h-8 animate-pulse" />
+            <div className="mx-auto w-12 h-12 rounded-full flex items-center justify-center bg-rose-50 text-rose-600">
+              <Trash2 className="w-5 h-5" />
             </div>
             
             <div className="space-y-2">
-              <h3 className="text-lg font-black tracking-tight text-black uppercase font-mono">Delete Resume?</h3>
-              <p className="text-xs text-neutral-800 leading-relaxed font-bold font-sans">
+              <h3 className="text-lg font-semibold tracking-tight text-black">Delete Resume?</h3>
+              <p className="text-sm text-neutral-500 leading-relaxed">
                 {resumeToDeleteId && savedUserResumes.find(r => r.id === resumeToDeleteId)?.name
                   ? `Remove "${savedUserResumes.find(r => r.id === resumeToDeleteId)?.name}" from your library?`
                   : "Are you sure you want to delete this resume?"}
@@ -5454,7 +5533,7 @@ WORK EXPERIENCE
                     handleDeleteResumeById(resumeToDeleteId);
                   }
                 }}
-                className="px-5 py-3 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-medium text-sm rounded-lg transition cursor-pointer border border-transparent"
               >
                 Yes, Delete
               </button>
@@ -5464,7 +5543,7 @@ WORK EXPERIENCE
                   setShowDeleteConfirmModal(false);
                   setResumeToDeleteId(null);
                 }}
-                className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                className="px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg transition cursor-pointer border border-neutral-200"
               >
                 Cancel
               </button>
@@ -5487,7 +5566,7 @@ WORK EXPERIENCE
         >
           <div 
             id="choice-resume-modal" 
-            className="bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] max-w-xl w-full p-6 sm:p-8 animate-scaleUp text-left space-y-6 relative flex flex-col max-h-[90vh]"
+            className="bg-white border border-neutral-200 rounded-2xl max-w-xl w-full p-6 sm:p-8 animate-scaleUp text-left space-y-6 relative flex flex-col max-h-[90vh]"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close button top right */}
@@ -5499,7 +5578,7 @@ WORK EXPERIENCE
                 setUploadError(null);
                 setAnalysisResult(null);
               }}
-              className="absolute top-4 right-4 p-1.5 rounded-lg border-2 border-transparent hover:border-black text-neutral-550 hover:text-black transition cursor-pointer"
+              className="absolute top-4 right-4 p-1.5 rounded-lg text-neutral-500 hover:text-black hover:bg-neutral-100 transition-colors cursor-pointer"
               title="Close"
             >
               <X className="w-5 h-5" />
@@ -5507,7 +5586,7 @@ WORK EXPERIENCE
 
             {/* Header */}
             <div className="space-y-1 text-left">
-              <h3 className="text-xl font-black font-sans tracking-tight text-neutral-900 leading-tight">
+              <h3 className="text-lg font-semibold tracking-tight text-black leading-tight">
                 Setup your resume
               </h3>
               <p className="text-xs text-neutral-550 font-sans font-medium">
@@ -5522,19 +5601,19 @@ WORK EXPERIENCE
                 <button
                   type="button"
                   onClick={() => setChoiceModalPathway("upload")}
-                  className={`p-4 bg-white border-2 border-black rounded-xl text-left transition-all duration-150 cursor-pointer flex items-center justify-between shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] ${
+                  className={`p-4 bg-white border border-neutral-200 rounded-xl text-left transition-all duration-150 cursor-pointer flex items-center justify-between ${
                     choiceModalPathway === "upload" ? "ring-2 ring-blue-500 bg-blue-50/5" : ""
                   }`}
                 >
                   <div className="flex items-center gap-3">
-                    <div className={`w-5 h-5 rounded-full border-2 border-black flex items-center justify-center bg-white`}>
+                    <div className={`w-5 h-5 rounded-full border border-neutral-200 flex items-center justify-center bg-white`}>
                       {choiceModalPathway === "upload" && (
                         <div className="w-2.5 h-2.5 rounded-full bg-[#2563eb]" />
                       )}
                     </div>
                     <div>
-                      <p className="text-xs font-black text-neutral-800 font-sans">Upload Resume</p>
-                      <p className="text-[10px] text-neutral-500 font-medium font-sans">PDF or DOCX file</p>
+                      <p className="text-xs font-semibold text-neutral-800 font-sans">Upload Resume</p>
+                      <p className="text-xs text-neutral-500 font-medium font-sans">PDF or DOCX file</p>
                     </div>
                   </div>
                 </button>
@@ -5543,20 +5622,20 @@ WORK EXPERIENCE
                 <button
                   type="button"
                   disabled
-                  className="p-4 bg-neutral-50 border-2 border-dashed border-neutral-300 rounded-xl text-left flex items-center justify-between opacity-70 cursor-not-allowed"
+                  className="p-4 bg-neutral-50 border border-dashed border-neutral-300 rounded-xl text-left flex items-center justify-between opacity-70 cursor-not-allowed"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="w-5 h-5 rounded-full border-2 border-neutral-300 flex items-center justify-center bg-neutral-100">
+                    <div className="w-5 h-5 rounded-full border border-neutral-300 flex items-center justify-center bg-neutral-100">
                       {/* Empty circle since it cannot be selected */}
                     </div>
                     <div>
                       <div className="flex items-center gap-2">
-                        <p className="text-xs font-black text-neutral-400 font-sans">Create Resume</p>
-                        <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[8px] font-black uppercase tracking-wider font-mono">
+                        <p className="text-xs font-semibold text-neutral-400 font-sans">Create Resume</p>
+                        <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-[11px] font-semibold">
                           Coming Soon
                         </span>
                       </div>
-                      <p className="text-[10px] text-neutral-450 font-medium font-sans">Manual form builder will be available in a future release</p>
+                      <p className="text-xs text-neutral-450 font-medium font-sans">Manual form builder will be available in a future release</p>
                     </div>
                   </div>
                 </button>
@@ -5570,13 +5649,13 @@ WORK EXPERIENCE
                 <div className="space-y-4">
                   {/* Loader */}
                   {isAnalyzing && (
-                    <div className="border-2 border-black rounded-2xl p-8 flex flex-col items-center justify-center space-y-4 bg-blue-50/10 min-h-[220px]">
+                    <div className="border border-neutral-200 rounded-xl p-8 flex flex-col items-center justify-center space-y-4 min-h-[200px]">
                       <div className="relative w-14 h-14 flex items-center justify-center">
                         <Loader2 className="w-10 h-10 text-blue-600 animate-spin absolute" />
-                        <span className="w-4 h-4 rounded-full bg-blue-500 animate-pulse"></span>
+                        <span className="w-4 h-4 rounded-full bg-blue-500"></span>
                       </div>
                       <div className="space-y-1.5 text-center max-w-sm">
-                        <p className="text-sm font-black text-neutral-800 font-mono uppercase tracking-wide">Scanning structure...</p>
+                        <p className="text-sm font-semibold text-neutral-800">Scanning structure...</p>
                         <p className="text-[11px] text-neutral-550 font-sans leading-relaxed font-semibold">
                           We are validating key profile details and scanning contact coordinates.
                         </p>
@@ -5596,9 +5675,9 @@ WORK EXPERIENCE
                       />
                       <label
                         htmlFor="choice-file-input"
-                        className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all duration-300 cursor-pointer flex flex-col items-center justify-center space-y-4 relative min-h-[180px] ${
+                        className={`border border-dashed rounded-xl p-8 text-center transition-colors duration-150 cursor-pointer flex flex-col items-center justify-center space-y-4 relative min-h-[180px] ${
                           dragActive 
-                            ? "border-blue-500 bg-blue-50/20 scale-[101%]" 
+                            ? "border-blue-500 bg-blue-50/40" 
                             : tempFile 
                               ? "border-emerald-500 bg-emerald-50/10" 
                               : "border-neutral-300 hover:border-neutral-500 bg-neutral-550/5 font-sans"
@@ -5609,14 +5688,14 @@ WORK EXPERIENCE
                         onDrop={handleFileDrop}
                       >
                         <div className="flex flex-col items-center space-y-3">
-                          <div className="w-12 h-12 rounded-full bg-blue-50 border-2 border-blue-500 flex items-center justify-center text-blue-500">
+                          <div className="w-10 h-10 rounded-full bg-neutral-100 flex items-center justify-center text-neutral-600">
                             <Upload className="w-5 h-5" />
                           </div>
                           <div className="space-y-1">
                             <p className="text-sm font-bold text-neutral-800 tracking-tight font-sans">
                               Drag and drop file here, or browse files
                             </p>
-                            <p className="text-[10px] text-neutral-455 font-mono uppercase tracking-wider font-bold">
+                            <p className="text-xs text-neutral-455 font-bold">
                               Supported formats: PDF, DOCX
                             </p>
                           </div>
@@ -5627,13 +5706,13 @@ WORK EXPERIENCE
 
                   {/* Invalid resume error */}
                   {showInvalidResumeCard && (
-                    <div className="border-2 border-rose-500 bg-rose-50/20 rounded-2xl p-5 space-y-3.5">
+                    <div className="bg-rose-50 rounded-xl p-4 space-y-3">
                       <div className="flex items-start gap-3">
                         <XCircle className="w-5 h-5 text-rose-500 mt-0.5 flex-shrink-0" />
                         <div>
-                          <p className="text-sm font-black text-rose-950 uppercase font-mono tracking-wide">Not a Valid Resume</p>
-                          <p className="text-[11px] text-neutral-700 font-semibold mt-1 font-sans leading-relaxed">
-                            This file does not appear to be a valid resume. Please upload a resume.
+                          <p className="text-sm font-medium text-rose-900">This doesn't look like a resume</p>
+                          <p className="text-sm text-neutral-600 mt-1 leading-relaxed">
+                            We couldn't find resume sections like experience, education or skills. Try another file.
                           </p>
                         </div>
                       </div>
@@ -5645,16 +5724,16 @@ WORK EXPERIENCE
                             setUploadError(null);
                             setAnalysisResult(null);
                           }}
-                          className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold uppercase tracking-wider rounded-lg border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition cursor-pointer"
+                          className="px-3 py-1.5 bg-white hover:bg-neutral-50 text-black text-sm font-medium rounded-lg border border-neutral-200 transition-colors cursor-pointer"
                         >
-                          Try Another File
+                          Try another file
                         </button>
                       </div>
                     </div>
                   )}
 
                   {uploadError && !isAnalyzing && !showInvalidResumeCard && (
-                    <div className="flex items-center gap-2 p-3.5 rounded-xl border-2 border-rose-500 bg-rose-50 text-rose-950 text-xs font-bold animate-fadeIn font-sans">
+                    <div className="flex items-center gap-2 p-3 rounded-lg bg-rose-50 text-rose-900 text-sm animate-fadeIn">
                       <AlertTriangle className="w-4 h-4 text-rose-500 flex-shrink-0" />
                       <span>{formatFriendlyError(uploadError)}</span>
                     </div>
@@ -5664,11 +5743,11 @@ WORK EXPERIENCE
 
               {/* PATHWAY 2: CREATE RESUME */}
               {choiceModalPathway === "create" && (
-                <div className="border-2 border-black bg-neutral-50/40 rounded-2xl p-5 space-y-3.5 text-left animate-fadeIn">
+                <div className="border border-neutral-200 bg-neutral-50/40 rounded-2xl p-5 space-y-3.5 text-left animate-fadeIn">
                   <div className="flex items-start gap-3">
                     <FileText className="w-6 h-6 text-blue-600 flex-shrink-0 mt-0.5" />
                     <div>
-                      <p className="text-sm font-black text-neutral-900 uppercase font-mono tracking-wide">Manual Form Builder</p>
+                      <p className="text-sm font-semibold text-neutral-900">Manual Form Builder</p>
                       <p className="text-xs text-neutral-650 font-medium font-sans mt-1 leading-relaxed">
                         Start with a fresh template and fill out your professional timeline, skills, and contact credentials inside our guided builder stage.
                       </p>
@@ -5690,7 +5769,7 @@ WORK EXPERIENCE
                   setUploadError(null);
                   setAnalysisResult(null);
                 }}
-                className="w-full sm:w-auto px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition duration-150 cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] disabled:opacity-50"
+                className="w-full sm:w-auto px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg transition duration-150 cursor-pointer border border-neutral-200 disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -5705,7 +5784,7 @@ WORK EXPERIENCE
                     setIsChoiceModalOpen(false);
                     showNotification("Manual builder initialized. Fill fields to build profile.", "info");
                   }}
-                  className="w-full sm:w-auto px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition duration-150 border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] cursor-pointer"
+                  className="w-full sm:w-auto px-4 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-sm rounded-lg transition duration-150 border border-transparent cursor-pointer"
                 >
                   Start Fresh Builder 🚀
                 </button>
@@ -5728,7 +5807,7 @@ WORK EXPERIENCE
         >
           <div 
             id="tailor-wizard-modal" 
-            className={`bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 sm:p-8 w-full text-left relative animate-scaleIn flex flex-col max-h-[95vh] ${tailorWizardStep === 3 ? "max-w-4xl" : "max-w-2xl"}`}
+            className={`bg-white border border-neutral-200 rounded-2xl p-6 sm:p-8 w-full text-left relative animate-scaleIn flex flex-col max-h-[95vh] ${tailorWizardStep === 3 ? "max-w-4xl" : "max-w-2xl"}`}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close button */}
@@ -5736,7 +5815,7 @@ WORK EXPERIENCE
               <button
                 id="btn-close-tailor-wizard"
                 onClick={() => setIsTailorWizardOpen(false)}
-                className="absolute top-4 right-4 p-1.5 rounded-lg border-2 border-transparent hover:border-black text-neutral-550 hover:text-black transition cursor-pointer"
+                className="absolute top-4 right-4 p-1.5 rounded-lg text-neutral-500 hover:text-black hover:bg-neutral-100 transition-colors cursor-pointer"
                 title="Close"
               >
                 <X className="w-5 h-5" />
@@ -5744,17 +5823,27 @@ WORK EXPERIENCE
             )}
 
             {/* Header */}
-            <div className="mb-4 text-left border-b-2 border-black pb-3">
-              <h3 className="text-lg font-black tracking-tight text-black uppercase font-mono">Tailor Resume for Job</h3>
-              <p className="text-xs text-neutral-555 font-medium font-sans">
-                {tailorAnalysisError ? "Error Occurred during processing" : (
+            <div className="mb-5 text-left">
+              <h3 className="text-lg font-semibold tracking-tight text-black">Tailor resume for a job</h3>
+              <p className="text-sm text-neutral-500 mt-0.5">
+                {tailorAnalysisError ? "Something went wrong" : (
                   <>
-                    {tailorWizardStep === 1 && "Step 1 of 3: Target details"}
-                    {tailorWizardStep === 2 && "Step 2 of 3: Job Description"}
-                    {tailorWizardStep === 3 && "Step 3 of 3: Results & Download"}
+                    {tailorWizardStep === 1 && "Step 1 of 3 · Company & resume"}
+                    {tailorWizardStep === 2 && "Step 2 of 3 · Job description"}
+                    {tailorWizardStep === 3 && "Step 3 of 3 · Review & download"}
                   </>
                 )}
               </p>
+              {!tailorAnalysisError && (
+                <div className="flex gap-1.5 mt-4" aria-hidden="true">
+                  {[1, 2, 3].map((s) => (
+                    <div
+                      key={s}
+                      className={`h-1 flex-1 rounded-full transition-colors duration-300 ${s <= tailorWizardStep ? "bg-black" : "bg-neutral-200"}`}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Modal Body */}
@@ -5764,17 +5853,17 @@ WORK EXPERIENCE
               {tailorIsAnalyzing && (
                 <div className="flex flex-col items-center justify-center py-12 space-y-4 min-h-[300px]">
                   <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
-                  <p className="text-sm font-black text-neutral-800 uppercase font-mono tracking-wide">
+                  <p className="text-sm font-semibold text-neutral-800">
                     {tailorProcessingStage}...
                   </p>
                   <div className="w-full max-w-md space-y-2">
-                    <div className="h-4 bg-neutral-200 border-2 border-black rounded-full overflow-hidden shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                    <div className="h-4 bg-neutral-200 border border-neutral-200 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-[#2563eb] transition-all duration-300"
                         style={{ width: `${tailorProgress}%` }}
                       />
                     </div>
-                    <div className="flex justify-between text-[10px] font-black font-mono uppercase tracking-wider text-neutral-600">
+                    <div className="flex justify-between text-xs font-semibold text-neutral-600">
                       <span>{tailorProcessingStage}</span>
                       <span>{tailorProgress}%</span>
                     </div>
@@ -5785,9 +5874,9 @@ WORK EXPERIENCE
                       const isCurrent = tailorProcessingStage === stage.label;
                       const status = isCurrent ? "Processing" : isDone ? "✓ Complete" : "Waiting";
                       return (
-                        <div key={stage.label} className={`text-[9px] font-black uppercase tracking-wide rounded-lg border px-2 py-1 text-center ${isCurrent ? "bg-amber-50 border-amber-300 text-amber-800" : isDone ? "bg-blue-50 border-blue-300 text-blue-800" : "bg-white border-neutral-200 text-neutral-400"}`}>
+                        <div key={stage.label} className={`text-[11px] font-semibold rounded-lg border px-2 py-1 text-center ${isCurrent ? "bg-amber-50 border-amber-300 text-amber-800" : isDone ? "bg-blue-50 border-blue-300 text-blue-800" : "bg-white border-neutral-200 text-neutral-400"}`}>
                           <div>{stage.label}</div>
-                          <div className="text-[8px] mt-0.5">{status}</div>
+                          <div className="text-[11px] mt-0.5">{status}</div>
                         </div>
                       );
                     })}
@@ -5801,11 +5890,11 @@ WORK EXPERIENCE
               {/* Error Screen */}
               {!tailorIsAnalyzing && tailorAnalysisError && (
                 <div className="flex flex-col items-center justify-center py-12 space-y-6 min-h-[300px] text-center animate-fadeIn">
-                  <div className="p-4 bg-rose-100 border-2 border-black rounded-full shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] animate-bounce">
-                    <XCircle className="w-12 h-12 text-rose-600 animate-pulse" strokeWidth={2.5} />
+                  <div className="p-4 bg-rose-100 border border-neutral-200 rounded-full">
+                    <XCircle className="w-12 h-12 text-rose-600" strokeWidth={2.5} />
                   </div>
                   <div className="space-y-2 max-w-md">
-                    <h4 className="text-base font-black text-black uppercase font-mono tracking-tight">
+                    <h4 className="text-base font-semibold text-black tracking-tight">
                       Analysis Failed
                     </h4>
                     <p className="text-xs text-neutral-600 font-bold leading-relaxed">
@@ -5819,7 +5908,7 @@ WORK EXPERIENCE
                         setTailorAnalysisError(null);
                         handleAnalyzeAndGenerate();
                       }}
-                      className="flex-1 px-4 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                      className="flex-1 px-4 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-semibold text-[11px] rounded-xl border border-transparent transition cursor-pointer"
                     >
                       Retry Request
                     </button>
@@ -5828,7 +5917,7 @@ WORK EXPERIENCE
                       onClick={() => {
                         setTailorAnalysisError(null);
                       }}
-                      className="flex-1 px-4 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                      className="flex-1 px-4 py-3 bg-white hover:bg-neutral-50 text-black font-semibold text-[11px] rounded-xl border border-neutral-200 transition cursor-pointer"
                     >
                       Back to Editing
                     </button>
@@ -5838,27 +5927,41 @@ WORK EXPERIENCE
 
               {/* STEP 1: COMPANY NAME & CHOOSE RESUME */}
               {!tailorIsAnalyzing && !tailorAnalysisError && tailorWizardStep === 1 && (
-                <div className="space-y-4 text-left py-2 max-w-md mx-auto w-full">
+                <div className="space-y-4 text-left py-1 w-full">
                   <div className="space-y-4">
                     <div className="space-y-1">
-                      <label className="text-xs font-black text-neutral-800 uppercase tracking-wider font-mono">Company Name</label>
-                      <input 
+                      <label className="block text-sm font-medium text-neutral-800 mb-1.5">Company name</label>
+                      <input
                         type="text"
                         placeholder="e.g. Google, Vercel"
                         value={tailorCompany}
-                        onChange={(e) => setTailorCompany(e.target.value)}
-                        className="w-full bg-white border-2 border-black rounded-xl p-3 text-xs font-semibold focus:outline-none focus:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                        autoFocus
+                        onChange={(e) => { setTailorCompany(e.target.value); setTailorStepError(null); }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            if (!tailorCompany.trim()) { setTailorStepError("Please enter the company name."); return; }
+                            setTailorStepError(null);
+                            setTailorWizardStep(2);
+                          }
+                        }}
+                        aria-invalid={!!tailorStepError}
+                        className={`w-full bg-white border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-100 ${tailorStepError ? "border-rose-600" : "border-neutral-300"}`}
                       />
+                      {tailorStepError ? (
+                        <p className="text-xs font-bold text-rose-600 pt-1" role="alert">{tailorStepError}</p>
+                      ) : (
+                        <p className="text-xs text-neutral-500 font-medium pt-1">Used to name your tailored resume.</p>
+                      )}
                     </div>
                     
                     {/* Choose Resume field */}
                     {existingResumes.length >= 2 && (
                       <div className="space-y-1">
-                        <label className="text-xs font-black text-neutral-800 uppercase tracking-wider font-mono">Choose Resume</label>
+                        <label className="block text-sm font-medium text-neutral-800 mb-1.5">Resume</label>
                         <select
                           value={tailorSelectedResumeKey}
                           onChange={(e) => setTailorSelectedResumeKey(e.target.value)}
-                          className="w-full bg-white border-2 border-black rounded-xl p-3 text-xs font-semibold focus:outline-none focus:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] cursor-pointer"
+                          className="w-full bg-white border border-neutral-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-100 cursor-pointer"
                         >
                           {existingResumes.map((r) => (
                             <option key={r.key} value={r.key}>
@@ -5876,13 +5979,33 @@ WORK EXPERIENCE
               {!tailorIsAnalyzing && !tailorAnalysisError && tailorWizardStep === 2 && (
                 <div className="space-y-4 text-left animate-fadeIn">
                   <div className="space-y-1">
-                    <label className="text-xs font-black text-neutral-800 uppercase tracking-wider font-mono">Job Description Text</label>
+                    <label className="block text-sm font-medium text-neutral-800 mb-1.5">Job description</label>
                     <textarea
                       placeholder="Paste the full job description text here..."
                       value={tailorJdText}
-                      onChange={(e) => setTailorJdText(e.target.value)}
-                      className="w-full bg-white border-2 border-black rounded-xl p-3 text-xs font-semibold focus:outline-none h-56 focus:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                      autoFocus
+                      onChange={(e) => { setTailorJdText(e.target.value); setTailorStepError(null); }}
+                      aria-invalid={!!tailorStepError}
+                      className={`w-full bg-white border rounded-lg px-3 py-2.5 text-sm leading-relaxed focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-100 h-56 ${tailorStepError ? "border-rose-600" : "border-neutral-300"}`}
                     />
+                    {(() => {
+                      const wordCount = tailorJdText.trim() ? tailorJdText.trim().split(/\s+/).length : 0;
+                      const tooShort = wordCount > 0 && wordCount < 50;
+                      return (
+                        <div className="flex items-start justify-between gap-3 pt-1">
+                          {tailorStepError ? (
+                            <p className="text-xs font-bold text-rose-600" role="alert">{tailorStepError}</p>
+                          ) : (
+                            <p className="text-xs text-neutral-500 font-medium">
+                              Paste the whole posting, including requirements and responsibilities.
+                            </p>
+                          )}
+                          <span className={`text-xs font-bold whitespace-nowrap ${tooShort ? "text-rose-600" : "text-neutral-500"}`}>
+                            {wordCount} {wordCount === 1 ? "word" : "words"}{wordCount < 50 ? " · min 50" : ""}
+                          </span>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               )}
@@ -5900,61 +6023,99 @@ WORK EXPERIENCE
                     tailorAnalysisResult?.simplifiedJdObject || { companyPitch: "", requiredSkills: [], keyResponsibilities: [], candidateExpectations: [], keywordsToTarget: [] }
                   );
 
+                  // How many visible edits the tailoring step made (inline additions, new bullets, skills, sections)
+                  const changeCount =
+                    (Object.values(tailoredResult?.inlineAdditions || {}) as unknown[][]).reduce((n: number, adds) => n + (adds?.length || 0), 0) +
+                    (Object.values(tailoredResult?.newBullets || {}) as unknown[][]).reduce((n: number, bs) => n + (bs?.length || 0), 0) +
+                    (tailoredResult?.newSkills?.length || 0) +
+                    (tailoredResult?.newSections?.length || 0);
+                  const hasChanges = changeCount > 0;
+                  const matchedKw = tailoredEval.matchedKeywords || [];
+                  const missingKw = tailoredEval.missingKeywords || [];
+                  const totalKw = matchedKw.length + missingKw.length;
+
                   return (
                     <div className="space-y-4 text-left py-2 animate-fadeIn font-sans">
-                      {/* Info Banner */}
-                      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex items-start gap-3 justify-between">
-                        <div className="flex gap-3">
-                          <div className="w-4 h-4 mt-0.5 shrink-0 text-blue-500">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-                          </div>
-                          <div className="text-xs text-blue-800 font-semibold leading-relaxed">
-                            Your tailored resume has been generated. Use the controls below to toggle visual AI changes or download your file.
-                          </div>
-                        </div>
-                        
-                        {/* Highlights Toggle */}
-                        <div className="flex items-center gap-2 bg-white border border-blue-300 px-3 py-1 rounded-lg shrink-0">
-                          <input
-                            type="checkbox"
-                            id="toggle-highlights-cb"
-                            checked={showHighlights}
-                            onChange={(e) => setShowHighlights(e.target.checked)}
-                            className="w-3.5 h-3.5 cursor-pointer accent-blue-600"
-                          />
-                          <label htmlFor="toggle-highlights-cb" className="text-[10px] font-black uppercase text-blue-900 cursor-pointer select-none">
-                            View AI Changes
-                          </label>
+                      {/* Summary: what happened + score */}
+                      <div className="flex items-start justify-between gap-6">
+                        <p className="text-sm text-neutral-600 leading-relaxed max-w-xl">
+                          {hasChanges
+                            ? `Your tailored resume is ready with ${changeCount} ${changeCount === 1 ? "change" : "changes"}. Highlighted text shows what changed. Your original resume is not modified.`
+                            : "Your resume is ready. No wording changes were needed, so everything is exactly as you wrote it. The keyword check below shows what this job asks for."}
+                        </p>
+                        <div className="text-right shrink-0">
+                          <p className="text-xs text-neutral-500">ATS score</p>
+                          <p className="text-2xl font-semibold text-emerald-600 leading-tight">{tailoredEval.score}%</p>
                         </div>
                       </div>
 
-                      {/* Header controls & Score */}
-                      <div className="flex items-center justify-between border-b border-neutral-100 pb-2">
-                        {/* Highlight Legend */}
-                        <div className="flex flex-wrap items-center gap-3 text-[10px] font-bold uppercase tracking-wide">
+                      {/* Keyword match: what the job asks for vs. what the resume shows */}
+                      {totalKw > 0 && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 py-4 border-y border-neutral-200">
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium text-black">
+                              In your resume <span className="text-neutral-400 font-normal">{matchedKw.length} of {totalKw}</span>
+                            </p>
+                            {matchedKw.length > 0 ? (
+                              <div className="flex flex-wrap gap-1.5">
+                                {matchedKw.map((kw) => (
+                                  <span key={kw} className="bg-emerald-50 text-emerald-700 text-xs font-medium px-2 py-0.5 rounded-md">
+                                    {kw}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-sm text-neutral-500">None of this job's key skills appear in your resume yet.</p>
+                            )}
+                          </div>
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium text-black">
+                              Asked for, not found <span className="text-neutral-400 font-normal">{missingKw.length}</span>
+                            </p>
+                            {missingKw.length > 0 ? (
+                              <>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {missingKw.map((kw) => (
+                                    <span key={kw} className="bg-neutral-100 text-neutral-600 text-xs font-medium px-2 py-0.5 rounded-md">
+                                      {kw}
+                                    </span>
+                                  ))}
+                                </div>
+                                <p className="text-xs text-neutral-500 leading-snug">
+                                  Add these only if you have real experience with them.
+                                </p>
+                              </>
+                            ) : (
+                              <p className="text-sm text-neutral-500">Your resume covers every key skill this job lists.</p>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Highlight controls, only when something actually changed */}
+                      {hasChanges && (
+                        <div className="flex items-center justify-between gap-3 flex-wrap">
+                          <label htmlFor="toggle-highlights-cb" className="flex items-center gap-2 text-sm text-neutral-700 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              id="toggle-highlights-cb"
+                              checked={showHighlights}
+                              onChange={(e) => setShowHighlights(e.target.checked)}
+                              className="w-4 h-4 cursor-pointer accent-blue-600"
+                            />
+                            Highlight changes
+                          </label>
                           {showHighlights && (
-                            <>
-                              <span className="text-neutral-500 font-mono">Legend:</span>
-                              <span className="flex items-center gap-1.5 bg-blue-100 border border-blue-200 text-blue-900 px-2 py-0.5 rounded-lg">
-                                <span className="w-2 h-2 rounded-sm bg-[#BAE6FD] border border-blue-300 inline-block"></span> Added
-                              </span>
-                              <span className="flex items-center gap-1.5 bg-yellow-100 border border-yellow-200 text-yellow-900 px-2 py-0.5 rounded-lg">
-                                <span className="w-2 h-2 rounded-sm bg-[#FEF08A] border border-yellow-300 inline-block"></span> Improved
-                              </span>
-                            </>
+                            <div className="flex items-center gap-3 text-xs text-neutral-600">
+                              <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-[#BAE6FD] inline-block"></span> Added</span>
+                              <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-[#FEF08A] inline-block"></span> Improved</span>
+                            </div>
                           )}
                         </div>
-                        <div className="bg-emerald-50 border-2 border-emerald-500 rounded-xl px-3 py-1 flex items-center gap-2 shadow-[2px_2px_0px_0px_rgba(16,185,129,1)]">
-                          <span className="text-[10px] font-black uppercase text-emerald-800 tracking-wider">ATS Score</span>
-                          <span className="text-sm font-black text-emerald-600">{tailoredEval.score}%</span>
-                        </div>
-                      </div>
+                      )}
 
                       {/* Single Panel Tailored Resume */}
-                      <div className="border-2 border-neutral-300 rounded-2xl overflow-hidden bg-white shadow-md max-w-2xl mx-auto w-full">
-                        <div className="bg-neutral-800 text-white px-4 py-2 text-xs font-black uppercase tracking-wider font-mono flex items-center justify-between">
-                          <span>Tailored Resume (Optimized for {tailorCompany})</span>
-                        </div>
+                      <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white w-full">
                         <div className="overflow-y-auto bg-neutral-50" style={{height: '60vh'}}>
                           <ResumePreview
                             resume={originalResume}
@@ -5981,7 +6142,7 @@ WORK EXPERIENCE
                     <button
                       type="button"
                       onClick={() => setIsTailorWizardOpen(false)}
-                      className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                      className="px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg border border-neutral-200 transition cursor-pointer"
                     >
                       Cancel
                     </button>
@@ -5989,12 +6150,13 @@ WORK EXPERIENCE
                       type="button"
                       onClick={() => {
                         if (!tailorCompany.trim()) {
-                          showNotification("Please enter the company name.", "error");
+                          setTailorStepError("Please enter the company name.");
                           return;
                         }
+                        setTailorStepError(null);
                         setTailorWizardStep(2);
                       }}
-                      className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                      className="px-4 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-sm rounded-lg border border-transparent transition cursor-pointer"
                     >
                       Continue
                     </button>
@@ -6005,15 +6167,15 @@ WORK EXPERIENCE
                   <>
                     <button
                       type="button"
-                      onClick={() => setTailorWizardStep(1)}
-                      className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                      onClick={() => { setTailorStepError(null); setTailorWizardStep(1); }}
+                      className="px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg border border-neutral-200 transition cursor-pointer"
                     >
                       Back
                     </button>
                     <button
                       type="button"
                       onClick={handleAnalyzeAndGenerate}
-                      className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                      className="px-4 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-sm rounded-lg border border-transparent transition cursor-pointer"
                     >
                       Tailor Resume
                     </button>
@@ -6033,7 +6195,7 @@ WORK EXPERIENCE
                           handlePrintOrSavePDF(tailoredResultResume, undefined, tailorRole);
                         }
                       }}
-                      className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 flex items-center justify-center gap-1.5"
+                      className="px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg transition cursor-pointer border border-neutral-200 flex items-center justify-center gap-1.5"
                     >
                       <FileText className="w-4 h-4 text-blue-600" />
                       <span>Download PDF</span>
@@ -6051,7 +6213,7 @@ WORK EXPERIENCE
                           );
                         }
                       }}
-                      className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 flex items-center justify-center gap-1.5"
+                      className="px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg transition cursor-pointer border border-neutral-200 flex items-center justify-center gap-1.5"
                     >
                       <Download className="w-4 h-4 text-emerald-600" />
                       <span>Download DOCX</span>
@@ -6063,9 +6225,9 @@ WORK EXPERIENCE
                         setIsTailorWizardOpen(false);
                         setCurrentStep("dashboard");
                       }}
-                      className="px-5 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl border-2 border-black transition cursor-pointer shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0"
+                      className="px-4 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-sm rounded-lg border border-transparent transition cursor-pointer"
                     >
-                      Back to Dashboard
+                      Done
                     </button>
                   </>
                 )}
@@ -6085,24 +6247,24 @@ WORK EXPERIENCE
         >
           <div 
             id="saved-version-preview-modal"
-            className="bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 sm:p-8 w-full max-w-5xl text-left relative animate-scaleIn flex flex-col max-h-[90vh]"
+            className="bg-white border border-neutral-200 rounded-2xl p-6 sm:p-8 w-full max-w-5xl text-left relative animate-scaleIn flex flex-col max-h-[90vh]"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close button */}
             <button
               id="btn-close-version-preview"
               onClick={() => setShowSavedVersionPreviewModal(false)}
-              className="absolute top-4 right-4 p-1.5 rounded-lg border-2 border-transparent hover:border-black text-neutral-550 hover:text-black transition cursor-pointer"
+              className="absolute top-4 right-4 p-1.5 rounded-lg text-neutral-500 hover:text-black hover:bg-neutral-100 transition-colors cursor-pointer"
               title="Close Preview"
             >
               <X className="w-5 h-5" />
             </button>
 
             {/* Header */}
-            <div className="mb-4 text-left border-b-2 border-black pb-3">
-              <h3 className="text-lg font-black tracking-tight text-black uppercase font-mono">Tailored Resume Preview</h3>
-              <p className="text-xs text-neutral-550 font-medium font-sans">
-                For {selectedSavedVersion.companyName} — {selectedSavedVersion.jobTitle}
+            <div className="mb-5 text-left">
+              <h3 className="text-lg font-semibold tracking-tight text-black">{selectedSavedVersion.companyName}</h3>
+              <p className="text-sm text-neutral-500 mt-0.5">
+                Tailored resume{selectedSavedVersion.jobTitle && selectedSavedVersion.jobTitle !== "Tailored Position" ? ` · ${selectedSavedVersion.jobTitle}` : ""}{selectedSavedVersion.originalResumeData?.fullName ? ` · from ${selectedSavedVersion.originalResumeData.fullName}` : ""}
               </p>
             </div>
 
@@ -6111,108 +6273,103 @@ WORK EXPERIENCE
               {/* Left Column: Metrics & Gaps & Diff Log */}
               <div className="w-full md:w-5/12 flex flex-col gap-4 font-sans text-left max-h-[600px] overflow-y-auto pr-1">
                 
-                {/* Score Row */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-white border-2 border-black p-4 rounded-2xl text-center shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
-                    <span className="text-[10px] uppercase font-black tracking-wider text-neutral-500 font-mono">ATS SCORE</span>
-                    <div className="text-3xl font-black text-blue-600 mt-1">
-                      {selectedSavedVersion.atsScore ?? 75}/100
+                {(() => {
+                  const v = selectedSavedVersion;
+                  const gaps = (v.missingRequirements || []).filter(r => !r.includes("No missing"));
+                  const quals = (v.missingQualifications || []).filter(q => !q.includes("No critical"));
+                  // Skills that are in the tailored copy but not the original: what was actually added
+                  const originalSkills = new Set((v.originalResumeData?.skills || []).map(sk => sk.toLowerCase()));
+                  const addedSkills = v.originalResumeData ? (v.resumeData.skills || []).filter(sk => !originalSkills.has(sk.toLowerCase())) : [];
+                  return (
+                    <div className="flex flex-col gap-5">
+                      <div className="flex gap-8">
+                        <div>
+                          <p className="text-xs text-neutral-500">ATS score</p>
+                          <p className="text-2xl font-semibold text-blue-600 leading-tight">
+                            {typeof v.atsScore === "number" ? `${v.atsScore}/100` : "—"}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs text-neutral-500">Keyword match</p>
+                          <p className="text-2xl font-semibold text-emerald-600 leading-tight">
+                            {typeof v.matchPercentage === "number" ? `${v.matchPercentage}%` : "—"}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 pt-4 border-t border-neutral-200">
+                        <p className="text-sm font-medium text-black">Asked for, not found</p>
+                        {gaps.length > 0 ? (
+                          <div className="flex flex-wrap gap-1.5">
+                            {gaps.slice(0, 8).map((req) => (
+                              <span key={req} className="bg-neutral-100 text-neutral-600 text-xs font-medium px-2 py-0.5 rounded-md">{req}</span>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-neutral-500">Your resume covers every key skill this job lists.</p>
+                        )}
+                      </div>
+
+                      {quals.length > 0 && (
+                        <div className="space-y-2 pt-4 border-t border-neutral-200">
+                          <p className="text-sm font-medium text-black">Missing qualifications</p>
+                          <ul className="list-disc pl-4 text-sm text-neutral-600 space-y-1">
+                            {quals.slice(0, 5).map((qual) => <li key={qual}>{qual}</li>)}
+                          </ul>
+                        </div>
+                      )}
+
+                      <div className="space-y-2 pt-4 border-t border-neutral-200">
+                        <p className="text-sm font-medium text-black">Skills added</p>
+                        {addedSkills.length > 0 ? (
+                          <div className="flex flex-wrap gap-1.5">
+                            {addedSkills.map((sk) => (
+                              <span key={sk} className="bg-emerald-50 text-emerald-700 text-xs font-medium px-2 py-0.5 rounded-md">{sk}</span>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-neutral-500">No skills were added. The content is as you wrote it.</p>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                  <div className="bg-white border-2 border-black p-4 rounded-2xl text-center shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
-                    <span className="text-[10px] uppercase font-black tracking-wider text-neutral-500 font-mono">JD MATCH</span>
-                    <div className="text-3xl font-black text-emerald-600 mt-1">
-                      {selectedSavedVersion.matchPercentage ?? 70}%
-                    </div>
-                  </div>
-                </div>
-
-                {/* Gaps/Missing Skills */}
-                <div className="bg-rose-50/20 border-2 border-black p-4 rounded-2xl shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
-                  <div className="flex items-center gap-1.5 mb-2">
-                    <AlertTriangle className="w-4 h-4 text-rose-600" />
-                    <span className="text-[11px] font-black uppercase text-rose-800 font-mono tracking-wider">Remaining Gaps</span>
-                  </div>
-                  {selectedSavedVersion.missingRequirements && selectedSavedVersion.missingRequirements.filter(r => !r.includes("No missing")).length > 0 ? (
-                    <ul className="list-disc pl-4 text-xs font-bold text-neutral-700 space-y-1.5">
-                      {selectedSavedVersion.missingRequirements.filter(r => !r.includes("No missing")).slice(0, 5).map((req, idx) => (
-                        <li key={idx}>{req}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-xs text-neutral-555 font-bold">No remaining critical gaps!</p>
-                  )}
-                </div>
-
-                {/* Missing Qualifications */}
-                <div className="bg-indigo-50/20 border-2 border-black p-4 rounded-2xl shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">
-                  <div className="flex items-center gap-1.5 mb-2">
-                    <BookOpen className="w-4 h-4 text-indigo-600" />
-                    <span className="text-[11px] font-black uppercase text-indigo-800 font-mono tracking-wider">Missing Qualifications</span>
-                  </div>
-                  {selectedSavedVersion.missingQualifications && selectedSavedVersion.missingQualifications.filter(q => !q.includes("No critical")).length > 0 ? (
-                    <ul className="list-disc pl-4 text-xs font-bold text-neutral-700 space-y-1.5">
-                      {selectedSavedVersion.missingQualifications.filter(q => !q.includes("No critical")).slice(0, 5).map((qual, idx) => (
-                        <li key={idx}>{qual}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-xs text-neutral-555 font-bold">All qualifications satisfied!</p>
-                  )}
-                </div>
-
-                {/* Applied Improvements */}
-                <div className="bg-blue-50/20 border-2 border-black p-4 rounded-2xl shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] font-sans">
-                  <div className="flex items-center gap-1.5 mb-2">
-                    <Sparkles className="w-4 h-4 text-blue-600" />
-                    <span className="text-[11px] font-black uppercase text-blue-800 font-mono tracking-wider">Improvements Made</span>
-                  </div>
-                  {selectedSavedVersion.improvements && selectedSavedVersion.improvements.length > 0 ? (
-                    <ul className="list-disc pl-4 text-xs font-bold text-neutral-700 space-y-1.5">
-                      {selectedSavedVersion.improvements.map((imp, idx) => (
-                        <li key={idx}>{imp}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-xs text-neutral-550 font-bold">Aligned professional summary and keyword matching.</p>
-                  )}
-                </div>
+                  );
+                })()}
 
                 {/* Visual Resume Diff Log */}
-                <div className="border-2 border-black rounded-2xl p-4 bg-neutral-50 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b-2 border-black pb-2 gap-2">
-                    <span className="text-xs font-black uppercase tracking-wider text-black font-mono">Resume Diff Log</span>
-                    <div className="flex border border-black rounded-lg overflow-hidden text-[9px] font-bold">
+                <div className="pt-4 border-t border-neutral-200 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <span className="text-sm font-medium text-black">Change log</span>
+                    <div className="flex border border-neutral-200 rounded-lg overflow-hidden text-xs">
                       <button
                         type="button"
                         onClick={() => setDiffTab("added")}
-                        className={`px-2 py-0.5 border-r border-black transition ${diffTab === "added" ? "bg-emerald-500 text-white font-extrabold" : "bg-white text-black hover:bg-neutral-100"}`}
+                        className={`px-2.5 py-1 border-r border-neutral-200 transition ${diffTab === "added" ? "bg-neutral-100 text-black font-medium" : "bg-white text-neutral-500 hover:text-black"}`}
                       >
                         Added ({selectedSavedVersion.diffAdded?.length || 0})
                       </button>
                       <button
                         type="button"
                         onClick={() => setDiffTab("modified")}
-                        className={`px-2 py-0.5 border-r border-black transition ${diffTab === "modified" ? "bg-amber-500 text-white font-extrabold" : "bg-white text-black hover:bg-neutral-100"}`}
+                        className={`px-2.5 py-1 border-r border-neutral-200 transition ${diffTab === "modified" ? "bg-neutral-100 text-black font-medium" : "bg-white text-neutral-500 hover:text-black"}`}
                       >
                         Mod ({selectedSavedVersion.diffModified?.length || 0})
                       </button>
                       <button
                         type="button"
                         onClick={() => setDiffTab("unchanged")}
-                        className={`px-2 py-0.5 transition ${diffTab === "unchanged" ? "bg-neutral-500 text-white font-extrabold" : "bg-white text-black hover:bg-neutral-100"}`}
+                        className={`px-2.5 py-1 transition ${diffTab === "unchanged" ? "bg-neutral-100 text-black font-medium" : "bg-white text-neutral-500 hover:text-black"}`}
                       >
                         Unch ({selectedSavedVersion.diffUnchanged?.length || 0})
                       </button>
                     </div>
                   </div>
 
-                  <div className="max-h-32 overflow-y-auto pr-1 text-[11px] space-y-1.5 font-semibold font-mono">
+                  <div className="max-h-32 overflow-y-auto pr-1 text-[11px] space-y-1.5 font-semibold">
                     {diffTab === "added" && (
                       (selectedSavedVersion.diffAdded || []).length > 0 ? (
                         (selectedSavedVersion.diffAdded || []).map((item, i) => (
                           <div key={i} className="text-emerald-700 bg-emerald-50/50 border border-emerald-200 p-1.5 rounded-lg flex items-start gap-1 leading-relaxed animate-fadeIn">
-                            <span className="font-black text-xs text-emerald-600 flex-shrink-0">+</span>
+                            <span className="font-semibold text-xs text-emerald-600 flex-shrink-0">+</span>
                             <span>{item}</span>
                           </div>
                         ))
@@ -6225,7 +6382,7 @@ WORK EXPERIENCE
                       (selectedSavedVersion.diffModified || []).length > 0 ? (
                         (selectedSavedVersion.diffModified || []).map((item, i) => (
                           <div key={i} className="text-amber-700 bg-amber-50/50 border border-amber-200 p-1.5 rounded-lg flex items-start gap-1 leading-relaxed animate-fadeIn">
-                            <span className="font-black text-xs text-amber-600 flex-shrink-0">~</span>
+                            <span className="font-semibold text-xs text-amber-600 flex-shrink-0">~</span>
                             <span>{item}</span>
                           </div>
                         ))
@@ -6238,7 +6395,7 @@ WORK EXPERIENCE
                       (selectedSavedVersion.diffUnchanged || []).length > 0 ? (
                         (selectedSavedVersion.diffUnchanged || []).map((item, i) => (
                           <div key={i} className="text-neutral-600 bg-white border border-neutral-200 p-1.5 rounded-lg flex items-start gap-1 leading-relaxed animate-fadeIn">
-                            <span className="font-black text-neutral-400 flex-shrink-0">=</span>
+                            <span className="font-semibold text-neutral-400 flex-shrink-0">=</span>
                             <span>{item}</span>
                           </div>
                         ))
@@ -6249,23 +6406,18 @@ WORK EXPERIENCE
                   </div>
                 </div>
 
-                <div className="border-2 border-black rounded-2xl p-4 bg-white shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] space-y-2">
-                  <div className="flex items-center gap-1.5 border-b-2 border-black pb-2">
-                    <FileText className="w-4 h-4 text-neutral-800" />
-                    <span className="text-[11px] font-black uppercase text-black font-mono tracking-wider">Original Job Description</span>
+                <div className="pt-4 border-t border-neutral-200 space-y-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-sm font-medium text-black">Job description</span>
                   </div>
-                  <div className="max-h-44 overflow-y-auto whitespace-pre-wrap text-[11px] leading-relaxed font-semibold text-neutral-700 bg-neutral-50 border border-neutral-200 rounded-xl p-3">
+                  <div className="max-h-44 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-neutral-600 bg-neutral-50 rounded-lg p-3">
                     {selectedSavedVersion.originalJobDescription || "Original job description was not stored for this older tailored resume."}
                   </div>
                 </div>
               </div>
 
               {/* Right Column: Resume Preview */}
-              <div className="w-full md:w-7/12 flex flex-col border-2 border-black rounded-2xl overflow-hidden bg-neutral-100 max-h-[500px] md:max-h-none">
-                <div className="bg-neutral-800 text-white px-4 py-2 text-xs font-black uppercase tracking-wider font-mono border-b-2 border-black flex justify-between items-center">
-                  <span>Resume Preview</span>
-                  <span className="text-[10px] text-neutral-400">Pure print output preview</span>
-                </div>
+              <div className="w-full md:w-7/12 flex flex-col border border-neutral-200 rounded-xl overflow-hidden bg-neutral-50 max-h-[500px] md:max-h-none">
                 <div className="flex-1 overflow-y-auto p-4 bg-neutral-50 scrollbar-thin">
                   <ResumePreview resume={selectedSavedVersion.resumeData} templateStyle="two-column" originalResume={selectedSavedVersion.originalResumeData || undefined} />
                 </div>
@@ -6279,7 +6431,7 @@ WORK EXPERIENCE
                 onClick={() => {
                   handlePrintOrSavePDF(selectedSavedVersion.resumeData, selectedSavedVersion.originalResumeData, selectedSavedVersion.jobTitle);
                 }}
-                className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center gap-1.5"
+                className="px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg transition cursor-pointer border border-neutral-200 flex items-center justify-center gap-1.5"
               >
                 <FileText className="w-4 h-4 text-blue-600" />
                 <span>Download PDF</span>
@@ -6295,7 +6447,7 @@ WORK EXPERIENCE
                     selectedSavedVersion.jobTitle
                   );
                 }}
-                className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center gap-1.5"
+                className="px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg transition cursor-pointer border border-neutral-200 flex items-center justify-center gap-1.5"
               >
                 <Download className="w-4 h-4 text-emerald-600" />
                 <span>Download DOCX</span>
@@ -6306,7 +6458,7 @@ WORK EXPERIENCE
                 onClick={() => {
                   handleDownloadSpecificResume(selectedSavedVersion);
                 }}
-                className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center gap-1.5"
+                className="px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg transition cursor-pointer border border-neutral-200 flex items-center justify-center gap-1.5"
               >
                 <Download className="w-4 h-4 text-neutral-600" />
                 <span>Download TXT</span>
@@ -6319,7 +6471,7 @@ WORK EXPERIENCE
                   setVersionToDeleteId(selectedSavedVersion.id);
                   setShowDeleteSavedVersionConfirmModal(true);
                 }}
-                className="px-5 py-3 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] flex items-center justify-center gap-1.5"
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-medium text-sm rounded-lg transition cursor-pointer border border-transparent flex items-center justify-center gap-1.5"
               >
                 <Trash2 className="w-4 h-4" />
                 <span>Delete</span>
@@ -6337,15 +6489,15 @@ WORK EXPERIENCE
         >
           <div 
             id="delete-version-confirm-modal"
-            className="bg-white border-4 border-black rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] p-6 sm:p-8 w-full max-w-md text-center space-y-6 relative animate-scaleIn"
+            className="bg-white border border-neutral-200 rounded-2xl p-6 sm:p-8 w-full max-w-md text-center space-y-6 relative animate-scaleIn"
           >
-            <div className="mx-auto w-16 h-16 rounded-full border-2 border-black flex items-center justify-center bg-rose-100 text-black">
-              <Trash2 className="w-8 h-8 text-rose-600 animate-pulse" />
+            <div className="mx-auto w-12 h-12 rounded-full flex items-center justify-center bg-rose-50 text-rose-600">
+              <Trash2 className="w-5 h-5 text-rose-600" />
             </div>
             
             <div className="space-y-2">
-              <h3 className="text-lg font-black tracking-tight text-black uppercase font-mono">Are you sure?</h3>
-              <p className="text-xs text-neutral-800 leading-relaxed font-bold font-sans">
+              <h3 className="text-lg font-semibold tracking-tight text-black">Are you sure?</h3>
+              <p className="text-sm text-neutral-500 leading-relaxed">
                 You are about to delete this tailored resume version. This action is irreversible.
               </p>
             </div>
@@ -6374,7 +6526,7 @@ WORK EXPERIENCE
                   setShowDeleteSavedVersionConfirmModal(false);
                   setVersionToDeleteId(null);
                 }}
-                className="px-5 py-3 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-medium text-sm rounded-lg transition cursor-pointer border border-transparent"
               >
                 Yes, Delete
               </button>
@@ -6384,7 +6536,7 @@ WORK EXPERIENCE
                   setShowDeleteSavedVersionConfirmModal(false);
                   setVersionToDeleteId(null);
                 }}
-                className="px-5 py-3 bg-white hover:bg-neutral-50 text-black font-extrabold text-[11px] tracking-wide uppercase rounded-xl transition cursor-pointer border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-0 active:translate-y-0 active:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                className="px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg transition cursor-pointer border border-neutral-200"
               >
                 Cancel
               </button>

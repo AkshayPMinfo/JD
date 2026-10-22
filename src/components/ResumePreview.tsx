@@ -33,9 +33,9 @@ export default function ResumePreview({
   const contact = headerBlock?.contact || [];
 
   const email = contact.find(c => c.includes("@")) || "";
-  const phone = contact.find(c => /^[+\d\s()-]{7,20}$/.test(c.replace(/[^\d+]/g, ""))) || (contact.length > 0 ? contact[0] : "");
+  const phone = contact.find(c => /^[+\d\s()-]{7,20}$/.test(c.replace(/[^\d+]/g, ""))) || "";
   const linkedin = contact.find(c => c.toLowerCase().includes("linkedin.com")) || "";
-  const website = contact.find(c => !c.includes("@") && c !== phone && c !== linkedin) || "";
+  const website = contact.find(c => !c.includes("@") && c !== phone && c !== linkedin && /(https?:\/\/|www\.|\.[a-z]{2,}(\/|$))/i.test(c)) || "";
 
   // Prepare fallback diff lists if originalResume is provided directly
   const normOriginal = originalResume

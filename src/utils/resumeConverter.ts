@@ -26,8 +26,8 @@ export function resumeStructureToResume(res: ResumeStructure, rawText?: string):
       label: "Experience",
       items: res.workExperience.map(exp => ({
         kind: "job",
-        company: exp.company || "Company",
-        title: exp.role || "Role",
+        company: exp.company || "",
+        title: exp.role || "",
         dates: exp.duration || "",
         bullets: exp.description || []
       }))
@@ -149,7 +149,7 @@ export function mergeResumeWithAdditions(
   const email = contact.find((c: string) => c.includes("@")) || "";
   const phone = contact.find((c: string) => /^[+\d\s()-]{7,20}$/.test(c.replace(/[^\d+]/g, ""))) || "";
   const linkedin = contact.find((c: string) => c.toLowerCase().includes("linkedin.com")) || "";
-  const website = contact.find((c: string) => !c.includes("@") && c !== phone && c !== linkedin) || "";
+  const website = contact.find((c: string) => !c.includes("@") && c !== phone && c !== linkedin && /(https?:\/\/|www\.|\.[a-z]{2,}(\/|$))/i.test(c)) || "";
 
   // Summary block
   const summaryBlockIdx = normResume.blocks.findIndex(b => b.kind === "text" && (b.label?.toLowerCase().includes("summary") || b.label?.toLowerCase().includes("profile")));

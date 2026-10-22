@@ -81,9 +81,34 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
   const emailMatch = cleanedText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
   const email = emailMatch ? emailMatch[0] : '';
 
-  const phoneMatch = cleanedText.match(/\+?\(?[0-9]{1,4}\)?[-.\s]?[0-9]{3,4}[-.\s]?[0-9]{3,4}[-.\s]?[0-9]{3,4}/) ||
-                     cleanedText.match(/\b\d{3}[-.\s]??\d{3}[-.\s]??\d{4}\b/);
-  const phone = phoneMatch ? phoneMatch[0] : '';
+  // Phone: any run of 10–13 digits with common separators (+91 98765 43210, (555) 123-4567, 555.123.4567).
+  // Year ranges like "2016 - 2020" have too few digits to qualify.
+  let phone = '';
+  for (const m of cleanedText.matchAll(/\+?\(?\d[\d\s().-]{8,18}\d/g)) {
+    const candidate = m[0].trim();
+    const digits = candidate.replace(/\D/g, '');
+    if (digits.length >= 10 && digits.length <= 13 && !/(19|20)\d{2}\s*[-–]\s*(19|20)\d{2}/.test(candidate)) {
+      phone = candidate;
+      break;
+    }
+  }
+
+  const linkedinMatch = cleanedText.match(/(?:https?:\/\/)?(?:www\.)?linkedin\.com\/in\/[A-Za-z0-9_-]+\/?/i);
+  const linkedin = linkedinMatch ? linkedinMatch[0] : '';
+  const websiteMatch = cleanedText.match(/(?:https?:\/\/)?(?:www\.)?github\.com\/[A-Za-z0-9_-]+\/?/i) ||
+                       cleanedText.match(/https?:\/\/(?!(?:www\.)?linkedin\.com)[^\s|,]+/i);
+  const website = websiteMatch ? websiteMatch[0] : '';
+
+  // Location: a short "City, State/Country" piece in the header lines (before the first section)
+  let location = '';
+  const firstSectionIdx = mergedLines.findIndex(l => /^(professional summary|summary|objective|profile|experience|work experience|education|skills)$/i.test(l.trim()));
+  const headerLines = mergedLines.slice(0, firstSectionIdx === -1 ? 6 : Math.min(firstSectionIdx, 6));
+  for (const hl of headerLines) {
+    const piece = hl.split(/\s*[|•·]\s*/).find(p =>
+      p.length < 40 && !/[@\d/]/.test(p) && /^[A-Z][A-Za-z.\s]+,\s*[A-Z][A-Za-z.\s]+$/.test(p.trim()) && p.split(/\s+/).length <= 5
+    );
+    if (piece) { location = piece.trim(); break; }
+  }
 
   const sectionHeaders: Record<string, RegExp> = {
     experience: /^(experience|work history|employment|career|professional experience|work record|work experience|experience record)$/i,
@@ -136,7 +161,42 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
   let summary = '';
 
   const schoolKeywords = /\b(college|university|school|institute|academy|high school)\b/i;
-  const degreeKeywords = /\b(bachelor|master|phd|b\.a\.|m\.a\.|b\.s\.|m\.s\.|btech|mtech|bca|mca|degree|diploma|associates?|associate's|10th|12th|hsc|ssc|metric|matriculation|intermediate)\b/i;
+  const degreeKeywords = /\b(bachelor'?s?|master'?s?|ph\.?\s?d\.?|doctorate|b\.a\.|m\.a\.|b\.?s\.?c?|m\.?s\.?c?|b\.?\s?tech|m\.?\s?tech|b\.e\.?|m\.e\.?|b\.?com|m\.?com|mba|bba|bca|mca|degree|diploma|associates?|associate's|10th|12th|hsc|ssc|metric|matriculation|intermediate)(?![a-z])/i;
+
+  // Splits an education line into its text, a date/year range, and a GPA value.
+  // "National Institute of Technology Trichy | 2016 - 2020 | CGPA 8.6"
+  //   → { text: "National Institute of Technology Trichy", duration: "2016 - 2020", gpa: "8.6" }
+  const pullEduDateAndGpa = (input: string) => {
+    let text = input;
+    let gpa = '';
+    const labelled = text.match(/\b(?:c?gpa|cpi|cgpa)\s*[:\-]?\s*(\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?)/i);
+    if (labelled) {
+      gpa = labelled[1].replace(/\s+/g, '');
+      text = text.replace(labelled[0], ' ');
+    } else {
+      const bare = text.match(/(?:^|\s|\|)(\d\.\d{1,2})(?=\s|\||$)/);
+      if (bare) { gpa = bare[1]; text = text.replace(bare[1], ' '); }
+    }
+    let duration = '';
+    const range = text.match(dateRegex);
+    if (range) {
+      duration = range[0].trim();
+      text = text.replace(range[0], ' ');
+    } else {
+      const single = text.match(singleDate);
+      if (single && /\d{4}/.test(single[0])) {
+        duration = single[0].trim();
+        text = text.replace(single[0], ' ');
+      }
+    }
+    text = text
+      .replace(/\(\s*\)/g, ' ')
+      .replace(/(\s*[|,·]\s*){2,}/g, ' | ')
+      .replace(/^[\s|,·:\-–—]+|[\s|,·:\-–—]+$/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    return { text, duration, gpa };
+  };
 
   for (let i = 0; i < classified.length; i++) {
     const { raw: line, clean: cleanLine, section: sectionLabel, isBullet, hasDate } = classified[i];
@@ -161,12 +221,37 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
         // The date line may also contain the role on the same line, or the role may be separate
         const dateMatch = line.match(dateRegex)!;
         const duration = dateMatch[0];
-        const remainder = line.replace(duration, '').replace(/^[,\-\s]+|[,\-\s]+$/g, '').trim();
+        // Strip the date and any leftover separators, e.g. "Flipkart | " → "Flipkart"
+        const remainder = line.replace(duration, '').replace(/^[\s,|·•@\-–—]+|[\s,|·•@\-–—(]+$/g, '').trim();
+
+        // A plain header line just above the date line (skipped earlier), e.g. "Senior Software Engineer"
+        const prev = i > 0 ? classified[i - 1] : null;
+        const prevHeader = prev && !prev.section && !prev.isBullet && !prev.hasDate && prev.clean.length < 80 && !actionVerbs.test(prev.clean)
+          ? prev.clean : '';
 
         let role = '';
         let company = '';
 
-        if (remainder.length > 0) {
+        // Split "Software Engineer | Flipkart", "Software Engineer at Flipkart", "Flipkart · Bengaluru"
+        const remParts = remainder.split(/\s*[|·•]\s*|\s+at\s+|\s+@\s+/i).map(s => s.trim()).filter(Boolean);
+
+        if (remainder.length > 0 && prevHeader) {
+          // Layout: "Title" line, then "Company | Dates" (or the reverse order)
+          const remIsRole = jobKeywords.test(remParts[0]) && !jobKeywords.test(prevHeader);
+          if (remIsRole) {
+            role = remParts[0];
+            company = [prevHeader, ...remParts.slice(1)].join(', ');
+          } else {
+            role = prevHeader;
+            company = remParts[0];
+          }
+        } else if (remainder.length > 0 && remParts.length >= 2) {
+          // Layout: "Title | Company | Dates" on one line
+          const roleIdx = remParts.findIndex(p => jobKeywords.test(p));
+          const ri = roleIdx === -1 ? 0 : roleIdx;
+          role = remParts[ri];
+          company = remParts.filter((_, idx) => idx !== ri).join(', ');
+        } else if (remainder.length > 0) {
           // Role is on the same line as the date.
           // Look ahead: if next non-blank, non-bullet, non-date line looks like "Company – City", grab it.
           role = remainder; // treat the whole remainder as role for now
@@ -214,7 +299,7 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
 
         workExperience.push({
           id: `exp-${Date.now()}-${workExperience.length}`,
-          role: role || 'Role',
+          role: role,
           company: company || '',
           duration,
           description: []
@@ -250,78 +335,61 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
       // Skip bullet lines in education (often stray artifacts)
       if (isBullet) continue;
 
-      const gpaMatch = line.match(/gpa\s*:\s*[\d.]+/i) || line.match(/\b\d\.\d{1,2}\b/);
-      const gpa = gpaMatch ? gpaMatch[0] : '';
-      let cleanRemainder = line;
-      if (gpa) cleanRemainder = cleanRemainder.replace(gpa, '').trim();
-      cleanRemainder = cleanRemainder.replace(/^[,\-\s]+|[,\-\s]+$/g, '').trim();
+      // Pull dates and GPA out first so they never end up inside the degree/school text
+      let { text: cleanRemainder, duration, gpa } = pullEduDateAndGpa(line);
+
+      // A date-only line belongs to the previous education entry
+      if (!cleanRemainder && duration) {
+        const last = education[education.length - 1];
+        if (last && !last.duration) last.duration = duration;
+        continue;
+      }
 
       // Check if the line contains degree or school keywords — otherwise skip (could be stray text)
       const hasDegreeKw = degreeKeywords.test(cleanRemainder);
       const hasSchoolKw = schoolKeywords.test(cleanRemainder);
-      const hasYear = /\b(19|20)\d{2}\b/.test(cleanRemainder);
 
       // Lines with NONE of the above are likely hobbies/interests leaked in — skip them
-      if (!hasDegreeKw && !hasSchoolKw && !hasYear) continue;
+      if (!hasDegreeKw && !hasSchoolKw && !duration) continue;
 
-      // Look ahead for a date-only line
-      let duration = '';
-      if (i < classified.length - 1) {
-        const nextLine = classified[i + 1];
-        const nextDateOnly = nextLine.clean.match(/\b(19|20)\d{2}\b/g);
-        if (nextDateOnly && !schoolKeywords.test(nextLine.clean) && !degreeKeywords.test(nextLine.clean) && nextLine.clean.length < 30) {
-          duration = nextLine.clean;
-          i++;
-        }
-      }
-
-      const parts = cleanRemainder.split(/[-–—|,\t]/).map(s => s.trim()).filter(Boolean);
+      const parts = cleanRemainder.split(/\s*[|,\t]\s*|\s+[-–—]\s+/).map(s => s.trim()).filter(Boolean);
       let school = '';
       let degree = '';
 
       const schoolIdx = parts.findIndex(p => schoolKeywords.test(p));
       const degreeIdx = parts.findIndex(p => degreeKeywords.test(p));
 
-      if (schoolIdx !== -1 && degreeIdx !== -1) {
+      if (schoolIdx !== -1 && degreeIdx !== -1 && schoolIdx !== degreeIdx) {
         school = parts[schoolIdx];
         degree = parts[degreeIdx];
       } else if (schoolIdx !== -1) {
         school = parts[schoolIdx];
         degree = parts.filter((_, idx) => idx !== schoolIdx).join(', ');
       } else if (degreeIdx !== -1) {
-        // Special case: single part that STARTS with a year (e.g. "2015 Associates Degree")
-        // In that case extract year as duration and rest as degree
-        if (parts.length === 1 && /^\d{4}\s/.test(cleanRemainder)) {
-          const yearPart = cleanRemainder.match(/^\d{4}/)?.[0] || '';
-          degree = cleanRemainder.slice(yearPart.length).replace(/^[\s:]+/, '').trim();
-          if (!duration) duration = yearPart;
-        } else {
-          degree = parts[degreeIdx];
-          school = parts.filter((_, idx) => idx !== degreeIdx).join(', ');
-        }
-      } else if (hasYear) {
-        // Lines like "2015  Associates Degree : Business Administration"
-        const yearPart = cleanRemainder.match(/\b(19|20)\d{2}\b/)?.[0] || '';
-        degree = cleanRemainder.replace(yearPart, '').replace(/^[,\-\s:]+|[,\-\s:]+$/g, '').trim();
-        if (!duration) duration = yearPart;
+        degree = parts[degreeIdx];
+        school = parts.filter((_, idx) => idx !== degreeIdx).join(', ');
       } else {
-        school = parts[0] || '';
-        degree = parts.slice(1).join(', ') || '';
+        // Lines like "2015  Associates Program : Business Administration"
+        degree = cleanRemainder.replace(/^[,\-\s:]+|[,\-\s:]+$/g, '').trim();
       }
 
       if (!school && !degree) continue; // Nothing meaningful — skip
 
-      // If we have a degree but no school, look ahead for a school-only line
-      if (!school && degree) {
-        const nextIdx = i + 1;
-        if (nextIdx < classified.length && !classified[nextIdx].section) {
-          const nextClean = classified[nextIdx].clean;
-          if (schoolKeywords.test(nextClean) && !degreeKeywords.test(nextClean) && nextClean.length < 80) {
-            // Strip city suffix (e.g. "Roxbury Community College- Boston")
-            school = nextClean.replace(/[-–—]\s*[A-Z][a-zA-Z\s,\.]+$/, '').replace(/[-–—]/g, '').trim();
-            i++;
-          }
-      }
+      // Degree and school are often on separate lines (either order) — merge the next line in
+      const next = i + 1 < classified.length ? classified[i + 1] : null;
+      if (next && !next.section && !next.isBullet && next.clean.length < 120) {
+        const nextParsed = pullEduDateAndGpa(next.clean);
+        const nextFirst = nextParsed.text.split(/\s*[|,\t]\s*/)[0]?.trim() || '';
+        const takeSchool = !school && degree && schoolKeywords.test(nextParsed.text) && !degreeKeywords.test(nextParsed.text);
+        const takeDegree = !degree && school && degreeKeywords.test(nextParsed.text) && !schoolKeywords.test(nextParsed.text);
+        const takeDateOnly = !duration && !nextParsed.text && nextParsed.duration;
+        if (takeSchool || takeDegree || takeDateOnly) {
+          if (takeSchool) school = nextFirst.replace(/\s+[-–—]\s+[A-Z][a-zA-Z\s,.]+$/, '').trim();
+          if (takeDegree) degree = nextParsed.text.split(/\s*[|\t]\s*/)[0].trim();
+          if (!duration) duration = nextParsed.duration;
+          if (!gpa) gpa = nextParsed.gpa;
+          i++;
+        }
       }
 
       education.push({
@@ -410,7 +478,7 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
   blocks.push({
     kind: "header",
     name: fullName,
-    contact: [phone, email].filter(Boolean)
+    contact: [phone, email, linkedin, website, location].filter(Boolean)
   });
 
   // 2. Summary block
@@ -429,8 +497,8 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
       label: "Experience",
       items: workExperience.map(exp => ({
         kind: "job",
-        company: exp.company || 'Company',
-        title: exp.role || 'Role',
+        company: exp.company || '',
+        title: exp.role || '',
         dates: exp.duration || '',
         bullets: exp.description || []
       }))
@@ -523,9 +591,9 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
       fullName,
       email,
       phone,
-      linkedin: '',
-      website: '',
-      location: '',
+      linkedin,
+      website,
+      location,
       summary: summary || '',
       workExperience,
       education,
@@ -821,84 +889,45 @@ export function rulesBasedTailor(resume: any, jdText: string) {
   });
 
   const existingSkillsLower = existingSkills.map(s => s.toLowerCase());
-  const matchedKeywords = jdSkills.filter((s: string) => existingSkillsLower.includes(s.toLowerCase()));
-  const missingKeywords = jdSkills.filter((s: string) => !existingSkillsLower.includes(s.toLowerCase()));
+
+  // Everything else the candidate wrote (summary, bullets, projects, certifications).
+  // A JD skill found here is backed by the resume itself.
+  const otherText = blocks
+    .filter((_: any, idx: number) => idx !== skillsBlockIdx)
+    .map((block: any) => {
+      if (block.kind === "text") return block.body || "";
+      if (block.kind !== "section") return "";
+      return (block.items || [])
+        .map((it: any) => [it.title, it.company, it.degree, it.school, it.text, ...(it.bullets || [])].filter(Boolean).join(" "))
+        .join(" ");
+    })
+    .join(" ");
+
+  // Returns the skill as the candidate spelled it in their own text, or null.
+  const findInText = (skill: string): string | null => {
+    const rx = new RegExp(`(?:^|[^a-zA-Z0-9#+.-])(${escapeRegExp(skill)})(?:$|[^a-zA-Z0-9#+.-])`, "i");
+    const m = otherText.match(rx);
+    return m ? m[1] : null;
+  };
+
+  const matchedKeywords = jdSkills.filter((s: string) => existingSkillsLower.includes(s.toLowerCase()) || findInText(s) !== null);
+  const missingKeywords = jdSkills.filter((s: string) => !matchedKeywords.includes(s));
 
   // ATS Score calculation based on keyword matching
   const totalKeywords = jdSkills.length;
   const score = totalKeywords > 0 ? Math.round((matchedKeywords.length / totalKeywords) * 100) : 80;
 
-  // Kind C: New Skills
-  const newSkills = missingKeywords.slice(0, 3); // Add up to 3 missing skills
+  // Only add a skill to the Skills section when the resume already shows it elsewhere
+  // (e.g. a project bullet mentions React). Never add skills the candidate doesn't claim,
+  // and never invent bullets, metrics or certifications — missing skills are only reported.
+  const newSkills = jdSkills
+    .filter((s: string) => !existingSkillsLower.includes(s.toLowerCase()))
+    .map((s: string) => findInText(s))
+    .filter((s: string | null): s is string => s !== null);
 
   const inlineAdditions: any = {};
   const newBullets: any = {};
-
-  // Kind A & B: Find Experience block
-  let expBlockIdx = -1;
-  blocks.forEach((block: any, idx: number) => {
-    if (block.kind === "section" && block.label.toLowerCase() === "experience") {
-      expBlockIdx = idx;
-    }
-  });
-
-  if (expBlockIdx !== -1) {
-    const expBlock = blocks[expBlockIdx];
-    const items = expBlock.items || [];
-    items.forEach((item: any, itemIdx: number) => {
-      if (item.kind === "job") {
-        const jobKey = `${expBlockIdx}.${itemIdx}`;
-        
-        // Add additions to the first job
-        if (itemIdx === 0 && Array.isArray(item.bullets) && item.bullets.length > 0) {
-          const firstBullet = item.bullets[0];
-          const bulletKey = `${jobKey}.0`;
-          
-          // Insert inline keyword (Kind A) after the first word
-          const spaceIdx = firstBullet.indexOf(" ");
-          const insertAfter = spaceIdx !== -1 ? spaceIdx : firstBullet.length;
-          
-          inlineAdditions[bulletKey] = [
-            {
-              insertAfter,
-              text: " using Agile best practices",
-              cls: "add-kw"
-            },
-            {
-              insertAfter: firstBullet.length,
-              text: " resulting in a +15% improvement in deployment efficiency",
-              cls: "add-both"
-            }
-          ];
-
-          // Add a new bullet point (Kind B)
-          newBullets[jobKey] = [
-            {
-              text: `Led cross-functional alignment in Jira to coordinate release schedules, decreasing time-to-market by 4 weeks.`,
-              cls: "add-both"
-            }
-          ];
-        }
-      }
-    });
-  }
-
-  // Kind D: New Section (Certifications) if not present
   const newSections: any[] = [];
-  const hasCertifications = blocks.some(
-    (block: any) => block.kind === "section" && block.label.toLowerCase() === "certifications"
-  );
-  if (!hasCertifications) {
-    newSections.push({
-      label: "Certifications",
-      items: [
-        {
-          kind: "line",
-          text: `Professional Scrum Master (PSM I) — Scrum.org`
-        }
-      ]
-    });
-  }
 
   return {
     score,

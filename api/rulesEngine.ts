@@ -20,12 +20,25 @@ function escapeRegExp(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function cleanLigatures(text: string): string {
+/**
+ * Rejoins words that PDF text extraction split around ligature glyphs (fi, fl, ff, ffi, ffl):
+ * "de fi ne" -> "define", "ef fi cient" -> "efficient", "work fl ow" -> "workflow", "sta ff" -> "staff".
+ * Only joins a ligature that sits between letters, so normal words like "the five" are left alone.
+ */
+export function fixSplitLigatures(text: string): string {
   return text
-    .replace(/f\s+i/gi, "fi")
-    .replace(/(\w+)\s+fi\s+(\w+)/gi, "$1fi$2")
-    .replace(/(\w+)\s+fi/gi, "$1fi")
-    .replace(/fi\s+(\w+)/gi, "fi$1")
+    .replace(/\uFB00/g, "ff").replace(/\uFB01/g, "fi").replace(/\uFB02/g, "fl")
+    .replace(/\uFB03/g, "ffi").replace(/\uFB04/g, "ffl")
+    // inside a word: "de fi ne", "X fi n.digital", "speci fi c"
+    .replace(/([A-Za-z]) (ffi|ffl|fi|fl|ff) (?=[a-z])/g, "$1$2")
+    // start of a word: "fi nancial", "fl exible"
+    .replace(/(^|[\s(\[“"'/-])(ffi|ffl|fi|fl|ff) (?=[a-z]{2})/gm, "$1$2")
+    // end of a word: "sta ff", "o ff."
+    .replace(/([a-z]{2}) (ffi|ffl|fi|fl|ff)(?=[\s.,;:!?)\]]|$)/gm, "$1$2");
+}
+
+function cleanLigatures(text: string): string {
+  return fixSplitLigatures(text)
     .replace(/(\w+)\s+@\s+(\w+)/g, "$1@$2")
     .replace(/@\s+(\w+)\s*\.\s*(c\s+om|com)/gi, "@$1.com")
     .replace(/\b(c\s+om)\b/gi, "com")
@@ -867,7 +880,7 @@ export function rulesBasedAtsAudit(resume: any, jdText: string) {
 /**
  * Deterministic Rules-Based Tailoring per Syntax Spec
  */
-export function rulesBasedTailor(resume: any, jdText: string) {
+export function rulesBasedTailor(resume: any, jdText: string, selectedSkills?: string[]) {
   const jdAnalysis = rulesBasedSimplifyJd(jdText);
   const jdSkills = jdAnalysis.requiredSkills.map((s: any) => s.name);
   const jdSkillsLower = jdSkills.map((s: string) => s.toLowerCase());
@@ -920,10 +933,23 @@ export function rulesBasedTailor(resume: any, jdText: string) {
   // Only add a skill to the Skills section when the resume already shows it elsewhere
   // (e.g. a project bullet mentions React). Never add skills the candidate doesn't claim,
   // and never invent bullets, metrics or certifications — missing skills are only reported.
-  const newSkills = jdSkills
-    .filter((s: string) => !existingSkillsLower.includes(s.toLowerCase()))
-    .map((s: string) => findInText(s))
-    .filter((s: string | null): s is string => s !== null);
+  // When the candidate ticked skills in the checkbox step, add exactly those (and only those).
+  const newSkills: string[] = [];
+  if (Array.isArray(selectedSkills)) {
+    const seen = new Set(existingSkillsLower);
+    for (const raw of selectedSkills) {
+      const skill = String(raw).trim();
+      if (skill && !seen.has(skill.toLowerCase())) {
+        seen.add(skill.toLowerCase());
+        newSkills.push(skill);
+      }
+    }
+  } else {
+    newSkills.push(...jdSkills
+      .filter((s: string) => !existingSkillsLower.includes(s.toLowerCase()))
+      .map((s: string) => findInText(s))
+      .filter((s: string | null): s is string => s !== null));
+  }
 
   const inlineAdditions: any = {};
   const newBullets: any = {};

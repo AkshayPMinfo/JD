@@ -9,7 +9,8 @@ import {
   rulesBasedSimplifyJd,
   rulesBasedTailorResume,
   rulesBasedAtsAudit,
-  rulesBasedTailor
+  rulesBasedTailor,
+  fixSplitLigatures
 } from "./rulesEngine.js";
 
 dotenv.config();
@@ -22,13 +23,15 @@ const PORT = 3000;
 
 app.use(express.json({ limit: '10mb' }));
 
-// Lazy initializer for Google GenAI SDK
+// Lazy initializer for Google GenAI SDK.
+// Returns null when only Groq is configured, so calls go straight to the Groq fallback.
 let aiClient: GoogleGenAI | null = null;
-function getAI(): GoogleGenAI {
+function getAI(): GoogleGenAI | null {
   if (!aiClient) {
     const key = process.env.GEMINI_API_KEY;
     if (!key) {
-      throw new Error("GEMINI_API_KEY is not defined. Please add it in Settings > Secrets.");
+      if (process.env.GROQ_API_KEY) return null;
+      throw new Error("No AI key is set. Add GEMINI_API_KEY (and optionally GROQ_API_KEY) to your environment.");
     }
     aiClient = new GoogleGenAI({
       apiKey: key,
@@ -101,14 +104,22 @@ async function extractTextFromPdfProxy(pdfData: any): Promise<string> {
     if (items.length === 0) continue;
 
     // ── Collect (x, y, str) for every non-empty item ────────────────────────
-    type TextItem = { x: number; y: number; str: string; hasEOL: boolean };
+    // width/size let us tell a real word gap from glyphs that just sit next to each other (e.g. "fi" ligatures)
+    type TextItem = { x: number; y: number; str: string; hasEOL: boolean; width: number; size: number; leadSpace: boolean; trailSpace: boolean };
     const allItems: TextItem[] = items
-      .map((item: any) => ({
-        x: item.transform?.[4] ?? 0,
-        y: item.transform?.[5] ?? 0,
-        str: (item.str || '').trim(),
-        hasEOL: !!item.hasEOL
-      }))
+      .map((item: any) => {
+        const raw: string = item.str || '';
+        return {
+          x: item.transform?.[4] ?? 0,
+          y: item.transform?.[5] ?? 0,
+          str: raw.trim(),
+          hasEOL: !!item.hasEOL,
+          width: typeof item.width === 'number' ? item.width : 0,
+          size: Math.abs(item.transform?.[0] ?? 0) || Math.abs(item.transform?.[3] ?? 0) || 10,
+          leadSpace: /^\s/.test(raw),
+          trailSpace: /\s$/.test(raw)
+        };
+      })
       .filter(item => item.str.length > 0);
 
     if (allItems.length === 0) continue;
@@ -146,15 +157,19 @@ async function extractTextFromPdfProxy(pdfData: any): Promise<string> {
 
     const renderColumn = (colItems: TextItem[]): string => {
       let text = '';
-      let lastY: number | null = null;
+      let last: TextItem | null = null;
       for (const item of colItems) {
-        if (lastY !== null && Math.abs(item.y - lastY) > 5) {
+        if (last && Math.abs(item.y - last.y) > 5) {
           text += '\n';
-        } else if (text.length > 0 && !text.endsWith(' ') && !text.endsWith('\n')) {
-          text += ' ';
+        } else if (last && text.length > 0 && !text.endsWith(' ') && !text.endsWith('\n')) {
+          // Same line: add a space only if the PDF had one or there's a visible gap.
+          // Chunks that touch (e.g. "de" + "fi" + "ne") are parts of one word.
+          const gap = last.width > 0 ? item.x - (last.x + last.width) : Infinity;
+          const touching = gap < Math.max(last.size, item.size) * 0.12;
+          if (last.trailSpace || item.leadSpace || !touching) text += ' ';
         }
         text += item.str;
-        lastY = item.y;
+        last = item;
       }
       return text.trim();
     };
@@ -177,9 +192,9 @@ async function extractTextFromPdfProxy(pdfData: any): Promise<string> {
     // Join all left-column blocks first, then all right-column blocks
     const leftText = leftPageTexts.filter(t => t.length > 0).join('\n\n');
     const rightText = rightPageTexts.filter(t => t.length > 0).join('\n\n');
-    return leftText + (rightText ? '\n\n' + rightText : '');
+    return fixSplitLigatures(leftText + (rightText ? '\n\n' + rightText : ''));
   } else {
-    return leftPageTexts.filter(t => t.length > 0).join('\n\n');
+    return fixSplitLigatures(leftPageTexts.filter(t => t.length > 0).join('\n\n'));
   }
 }
 
@@ -756,29 +771,128 @@ function sanitizeResumeTextFields(resume: any): any {
   return resume;
 }
 
-async function generateContentWithRetry(ai: GoogleGenAI, options: any, maxRetries = 2): Promise<any> {
-  let delay = 500; // start with 500ms to stay within Vercel 60s budget
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await ai.models.generateContent(options);
-    } catch (error: any) {
-      const errStr = String(error.stack || error.message || error);
-      const isRetryable = 
-        errStr.includes("experiencing high demand") || 
-        errStr.includes("UNAVAILABLE") || 
-        errStr.includes("503") ||
-        errStr.includes("Resource has been exhausted") ||
-        errStr.includes("429");
-        
-      if (isRetryable && attempt < maxRetries) {
-        console.warn(`Gemini API busy (attempt ${attempt}/${maxRetries}). Retrying in ${delay}ms...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-        delay *= 2; // exponential backoff: 500ms -> 1000ms
-        continue;
-      }
-      throw error;
+// ── AI providers: Gemini first, Groq as automatic fallback ─────────────────
+const GROQ_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+const GROQ_TIMEOUT_MS = 25000; // stay well inside Vercel's 60s function budget
+const GROQ_BASE_URL = (process.env.GROQ_BASE_URL || "https://api.groq.com/openai/v1").replace(/\/$/, "");
+
+// Gemini's responseSchema uses Type enums ("OBJECT", "STRING", ...). Convert to plain JSON Schema
+// so we can show Groq exactly which JSON shape to return.
+function geminiSchemaToJsonSchema(schema: any): any {
+  if (Array.isArray(schema)) return schema.map(geminiSchemaToJsonSchema);
+  if (!schema || typeof schema !== "object") return schema;
+  const out: any = {};
+  for (const [k, v] of Object.entries(schema)) {
+    if (k === "type" && typeof v === "string") out.type = v.toLowerCase();
+    else out[k] = geminiSchemaToJsonSchema(v);
+  }
+  return out;
+}
+
+// Groq's text model can't read images, so only text-only requests can fall back.
+function extractPromptText(contents: any): string | null {
+  if (typeof contents === "string") return contents;
+  const parts: any[] = Array.isArray(contents) ? contents : [contents];
+  const texts: string[] = [];
+  for (const part of parts) {
+    if (!part) continue;
+    if (typeof part === "string") { texts.push(part); continue; }
+    if (part.inlineData) return null;
+    if (typeof part.text === "string") { texts.push(part.text); continue; }
+    if (Array.isArray(part.parts)) {
+      const inner = extractPromptText(part.parts);
+      if (inner === null) return null;
+      texts.push(inner);
     }
   }
+  return texts.join("\n\n");
+}
+
+async function generateWithGroq(options: any): Promise<{ text: string; provider: "groq" }> {
+  const key = process.env.GROQ_API_KEY;
+  if (!key) throw new Error("GROQ_API_KEY is not set");
+  const prompt = extractPromptText(options.contents);
+  if (prompt === null) throw new Error("This request includes images, which the Groq fallback can't read.");
+
+  const schema = options.config?.responseSchema ? geminiSchemaToJsonSchema(options.config.responseSchema) : null;
+  const system = [
+    "You are a careful assistant that replies with a single valid JSON object and nothing else.",
+    schema ? `The JSON must match this JSON Schema exactly (same keys, types and required fields):\n${JSON.stringify(schema)}` : ""
+  ].filter(Boolean).join("\n\n");
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GROQ_TIMEOUT_MS);
+  try {
+    const r = await fetch(`${GROQ_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model: GROQ_MODEL,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: prompt }
+        ]
+      }),
+      signal: controller.signal
+    });
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      throw new Error(`Groq request failed (${r.status}): ${body.slice(0, 200)}`);
+    }
+    const data: any = await r.json();
+    const text = data?.choices?.[0]?.message?.content;
+    if (!text || typeof text !== "string") throw new Error("Groq returned an empty response");
+    JSON.parse(text); // make sure callers get parseable JSON, or fail here and report it
+    return { text, provider: "groq" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function generateContentWithRetry(ai: GoogleGenAI | null, options: any, maxRetries = 2): Promise<any> {
+  let geminiError: any = null;
+
+  if (ai) {
+    let delay = 500; // start with 500ms to stay within Vercel 60s budget
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await ai.models.generateContent(options);
+      } catch (error: any) {
+        const errStr = String(error.stack || error.message || error);
+        const isRetryable =
+          errStr.includes("experiencing high demand") ||
+          errStr.includes("UNAVAILABLE") ||
+          errStr.includes("503") ||
+          errStr.includes("Resource has been exhausted") ||
+          errStr.includes("429");
+
+        if (isRetryable && attempt < maxRetries) {
+          console.warn(`Gemini API busy (attempt ${attempt}/${maxRetries}). Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          delay *= 2; // exponential backoff: 500ms -> 1000ms
+          continue;
+        }
+        geminiError = error;
+        break;
+      }
+    }
+  }
+
+  // Gemini failed (rate limit, outage, bad key) or isn't configured: try Groq.
+  if (process.env.GROQ_API_KEY) {
+    const reason = geminiError ? String(geminiError.message || geminiError).slice(0, 120) : "no Gemini key";
+    console.warn(`[AI] Falling back to Groq (${GROQ_MODEL}): ${reason}`);
+    try {
+      return await generateWithGroq(options);
+    } catch (groqError: any) {
+      console.error("[AI] Groq fallback failed:", String(groqError?.message || groqError).slice(0, 300));
+      throw geminiError || groqError;
+    }
+  }
+
+  throw geminiError || new Error("No AI provider is configured.");
 }
 
 // 1. Simplify Job Description API
@@ -1065,7 +1179,16 @@ function mergeAndSanitizeTailoredResume(original: any, tailored: any): any {
 // 2. Tailor Resume API
 app.post("/api/tailor-resume", async (req, res) => {
   try {
-    const { resume, jdText } = req.body;
+    const { resume, jdText, selectedSkills: rawSelected, resumeStructure, careerSwitch: rawSwitch } = req.body;
+    // Set when the candidate confirmed they're moving into a different field
+    const clean = (v: unknown) => String(v ?? "").replace(/[\r\n`]/g, " ").trim().slice(0, 80);
+    const careerSwitch = rawSwitch && typeof rawSwitch === "object"
+      ? { fromRole: clean(rawSwitch.fromRole), fromField: clean(rawSwitch.fromField), toRole: clean(rawSwitch.toRole), toField: clean(rawSwitch.toField) }
+      : null;
+    // Skills the candidate confirmed in the checkbox step. Only these may be added.
+    const selectedSkills: string[] | undefined = Array.isArray(rawSelected)
+      ? rawSelected.map((s: unknown) => String(s).trim()).filter(Boolean).slice(0, 50)
+      : undefined;
     console.log("[tailor-resume] Request received:", {
       hasResume: !!resume,
       resumeName: resume?.fullName || "N/A",
@@ -1080,17 +1203,31 @@ app.post("/api/tailor-resume", async (req, res) => {
     }
 
     if (!USE_GEMINI) {
-      const result = rulesBasedTailor(resume, jdText);
+      const result = rulesBasedTailor(resume, jdText, selectedSkills);
       console.log("[Rules Tailor: TailoredResume Output]", JSON.stringify(result, null, 2));
       res.json(result);
       return;
     }
 
     const ai = getAI();
-    const prompt = `You are a veteran HR Consultant and senior Resume Writer. Your task is to review the Candidate's Resume and tailor it to better align with the requirements in the Job Description, preserving factual honesty but boosting keyword matching, professional tone, and clarity.
+    // Gemini works on the structured resume (fullName, workExperience, ...). The UI sends it as
+    // resumeStructure; older callers sent it as resume.
+    const sourceResume = resumeStructure || resume;
+    const confirmedSkillsNote = selectedSkills
+      ? `\n\nCONFIRMED SKILLS: The candidate confirmed they have these skills from the job description: ${selectedSkills.length ? selectedSkills.join(", ") : "(none)"}.
+- Add to Resume.skills ONLY skills from this confirmed list (plus the original skills). Do not add any other skill.
+- You may mention a confirmed skill in a bullet point only where the original bullet already describes related work. Never invent projects, employers, numbers or results.`
+      : "";
+    const careerSwitchNote = careerSwitch
+      ? `\n\nCAREER CHANGE: The candidate is moving from ${careerSwitch.fromField} (most recent role: ${careerSwitch.fromRole}) into ${careerSwitch.toField} (target role: ${careerSwitch.toRole}).
+- Do NOT present them as already having worked as a ${careerSwitch.toRole} or in ${careerSwitch.toField}. Keep every job title exactly as written.
+- Rewrite the summary to state the move honestly, e.g. "${careerSwitch.fromRole} moving into ${careerSwitch.toField}, bringing ...", and lead with transferable strengths relevant to the target role.
+- In bullet points, bring forward the parts of their real work that matter for the target role (for example working with engineers, technical requirements, data, automation, stakeholders), without inventing tools, projects, employers, numbers or results.`
+      : "";
+    const prompt = `You are a veteran HR Consultant and senior Resume Writer. Your task is to review the Candidate's Resume and tailor it to better align with the requirements in the Job Description, preserving factual honesty but boosting keyword matching, professional tone, and clarity.${confirmedSkillsNote}${careerSwitchNote}
 
 Candidate's Original Resume:
-${JSON.stringify(resume, null, 2)}
+${JSON.stringify(sourceResume, null, 2)}
 
 Job Description:
 """
@@ -1281,8 +1418,16 @@ Format your response strictly as JSON matching this schema:
 
     const parsed = JSON.parse(resultText.trim());
     if (parsed && parsed.tailoredResume) {
-      parsed.tailoredResume = mergeAndSanitizeTailoredResume(resume, parsed.tailoredResume);
+      parsed.tailoredResume = mergeAndSanitizeTailoredResume(sourceResume, parsed.tailoredResume);
       parsed.tailoredResume = sanitizeResumeTextFields(parsed.tailoredResume);
+      // Enforce the checkbox choice: original skills + confirmed skills only, whatever the model returned.
+      if (selectedSkills) {
+        const original: string[] = Array.isArray(sourceResume?.skills) ? sourceResume.skills : [];
+        const seen = new Set(original.map((s: string) => s.toLowerCase()));
+        const added = selectedSkills.filter(s => !seen.has(s.toLowerCase()) && seen.add(s.toLowerCase()));
+        parsed.tailoredResume.skills = [...original, ...added];
+        parsed.newSkills = added;
+      }
     }
     res.json(parsed);
   } catch (error: any) {

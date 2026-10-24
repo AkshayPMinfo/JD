@@ -58,6 +58,7 @@ import {
   TailoredResume
 } from "./types";
 import { resumeStructureToResume, mergeResumeWithAdditions } from "./utils/resumeConverter";
+import { detectRoleMismatch, type RoleCheck } from "./utils/roleFamily";
 import { jsPDF } from "jspdf";
 import html2canvas from "html2canvas";
 import { DEMO_RESUMES, DEMO_JDS } from "./demoData";
@@ -421,7 +422,7 @@ export default function App() {
 
   // Tailoring Wizard States
   const [isTailorWizardOpen, setIsTailorWizardOpen] = useState(false);
-  const [tailorWizardStep, setTailorWizardStep] = useState<1 | 2 | 3>(1);
+  const [tailorWizardStep, setTailorWizardStep] = useState<1 | 2 | 3 | 4>(1);
   const [tailorCompany, setTailorCompany] = useState("");
   const [tailorRole, setTailorRole] = useState("");
   const [tailorJdText, setTailorJdText] = useState("");
@@ -439,6 +440,28 @@ export default function App() {
   const [tailorAnalysisError, setTailorAnalysisError] = useState<string | null>(null);
   // Inline validation message shown inside the wizard (toasts disappear before people read them)
   const [tailorStepError, setTailorStepError] = useState<string | null>(null);
+  // Skill checkbox step: JD analysis, the skills it lists, and which ones the candidate ticked
+  const [tailorJdAnalysis, setTailorJdAnalysis] = useState<SimplifiedJD | null>(null);
+  const [tailorSkillOptions, setTailorSkillOptions] = useState<{ name: string; inResume: boolean }[]>([]);
+  const [tailorSelectedSkills, setTailorSelectedSkills] = useState<string[]>([]);
+  const [tailorCustomSkill, setTailorCustomSkill] = useState("");
+  // Per-line review of AI edits: nothing the AI rewrote goes into the resume until the user accepts or edits it
+  type EditReview = {
+    id: string;
+    label: string;
+    original: string;
+    suggested: string;
+    text: string;
+    status: "pending" | "accepted" | "edited" | "skipped";
+    mentions: string[];
+    target: { kind: "summary" } | { kind: "exp" | "proj"; item: number; bullet: number };
+  };
+  const [tailorReviews, setTailorReviews] = useState<EditReview[]>([]);
+  // Job-switcher check: set when the resume's recent role and the job are in different fields
+  const [tailorRoleCheck, setTailorRoleCheck] = useState<RoleCheck | null>(null);
+  const [tailorIsSwitching, setTailorIsSwitching] = useState<boolean | null>(null);
+  const [tailorReviewBase, setTailorReviewBase] = useState<{ original: ResumeStructure; skills: string[] } | null>(null);
+  const [editingReviewId, setEditingReviewId] = useState<string | null>(null);
   const [tailorAnalysisResult, setTailorAnalysisResult] = useState<{
     matchedKeywords: string[];
     missingKeywords: string[];
@@ -1007,7 +1030,17 @@ export default function App() {
   const handleOpenTailorWizard = () => {
     setTailorCompany("");
     setTailorStepError(null);
-    setTailorRole("");
+    setTailorJdAnalysis(null);
+    setTailorSkillOptions([]);
+    setTailorJdAnalysis(null);
+    setTailorSkillOptions([]);
+    setTailorSelectedSkills([]);
+    setTailorCustomSkill("");
+    setTailorReviews([]);
+    setTailorReviewBase(null);
+    setEditingReviewId(null);
+    setTailorRoleCheck(null);
+    setTailorIsSwitching(null);
     setTailorJdText("");
     setTailorJdImages([]);
     setTailorJdImageNames([]);
@@ -1292,6 +1325,13 @@ export default function App() {
     };
   };
 
+  // "REST APIs" -> "REST API", "microservices" -> "microservice"; leaves AWS, CSS, Redis, Kubernetes-like stems safe
+  const singularSkill = (term: string): string => {
+    if (/apis$/.test(term)) return term.slice(0, -1);            // "REST APIs" -> "REST API"
+    if (/\.js$/.test(term)) return term;                         // Node.js, Next.js
+    return term.length >= 5 && /s$/.test(term) && !/(ss|us|is)$/.test(term) ? term.slice(0, -1) : term;
+  };
+
   const calculateRealisticAtsScore = (resume: ResumeStructure, jd: SimplifiedJD) => {
     const requiredSkills = (jd.requiredSkills || []).map((s: any) => s?.name || s || "");
     const keywordsToTarget = jd.keywordsToTarget || [];
@@ -1316,8 +1356,11 @@ export default function App() {
 
     allKeywords.forEach(kw => {
       const kwLower = kw.toLowerCase();
+      const kwSingular = singularSkill(kwLower);
+      const kwEscaped = kwSingular.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
       // Match if present in skills list, or using word boundary search in general text
-      const isMatched = skillsLower.some(s => s === kwLower) || 
+      const isMatched = skillsLower.some(s => s === kwLower || s === kwSingular || s === kwSingular + "s") ||
+                        new RegExp(`\\b${kwEscaped}(?:e?s)?\\b`, 'i').test(allTextLower) || 
                         allTextLower.includes(` ${kwLower} `) || 
                         allTextLower.includes(`,${kwLower}`) || 
                         allTextLower.includes(`${kwLower},`) || 
@@ -1533,7 +1576,146 @@ export default function App() {
     };
   };
 
-  const handleAnalyzeAndGenerate = async () => {
+  // Proper casing for common skill names the JD reader lower-cases ("Aws" -> "AWS")
+  const KNOWN_SKILL_CASE: Record<string, string> = {
+    aws: "AWS", css: "CSS", html: "HTML", sql: "SQL", "ci/cd": "CI/CD", typescript: "TypeScript",
+    javascript: "JavaScript", postgresql: "PostgreSQL", postgres: "Postgres", mysql: "MySQL",
+    mongodb: "MongoDB", "node.js": "Node.js", nodejs: "Node.js", "next.js": "Next.js", nextjs: "Next.js",
+    graphql: "GraphQL", gcp: "GCP", "github actions": "GitHub Actions", seo: "SEO", "power bi": "Power BI",
+    "ab testing": "A/B testing", prds: "PRDs", "ui/ux": "UI/UX", fastapi: "FastAPI", "nest.js": "NestJS",
+    nestjs: "NestJS", mui: "MUI", ios: "iOS", dynamodb: "DynamoDB", sqlite: "SQLite", ".net": ".NET",
+    "c++": "C++", "c#": "C#", php: "PHP", "material-ui": "Material UI", "google cloud": "Google Cloud",
+    "amazon web services": "Amazon Web Services"
+  };
+  const displaySkillName = (name: string, resume?: ResumeStructure | null): string => {
+    const lower = name.toLowerCase();
+    const own = (resume?.skills || []).find(sk => sk.toLowerCase() === lower);
+    if (own) return own;
+    if (KNOWN_SKILL_CASE[lower]) return KNOWN_SKILL_CASE[lower];
+    return name;
+  };
+
+  const skillKey = (name: string) => singularSkill(name.toLowerCase().replace(/\s+/g, " ").trim());
+  const dedupeSkillNames = (names: string[]): string[] => {
+    const cleaned = names.map(n => String(n || "").trim()).filter(Boolean);
+    const keys = cleaned.map(skillKey);
+    return cleaned.filter((name, i) => {
+      const key = keys[i];
+      if (keys.indexOf(key) !== i) return false; // same skill, different case or plural
+      // a longer variant of another listed skill, e.g. "CI/CD pipelines" next to "CI/CD"
+      return !keys.some((other, j) => j !== i && other.length < key.length && key.startsWith(other + " "));
+    });
+  };
+  const cleanJdSkills = (jd: SimplifiedJD): SimplifiedJD => {
+    // Skills only: drop the job title itself (AI sometimes lists it) and long phrases that aren't skills
+    const titleKey = skillKey(jd.jobTitle || "");
+    const isSkillLike = (name: string) => {
+      const key = skillKey(name);
+      return !!key && key !== titleKey && key.split(" ").length <= 4 && name.length <= 40;
+    };
+    const required = dedupeSkillNames((jd.requiredSkills || []).map((sk: any) => sk?.name || sk)).filter(isSkillLike);
+    const requiredKeys = new Set(required.map(skillKey));
+    const priorityOf = (name: string) =>
+      ((jd.requiredSkills || []) as any[]).find(sk => skillKey(sk?.name || "") === skillKey(name))?.priority || "high";
+    return {
+      ...jd,
+      requiredSkills: required.map(name => ({ name, priority: priorityOf(name) })),
+      keywordsToTarget: dedupeSkillNames([...required, ...(jd.keywordsToTarget || [])]).filter(k => isSkillLike(k) && !requiredKeys.has(skillKey(k)))
+    };
+  };
+
+  // Skills named in the JD, each marked by whether the resume already shows it
+  const buildSkillOptions = (resume: ResumeStructure, jd: SimplifiedJD) => {
+    const names = [
+      ...(jd.requiredSkills || []).map((sk: any) => sk?.name || sk),
+      ...(jd.keywordsToTarget || [])
+    ].map(n => String(n || "").trim()).filter(Boolean);
+    const unique = dedupeSkillNames(names);
+    const evaluation = calculateRealisticAtsScore(resume, {
+      ...jd,
+      requiredSkills: unique.map(name => ({ name, priority: "high" as const })),
+      keywordsToTarget: []
+    });
+    const matched = new Set(evaluation.matchedKeywords.map(k => k.toLowerCase()));
+    return unique.map(n => ({ name: displaySkillName(n, resume), inResume: matched.has(n.toLowerCase()) }));
+  };
+
+  // Compare the AI rewrite with the original, line by line, and list each change for review.
+  // `mentions` = ticked skills a line now claims that the original line never mentioned.
+  const buildEditReviews = (original: ResumeStructure, tailored: ResumeStructure, ticked: string[]): EditReview[] => {
+    const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const has = (text: string, skill: string) => new RegExp(`(^|[^a-z0-9])${esc(skill.toLowerCase())}([^a-z0-9]|$)`, "i").test(text.toLowerCase());
+    const newMentions = (suggested: string, orig: string) => ticked.filter(sk => has(suggested, sk) && !has(orig, sk));
+    const reviews: EditReview[] = [];
+    const push = (label: string, orig: string, sugg: string, target: EditReview["target"], id: string) => {
+      if (!sugg.trim() || sugg.trim() === orig.trim()) return;
+      reviews.push({ id, label, original: orig, suggested: sugg.trim(), text: sugg.trim(), status: "pending", mentions: newMentions(sugg, orig), target });
+    };
+    push("Professional summary", original.summary || "", tailored.summary || "", { kind: "summary" }, "summary");
+    (original.workExperience || []).forEach((job, i) => {
+      const tJob = (tailored.workExperience || []).find(t => t.id && t.id === job.id) || (tailored.workExperience || [])[i];
+      if (!tJob) return;
+      const count = Math.max(job.description.length, (tJob.description || []).length);
+      for (let b = 0; b < count; b++) {
+        const name = [job.company, job.role].filter(Boolean).join(" · ") || `Job ${i + 1}`;
+        const label = b < job.description.length ? `${name} · bullet ${b + 1}` : `${name} · new bullet`;
+        push(label, job.description[b] || "", (tJob.description || [])[b] || "", { kind: "exp", item: i, bullet: b }, `exp-${i}-${b}`);
+      }
+    });
+    (original.projects || []).forEach((proj, i) => {
+      const tProj = (tailored.projects || []).find(t => t.id && t.id === proj.id) || (tailored.projects || [])[i];
+      if (!tProj) return;
+      const count = Math.max(proj.description.length, (tProj.description || []).length);
+      for (let b = 0; b < count; b++) {
+        const label = b < proj.description.length ? `${proj.name || `Project ${i + 1}`} · bullet ${b + 1}` : `${proj.name || `Project ${i + 1}`} · new bullet`;
+        push(label, proj.description[b] || "", (tProj.description || [])[b] || "", { kind: "proj", item: i, bullet: b }, `proj-${i}-${b}`);
+      }
+    });
+    return reviews;
+  };
+
+  // The resume the user actually gets: their original, the skills they ticked, and only accepted/edited lines
+  const applyEditReviews = (base: { original: ResumeStructure; skills: string[] }, reviews: EditReview[]): ResumeStructure => {
+    const result: ResumeStructure = JSON.parse(JSON.stringify(base.original));
+    result.skills = [...base.skills];
+    for (const r of reviews) {
+      const value = r.status === "accepted" ? r.suggested : r.status === "edited" ? r.text.trim() : null;
+      if (!value) continue;
+      if (r.target.kind === "summary") { result.summary = value; continue; }
+      const list = r.target.kind === "exp" ? result.workExperience : (result.projects || []);
+      const item = list?.[r.target.item];
+      if (!item) continue;
+      if (r.target.bullet < item.description.length) item.description[r.target.bullet] = value;
+      else item.description.push(value);
+    }
+    return result;
+  };
+
+  // Apply a change to one review and keep the preview, score and saved copy in sync
+  const updateEditReviews = (next: EditReview[]) => {
+    setTailorReviews(next);
+    if (!tailorReviewBase) return;
+    const resume = applyEditReviews(tailorReviewBase, next);
+    setTailoredResultResume(resume);
+    const jd = tailorAnalysisResult?.simplifiedJdObject;
+    const evaluation = jd ? calculateRealisticAtsScore(resume, jd) : null;
+    const versionId = tailoredResultVersion?.id;
+    if (!versionId) return;
+    setSavedVersions(prev => {
+      const updated = prev.map(v => v.id === versionId ? {
+        ...v,
+        resumeData: resume,
+        ...(evaluation ? { atsScore: evaluation.score, matchPercentage: evaluation.matchPercentage, missingRequirements: evaluation.missingKeywords } : {})
+      } : v);
+      localStorage.setItem("jd_resume_customizer_versions", JSON.stringify(updated));
+      return updated;
+    });
+  };
+  const setReviewStatus = (id: string, status: EditReview["status"], text?: string) =>
+    updateEditReviews(tailorReviews.map(r => r.id === id ? { ...r, status, text: text ?? r.text } : r));
+
+  // Step 2 -> 3: read the job description and list its skills as checkboxes
+  const handleAnalyzeJd = async () => {
     setTailorAnalysisError(null);
     const companyVal = tailorCompany || "";
     const jdTextVal = tailorJdText || "";
@@ -1564,34 +1746,62 @@ export default function App() {
     setTailorStepError(null);
 
     setTailorIsAnalyzing(true);
-    startTailorProgress("Analyzing & Tailoring Resume...");
-    
+    startTailorProgress("Reading the job description...");
+    try {
+      const selectedResume = getResumeToTailor();
+      if (!selectedResume) throw new Error("No resume selected");
+      const simplifyRes = await fetch("/api/simplify-jd", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jdText: jdTextVal })
+      }).catch(() => null);
+      const simplifiedJd: SimplifiedJD = cleanJdSkills(simplifyRes && simplifyRes.ok
+        ? await simplifyRes.json()
+        : extractJDHeuristically(jdTextVal, companyVal));
+      setTailorJdAnalysis(simplifiedJd);
+      setTailorRole(simplifiedJd.jobTitle || "Tailored Position");
+      setTailorSkillOptions(buildSkillOptions(selectedResume, simplifiedJd));
+      // If the JD reader couldn't name the role, the posting's first line is usually the job title
+      const firstLine = jdTextVal.trim().split("\n")[0].trim();
+      const jobTitleForCheck = simplifiedJd.jobTitle && simplifiedJd.jobTitle !== "Tailored Position"
+        ? simplifiedJd.jobTitle
+        : (firstLine.length <= 80 ? firstLine : "");
+      setTailorRoleCheck(detectRoleMismatch(selectedResume.workExperience?.[0]?.role, jobTitleForCheck));
+      setTailorIsSwitching(null);
+      setTailorSelectedSkills([]);
+      setTailorCustomSkill("");
+      setTailorWizardStep(3);
+    } catch (err: any) {
+      console.error(err);
+      setTailorAnalysisError(err.message || "Couldn't read the job description.");
+    } finally {
+      stopTailorProgress(false);
+      setTailorIsAnalyzing(false);
+    }
+  };
+
+  // Step 3 -> 4: tailor the resume, adding only the skills the candidate ticked
+  const handleAnalyzeAndGenerate = async () => {
+    setTailorAnalysisError(null);
+    const companyVal = tailorCompany || "";
+    const jdTextVal = tailorJdText || "";
+    const simplifiedJd = tailorJdAnalysis;
+    if (!simplifiedJd) {
+      setTailorWizardStep(2);
+      return;
+    }
+
+    setTailorIsAnalyzing(true);
+    startTailorProgress("Tailoring your resume...");
+
     try {
       const selectedResume = getResumeToTailor();
       if (!selectedResume) throw new Error("No resume selected");
 
-      // 1. Simplify JD
-      let simplifyRes = await fetch("/api/simplify-jd", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jdText: jdTextVal })
-      }).catch(e => null);
-      
-      let simplifiedJd;
-      if (simplifyRes && simplifyRes.ok) {
-        simplifiedJd = await simplifyRes.json();
-      } else {
-        simplifiedJd = extractJDHeuristically(jdTextVal, companyVal);
-      }
-      
       const extractedRole = simplifiedJd.jobTitle || "Tailored Position";
-      setTailorRole(extractedRole);
-      
       const simplifiedJdText = `Role: ${extractedRole}\nCompany Pitch: ${simplifiedJd.companyPitch || ""}\nKeywords: ${(simplifiedJd.keywordsToTarget || []).join(", ")}`;
 
-      // 2. Generate Tailored
-      setTailorProcessingStage("Applying AI Improvements");
-      // 2. Generate Tailored
+      // Generate tailored resume
       setTailorProcessingStage("Applying AI Improvements");
       const specResume = resumeStructureToResume(selectedResume);
       console.log("[Tailor] Sending resume blocks to /api/tailor-resume:", {
@@ -1607,7 +1817,15 @@ export default function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             resume: specResume,
-            jdText: simplifiedJdText
+            resumeStructure: selectedResume,
+            jdText: simplifiedJdText,
+            selectedSkills: tailorSelectedSkills,
+            careerSwitch: tailorIsSwitching && tailorRoleCheck ? {
+              fromRole: tailorRoleCheck.resumeRole,
+              fromField: tailorRoleCheck.resumeFamily.label,
+              toRole: tailorRoleCheck.jobTitle,
+              toField: tailorRoleCheck.jobFamily.label
+            } : undefined
           })
         });
       } catch (networkErr: any) {
@@ -1630,13 +1848,31 @@ export default function App() {
         }
         throw new Error(serverError);
       }
-      const result: TailoredResume = await tailorRes.json();
-      
-      // Store the spec-compliant TailoredResume result
-      setTailoredResult(result);
+      const raw: any = await tailorRes.json();
 
-      // Merge additions into clean ResumeStructure for backwards compatibility and export
-      const mergedTailoredResume = mergeResumeWithAdditions(selectedResume, result);
+      // Rules mode returns highlight-style edits; Gemini returns a whole rewritten resume.
+      const isFullRewrite = !!raw?.tailoredResume && !raw?.inlineAdditions;
+      const result: TailoredResume = isFullRewrite
+        ? { score: 0, matchedKeywords: [], missingKeywords: [], inlineAdditions: {}, newBullets: {}, newSkills: raw.newSkills || [], newSections: [] }
+        : raw;
+
+      // Highlight data only exists for rules-mode edits; null tells the results screen to show the rewrite as-is
+      setTailoredResult(isFullRewrite ? null : result);
+
+      let mergedTailoredResume: ResumeStructure;
+      if (isFullRewrite) {
+        const aiResume = raw.tailoredResume as ResumeStructure;
+        const base = { original: selectedResume, skills: aiResume.skills || selectedResume.skills || [] };
+        const reviews = buildEditReviews(selectedResume, aiResume, tailorSelectedSkills);
+        setTailorReviewBase(base);
+        setTailorReviews(reviews);
+        setEditingReviewId(null);
+        mergedTailoredResume = applyEditReviews(base, reviews);
+      } else {
+        setTailorReviewBase(null);
+        setTailorReviews([]);
+        mergedTailoredResume = mergeResumeWithAdditions(selectedResume, result);
+      }
       
       if (mergedTailoredResume) {
         setTailorProcessingStage("Comparing Resume vs JD");
@@ -1687,7 +1923,7 @@ export default function App() {
           return updated;
         });
 
-        setTailorWizardStep(3);
+        setTailorWizardStep(4);
       }
     } catch (err: any) {
       console.error(err);
@@ -5807,7 +6043,7 @@ WORK EXPERIENCE
         >
           <div 
             id="tailor-wizard-modal" 
-            className={`bg-white border border-neutral-200 rounded-2xl p-6 sm:p-8 w-full text-left relative animate-scaleIn flex flex-col max-h-[95vh] ${tailorWizardStep === 3 ? "max-w-4xl" : "max-w-2xl"}`}
+            className={`bg-white border border-neutral-200 rounded-2xl p-6 sm:p-8 w-full text-left relative animate-scaleIn flex flex-col max-h-[95vh] ${tailorWizardStep === 4 ? "max-w-4xl" : "max-w-2xl"}`}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close button */}
@@ -5828,15 +6064,16 @@ WORK EXPERIENCE
               <p className="text-sm text-neutral-500 mt-0.5">
                 {tailorAnalysisError ? "Something went wrong" : (
                   <>
-                    {tailorWizardStep === 1 && "Step 1 of 3 · Company & resume"}
-                    {tailorWizardStep === 2 && "Step 2 of 3 · Job description"}
-                    {tailorWizardStep === 3 && "Step 3 of 3 · Review & download"}
+                    {tailorWizardStep === 1 && "Step 1 of 4 · Company & resume"}
+                    {tailorWizardStep === 2 && "Step 2 of 4 · Job description"}
+                    {tailorWizardStep === 3 && "Step 3 of 4 · Choose skills"}
+                    {tailorWizardStep === 4 && "Step 4 of 4 · Review & download"}
                   </>
                 )}
               </p>
               {!tailorAnalysisError && (
                 <div className="flex gap-1.5 mt-4" aria-hidden="true">
-                  {[1, 2, 3].map((s) => (
+                  {[1, 2, 3, 4].map((s) => (
                     <div
                       key={s}
                       className={`h-1 flex-1 rounded-full transition-colors duration-300 ${s <= tailorWizardStep ? "bg-black" : "bg-neutral-200"}`}
@@ -5906,7 +6143,7 @@ WORK EXPERIENCE
                       type="button"
                       onClick={() => {
                         setTailorAnalysisError(null);
-                        handleAnalyzeAndGenerate();
+                        if (tailorJdAnalysis) handleAnalyzeAndGenerate(); else handleAnalyzeJd();
                       }}
                       className="flex-1 px-4 py-3 bg-[#2563eb] hover:bg-blue-600 text-white font-semibold text-[11px] rounded-xl border border-transparent transition cursor-pointer"
                     >
@@ -6010,8 +6247,169 @@ WORK EXPERIENCE
                 </div>
               )}
 
-              {/* STEP 3: RESULTS & DOWNLOAD (Tailored Resume only) */}
-              {!tailorIsAnalyzing && !tailorAnalysisError && tailorWizardStep === 3 && (
+              {/* STEP 3: CHOOSE SKILLS FROM THE JOB DESCRIPTION */}
+              {!tailorIsAnalyzing && !tailorAnalysisError && tailorWizardStep === 3 && (() => {
+                const have = tailorSkillOptions.filter(o => o.inResume);
+                const missing = tailorSkillOptions.filter(o => !o.inResume);
+                const isSelected = (name: string) => tailorSelectedSkills.some(n => n.toLowerCase() === name.toLowerCase());
+                const toggleSkill = (name: string) =>
+                  setTailorSelectedSkills(prev => isSelected(name) ? prev.filter(n => n.toLowerCase() !== name.toLowerCase()) : [...prev, name]);
+                const customAdded = tailorSelectedSkills.filter(n => !tailorSkillOptions.some(o => o.name.toLowerCase() === n.toLowerCase()));
+                const addCustomSkill = () => {
+                  const value = tailorCustomSkill.trim();
+                  if (!value) return;
+                  const alreadyListed = isSelected(value) || have.some(o => o.name.toLowerCase() === value.toLowerCase());
+                  if (!alreadyListed) setTailorSelectedSkills(prev => [...prev, value]);
+                  setTailorCustomSkill("");
+                };
+                return (
+                  <div className="space-y-6 text-left animate-fadeIn">
+                    {tailorRoleCheck && (
+                      <div className="rounded-xl bg-amber-50 p-4 space-y-3" id="career-switch-check">
+                        <p className="text-sm text-amber-900 leading-relaxed">
+                          This job is in <span className="font-medium">{tailorRoleCheck.jobFamily.label}</span>, but your most recent role is{" "}
+                          <span className="font-medium">{tailorRoleCheck.resumeRole}</span> ({tailorRoleCheck.resumeFamily.label}). Are you switching careers?
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            id="btn-career-switch-yes"
+                            onClick={() => setTailorIsSwitching(true)}
+                            aria-pressed={tailorIsSwitching === true}
+                            className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors cursor-pointer ${tailorIsSwitching === true ? "bg-black border-black text-white" : "bg-white border-amber-200 text-amber-900 hover:bg-amber-100"}`}
+                          >
+                            Yes, I'm switching
+                          </button>
+                          <button
+                            type="button"
+                            id="btn-career-switch-no"
+                            onClick={() => setTailorIsSwitching(false)}
+                            aria-pressed={tailorIsSwitching === false}
+                            className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors cursor-pointer ${tailorIsSwitching === false ? "bg-black border-black text-white" : "bg-white border-amber-200 text-amber-900 hover:bg-amber-100"}`}
+                          >
+                            No, tailor as usual
+                          </button>
+                        </div>
+                        {tailorIsSwitching === true && (
+                          <p className="text-xs text-amber-800 leading-relaxed">
+                            We'll frame your resume around transferable skills and won't present you as already working in {tailorRoleCheck.jobFamily.label}. Tick only skills you've really used, even in side projects or courses.
+                          </p>
+                        )}
+                        {tailorIsSwitching === false && (
+                          <p className="text-xs text-amber-800 leading-relaxed">
+                            We'll tailor as usual. Expect a lower match, since your experience is mostly in {tailorRoleCheck.resumeFamily.label}.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    <p className="text-sm text-neutral-600 leading-relaxed">
+                      {tailorSkillOptions.length > 0
+                        ? `This job asks for ${tailorSkillOptions.length} key ${tailorSkillOptions.length === 1 ? "skill" : "skills"}. Tick the ones you really have. Only ticked skills are added to your tailored resume.`
+                        : "We couldn't pick out specific skills from this job description. You can add skills you have below, or continue without adding any."}
+                    </p>
+
+                    {missing.length > 0 && (
+                      <div className="space-y-1">
+                        <div className="flex items-baseline justify-between gap-3">
+                          <p className="text-sm font-medium text-black">
+                            Not in your resume yet <span className="text-neutral-400 font-normal">{missing.length}</span>
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => setTailorSelectedSkills(prev => {
+                              const allOn = missing.every(o => prev.some(n => n.toLowerCase() === o.name.toLowerCase()));
+                              return allOn
+                                ? prev.filter(n => !missing.some(o => o.name.toLowerCase() === n.toLowerCase()))
+                                : [...prev, ...missing.map(o => o.name).filter(n => !prev.some(x => x.toLowerCase() === n.toLowerCase()))];
+                            })}
+                            className="text-xs text-neutral-500 hover:text-black cursor-pointer"
+                          >
+                            {missing.every(o => isSelected(o.name)) ? "Clear all" : "Select all"}
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
+                          {missing.map((o, i) => (
+                            <label
+                              key={o.name}
+                              htmlFor={`skill-option-${i}`}
+                              className="flex items-center gap-2.5 py-2.5 border-b border-neutral-100 text-sm text-neutral-800 cursor-pointer select-none hover:text-black"
+                            >
+                              <input
+                                id={`skill-option-${i}`}
+                                type="checkbox"
+                                checked={isSelected(o.name)}
+                                onChange={() => toggleSkill(o.name)}
+                                className="w-4 h-4 accent-blue-600 cursor-pointer"
+                              />
+                              {o.name}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <label htmlFor="custom-skill-input" className="block text-sm font-medium text-black">
+                        Add another skill from this job
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          id="custom-skill-input"
+                          type="text"
+                          value={tailorCustomSkill}
+                          onChange={(e) => setTailorCustomSkill(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomSkill(); } }}
+                          placeholder="e.g. Kafka"
+                          className="flex-1 bg-white border border-neutral-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-100"
+                        />
+                        <button
+                          type="button"
+                          onClick={addCustomSkill}
+                          className="px-3 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg border border-neutral-200 transition cursor-pointer"
+                        >
+                          Add
+                        </button>
+                      </div>
+                      {customAdded.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 pt-1">
+                          {customAdded.map(n => (
+                            <span key={n} className="inline-flex items-center gap-1 bg-blue-50 text-blue-700 text-xs font-medium pl-2 pr-1 py-0.5 rounded-md">
+                              {n}
+                              <button
+                                type="button"
+                                onClick={() => toggleSkill(n)}
+                                className="p-0.5 rounded hover:bg-blue-100 cursor-pointer"
+                                aria-label={`Remove ${n}`}
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {have.length > 0 && (
+                      <div className="space-y-2 pt-4 border-t border-neutral-200">
+                        <p className="text-sm font-medium text-black">
+                          Already in your resume <span className="text-neutral-400 font-normal">{have.length}</span>
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {have.map(o => (
+                            <span key={o.name} className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 text-xs font-medium px-2 py-0.5 rounded-md">
+                              <Check className="w-3 h-3" />
+                              {o.name}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* STEP 4: RESULTS & DOWNLOAD (Tailored Resume only) */}
+              {!tailorIsAnalyzing && !tailorAnalysisError && tailorWizardStep === 4 && (
                 (() => {
                   const originalResume = getResumeToTailor();
                   const tailoredResume = tailoredResultResume;
@@ -6029,9 +6427,11 @@ WORK EXPERIENCE
                     (Object.values(tailoredResult?.newBullets || {}) as unknown[][]).reduce((n: number, bs) => n + (bs?.length || 0), 0) +
                     (tailoredResult?.newSkills?.length || 0) +
                     (tailoredResult?.newSections?.length || 0);
+                  // Gemini returns a full rewrite with no highlight data; rules mode returns highlight edits
+                  const isFullRewrite = !tailoredResult;
                   const hasChanges = changeCount > 0;
-                  const matchedKw = tailoredEval.matchedKeywords || [];
-                  const missingKw = tailoredEval.missingKeywords || [];
+                  const matchedKw = (tailoredEval.matchedKeywords || []).map(k => displaySkillName(k, tailoredResume));
+                  const missingKw = (tailoredEval.missingKeywords || []).map(k => displaySkillName(k, tailoredResume));
                   const totalKw = matchedKw.length + missingKw.length;
 
                   return (
@@ -6039,7 +6439,11 @@ WORK EXPERIENCE
                       {/* Summary: what happened + score */}
                       <div className="flex items-start justify-between gap-6">
                         <p className="text-sm text-neutral-600 leading-relaxed max-w-xl">
-                          {hasChanges
+                          {isFullRewrite
+                            ? (tailorReviews.length > 0
+                              ? `We suggested ${tailorReviews.length} ${tailorReviews.length === 1 ? "edit" : "edits"} below. Accept the ones that are true for you, or write your own. Anything you skip stays exactly as you wrote it.`
+                              : "Your resume is ready with your ticked skills added. No other changes were suggested.")
+                            : hasChanges
                             ? `Your tailored resume is ready with ${changeCount} ${changeCount === 1 ? "change" : "changes"}. Highlighted text shows what changed. Your original resume is not modified.`
                             : "Your resume is ready. No wording changes were needed, so everything is exactly as you wrote it. The keyword check below shows what this job asks for."}
                         </p>
@@ -6092,8 +6496,141 @@ WORK EXPERIENCE
                         </div>
                       )}
 
+                      {/* Career switch note */}
+                      {tailorIsSwitching && tailorRoleCheck && (
+                        <p className="text-sm text-amber-900 bg-amber-50 rounded-lg px-3 py-2 leading-relaxed" id="career-switch-note">
+                          {isFullRewrite
+                            ? `Career switch: suggestions focus on what carries over from ${tailorRoleCheck.resumeFamily.label} to ${tailorRoleCheck.jobFamily.label}. None of them should claim you've already worked in ${tailorRoleCheck.jobFamily.label}.`
+                            : `Career switch tip: add one line to your summary about the move, for example "${tailorRoleCheck.resumeRole} moving into ${tailorRoleCheck.jobFamily.label}, with hands-on experience in …". Turn on AI mode for suggested rewrites.`}
+                        </p>
+                      )}
+
+                      {/* Suggested edits: accept, edit or skip each one */}
+                      {isFullRewrite && tailorReviews.length > 0 && (() => {
+                        const decided = tailorReviews.filter(r => r.status !== "pending").length;
+                        const used = tailorReviews.filter(r => r.status === "accepted" || r.status === "edited").length;
+                        return (
+                          <div className="space-y-3" id="suggested-edits">
+                            <div className="flex items-center justify-between gap-3 flex-wrap">
+                              <p className="text-sm font-medium text-black">
+                                Suggested edits <span className="text-neutral-400 font-normal">{decided} of {tailorReviews.length} reviewed · {used} in your resume</span>
+                              </p>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => updateEditReviews(tailorReviews.map(r => r.mentions.length === 0 && r.status === "pending" ? { ...r, status: "accepted" } : r))}
+                                  className="text-xs text-neutral-600 hover:text-black px-2 py-1 rounded-md hover:bg-neutral-100 cursor-pointer"
+                                  title="Accepts wording-only edits. Edits that add a new skill claim still need your review."
+                                >
+                                  Accept wording-only edits
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => { setEditingReviewId(null); updateEditReviews(tailorReviews.map(r => ({ ...r, status: "skipped" }))); }}
+                                  className="text-xs text-neutral-600 hover:text-black px-2 py-1 rounded-md hover:bg-neutral-100 cursor-pointer"
+                                >
+                                  Skip all
+                                </button>
+                              </div>
+                            </div>
+                            <div className="border-t border-neutral-200 divide-y divide-neutral-200">
+                              {tailorReviews.map(r => {
+                                const isEditing = editingReviewId === r.id;
+                                const inResume = r.status === "accepted" || r.status === "edited";
+                                return (
+                                  <div key={r.id} className="py-3 space-y-2" id={`review-${r.id}`}>
+                                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                                      <p className="text-xs text-neutral-500">{r.label}</p>
+                                      <span className={`text-xs ${inResume ? "text-emerald-700" : r.status === "skipped" ? "text-neutral-500" : "text-neutral-400"}`}>
+                                        {r.status === "accepted" ? "Accepted" : r.status === "edited" ? "Your version" : r.status === "skipped" ? "Kept original" : "Not reviewed"}
+                                      </span>
+                                    </div>
+                                    {r.mentions.length > 0 && (
+                                      <p className="text-xs text-amber-800 bg-amber-50 rounded-md px-2 py-1 inline-block">
+                                        Adds {r.mentions.join(" and ")} to this line. Only accept if you really used {r.mentions.length === 1 ? "it" : "them"} here.
+                                      </p>
+                                    )}
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                      <div>
+                                        <p className="text-xs text-neutral-400 mb-1">You wrote</p>
+                                        <p className={`text-sm leading-relaxed ${inResume ? "text-neutral-400" : "text-neutral-700"}`}>
+                                          {r.original || <span className="italic">Nothing here yet</span>}
+                                        </p>
+                                      </div>
+                                      <div>
+                                        <p className="text-xs text-neutral-400 mb-1">{isEditing ? "Your version" : "Suggested"}</p>
+                                        {isEditing ? (
+                                          <textarea
+                                            id={`review-text-${r.id}`}
+                                            value={r.text}
+                                            autoFocus
+                                            onFocus={(e) => { const end = e.currentTarget.value.length; e.currentTarget.setSelectionRange(end, end); }}
+                                            onChange={(e) => setTailorReviews(tailorReviews.map(x => x.id === r.id ? { ...x, text: e.target.value } : x))}
+                                            className="w-full bg-white border border-neutral-300 rounded-lg px-3 py-2 text-sm leading-relaxed focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-100 min-h-[84px]"
+                                          />
+                                        ) : (
+                                          <p className={`text-sm leading-relaxed ${r.status === "skipped" ? "text-neutral-400 line-through" : "text-black"}`}>
+                                            {r.status === "edited" ? r.text : r.suggested}
+                                          </p>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-1">
+                                      {isEditing ? (
+                                        <>
+                                          <button
+                                            type="button"
+                                            onClick={() => { setEditingReviewId(null); setReviewStatus(r.id, r.text.trim() ? "edited" : "skipped"); }}
+                                            className="px-3 py-1.5 bg-[#2563eb] hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer"
+                                          >
+                                            Save my version
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => { setEditingReviewId(null); setTailorReviews(tailorReviews.map(x => x.id === r.id ? { ...x, text: x.status === "edited" ? x.text : x.suggested } : x)); }}
+                                            className="px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-black rounded-lg hover:bg-neutral-100 transition-colors cursor-pointer"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <button
+                                            type="button"
+                                            onClick={() => setReviewStatus(r.id, "accepted")}
+                                            aria-pressed={r.status === "accepted"}
+                                            className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors cursor-pointer ${r.status === "accepted" ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "border-neutral-200 text-black hover:bg-neutral-50"}`}
+                                          >
+                                            Accept
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setEditingReviewId(r.id)}
+                                            className="px-3 py-1.5 text-sm font-medium rounded-lg border border-neutral-200 text-black hover:bg-neutral-50 transition-colors cursor-pointer"
+                                          >
+                                            Edit
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setReviewStatus(r.id, "skipped")}
+                                            aria-pressed={r.status === "skipped"}
+                                            className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors cursor-pointer ${r.status === "skipped" ? "bg-neutral-100 text-black" : "text-neutral-600 hover:text-black hover:bg-neutral-100"}`}
+                                          >
+                                            Skip
+                                          </button>
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })()}
+
                       {/* Highlight controls, only when something actually changed */}
-                      {hasChanges && (
+                      {hasChanges && !isFullRewrite && (
                         <div className="flex items-center justify-between gap-3 flex-wrap">
                           <label htmlFor="toggle-highlights-cb" className="flex items-center gap-2 text-sm text-neutral-700 cursor-pointer select-none">
                             <input
@@ -6118,7 +6655,7 @@ WORK EXPERIENCE
                       <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white w-full">
                         <div className="overflow-y-auto bg-neutral-50" style={{height: '60vh'}}>
                           <ResumePreview
-                            resume={originalResume}
+                            resume={isFullRewrite ? tailoredResume : originalResume}
                             tailored={tailoredResult || undefined}
                             templateStyle={selectedStyle}
                             id="step-3-preview-tailored"
@@ -6174,15 +6711,37 @@ WORK EXPERIENCE
                     </button>
                     <button
                       type="button"
-                      onClick={handleAnalyzeAndGenerate}
+                      onClick={handleAnalyzeJd}
                       className="px-4 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-sm rounded-lg border border-transparent transition cursor-pointer"
                     >
-                      Tailor Resume
+                      Next: choose skills
                     </button>
                   </>
                 )}
 
                 {tailorWizardStep === 3 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setTailorWizardStep(2)}
+                      className="px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg border border-neutral-200 transition cursor-pointer"
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="button"
+                      id="btn-tailor-with-skills"
+                      onClick={handleAnalyzeAndGenerate}
+                      className="px-4 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-sm rounded-lg border border-transparent transition cursor-pointer"
+                    >
+                      {tailorSelectedSkills.length > 0
+                        ? `Tailor resume with ${tailorSelectedSkills.length} new ${tailorSelectedSkills.length === 1 ? "skill" : "skills"}`
+                        : "Tailor resume"}
+                    </button>
+                  </>
+                )}
+
+                {tailorWizardStep === 4 && (
                   <>
                     <div className="flex items-center gap-1.5 text-xs text-neutral-500 font-semibold mr-auto">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5 text-emerald-500"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>

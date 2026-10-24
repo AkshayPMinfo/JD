@@ -102,6 +102,9 @@ try {
     switchRes.status === 200 && !!switchCall?.careerNote && /Associate Product Manager/.test(switchCall.prompt) && /Do NOT present them as already having worked as a Backend Software Engineer/.test(switchCall.prompt),
     `status=${switchRes.status}`);
 
+  t.check("F9", "Every tailoring request carries the honesty rules (no new numbers, skills or seniority)",
+    calls.filter(c => c.kind === "tailor").every(c => /HONESTY RULES/.test(c.prompt) && /Never add a number/.test(c.prompt) && /Never add or raise seniority/.test(c.prompt)));
+
   const before = calls.length;
   const img = await post("/api/simplify-jd", { jdImageBase64: "data:image/png;base64,iVBORw0KGgo=" });
   t.check("F6", "Screenshot JDs aren't sent to Groq (text only) and fail cleanly", img.status >= 400 && calls.length === before, `status=${img.status}`);

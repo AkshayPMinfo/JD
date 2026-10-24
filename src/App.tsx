@@ -59,8 +59,8 @@ import {
 } from "./types";
 import { resumeStructureToResume, mergeResumeWithAdditions } from "./utils/resumeConverter";
 import { detectRoleMismatch, type RoleCheck } from "./utils/roleFamily";
-import { jsPDF } from "jspdf";
-import html2canvas from "html2canvas";
+import { cleanSkillName } from "./utils/skillNames";
+import { buildResumePdf } from "./utils/resumePdf";
 import { DEMO_RESUMES, DEMO_JDS } from "./demoData";
 import ResumePreview from "./components/ResumePreview";
 import { supabaseAuth, supabaseData } from "./lib/supabase";
@@ -454,6 +454,7 @@ export default function App() {
     text: string;
     status: "pending" | "accepted" | "edited" | "skipped";
     mentions: string[];
+    warnings: string[]; // things this edit claims that the original resume never said
     target: { kind: "summary" } | { kind: "exp" | "proj"; item: number; bullet: number };
   };
   const [tailorReviews, setTailorReviews] = useState<EditReview[]>([]);
@@ -1597,7 +1598,7 @@ export default function App() {
 
   const skillKey = (name: string) => singularSkill(name.toLowerCase().replace(/\s+/g, " ").trim());
   const dedupeSkillNames = (names: string[]): string[] => {
-    const cleaned = names.map(n => String(n || "").trim()).filter(Boolean);
+    const cleaned = names.flatMap(n => cleanSkillName(String(n || "")));
     const keys = cleaned.map(skillKey);
     return cleaned.filter((name, i) => {
       const key = keys[i];
@@ -1642,14 +1643,34 @@ export default function App() {
 
   // Compare the AI rewrite with the original, line by line, and list each change for review.
   // `mentions` = ticked skills a line now claims that the original line never mentioned.
-  const buildEditReviews = (original: ResumeStructure, tailored: ResumeStructure, ticked: string[]): EditReview[] => {
+  // `warnings` = new claims the original resume never made anywhere: numbers, JD skills, seniority.
+  const buildEditReviews = (original: ResumeStructure, tailored: ResumeStructure, ticked: string[], jdSkills: string[] = []): EditReview[] => {
     const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const has = (text: string, skill: string) => new RegExp(`(^|[^a-z0-9])${esc(skill.toLowerCase())}([^a-z0-9]|$)`, "i").test(text.toLowerCase());
     const newMentions = (suggested: string, orig: string) => ticked.filter(sk => has(suggested, sk) && !has(orig, sk));
+    const originalText = [
+      original.summary, ...(original.skills || []), ...(original.certifications || []), ...(original.achievements || []),
+      ...(original.workExperience || []).flatMap(j => [j.role, j.company, j.duration, ...(j.description || [])]),
+      ...(original.projects || []).flatMap(pr => [pr.name, ...(pr.description || [])]),
+      ...(original.education || []).flatMap(e => [e.degree, e.school, e.duration, e.gpa])
+    ].filter(Boolean).join(" \n ").toLowerCase();
+    const numbersOf = (text: string) => new Set((text.match(/\d[\d,.]*/g) || []).map(n => n.replace(/,/g, "").replace(/\.$/, "")));
+    const originalNumbers = numbersOf(originalText);
+    const SENIORITY = ["senior", "lead", "principal", "staff engineer", "head of", "expert", "chief", "director"];
+    const claimWarnings = (sugg: string): string[] => {
+      const warnings: string[] = [];
+      const newNumbers = [...numbersOf(sugg)].filter(n => !originalNumbers.has(n));
+      if (newNumbers.length) warnings.push(`Adds ${newNumbers.length === 1 ? "a number" : "numbers"} not in your resume (${newNumbers.slice(0, 3).join(", ")})`);
+      const unbacked = jdSkills.filter(sk => sk && has(sugg, sk) && !has(originalText, sk) && !ticked.some(t => t.toLowerCase() === sk.toLowerCase()));
+      if (unbacked.length) warnings.push(`Claims ${unbacked.slice(0, 3).join(", ")}, which ${unbacked.length === 1 ? "isn't" : "aren't"} in your resume`);
+      const seniority = SENIORITY.filter(w => has(sugg, w) && !has(originalText, w));
+      if (seniority.length) warnings.push(`Adds "${seniority[0]}", which isn't in your titles or experience`);
+      return warnings;
+    };
     const reviews: EditReview[] = [];
     const push = (label: string, orig: string, sugg: string, target: EditReview["target"], id: string) => {
       if (!sugg.trim() || sugg.trim() === orig.trim()) return;
-      reviews.push({ id, label, original: orig, suggested: sugg.trim(), text: sugg.trim(), status: "pending", mentions: newMentions(sugg, orig), target });
+      reviews.push({ id, label, original: orig, suggested: sugg.trim(), text: sugg.trim(), status: "pending", mentions: newMentions(sugg, orig), warnings: claimWarnings(sugg), target });
     };
     push("Professional summary", original.summary || "", tailored.summary || "", { kind: "summary" }, "summary");
     (original.workExperience || []).forEach((job, i) => {
@@ -1863,7 +1884,11 @@ export default function App() {
       if (isFullRewrite) {
         const aiResume = raw.tailoredResume as ResumeStructure;
         const base = { original: selectedResume, skills: aiResume.skills || selectedResume.skills || [] };
-        const reviews = buildEditReviews(selectedResume, aiResume, tailorSelectedSkills);
+        const jdSkillNames = [
+          ...(simplifiedJd.requiredSkills || []).map((sk: any) => sk?.name || sk),
+          ...(simplifiedJd.keywordsToTarget || [])
+        ].map(n => String(n || "").trim()).filter(Boolean);
+        const reviews = buildEditReviews(selectedResume, aiResume, tailorSelectedSkills, jdSkillNames);
         setTailorReviewBase(base);
         setTailorReviews(reviews);
         setEditingReviewId(null);
@@ -2952,138 +2977,20 @@ WORK EXPERIENCE
     return rows.length ? rows : [""];
   };
 
-  const handlePrintOrSavePDF = (resume: ResumeStructure, original?: ResumeStructure, headline = "", tailored?: TailoredResume) => {
+  // Text-based, single-column PDF that ATS software can read (the old export was a screenshot image)
+  const handlePrintOrSavePDF = (resume: ResumeStructure, original?: ResumeStructure, headline = "", _tailored?: TailoredResume) => {
     try {
       logDownloadEvent("Download Started", { type: "PDF" });
-      setPrintResume(resume);
-      setPrintOriginalResume(original);
-      setPrintTailoredResult(tailored || null);
-      
-      showNotification("Generating PDF file...", "info");
-
-      // Helper function to temporarily replace oklch colors with rgb equivalent to avoid html2canvas parser crash
-      const tempConvertStyleSheets = async () => {
-        const links = Array.from(document.querySelectorAll("link[rel='stylesheet']")) as HTMLLinkElement[];
-        const styles = Array.from(document.querySelectorAll("style")) as HTMLStyleElement[];
-        
-        const originalLinkStates = links.map(l => ({ el: l, disabled: l.disabled }));
-        const originalStyleContents = styles.map(s => ({ el: s, content: s.innerHTML }));
-        
-        const tempStyleEl = document.createElement("style");
-        tempStyleEl.id = "temp-html2canvas-styles";
-        
-        // 1. Process inline styles
-        styles.forEach(s => {
-          try {
-            s.innerHTML = s.innerHTML.replace(/oklch\([^)]+\)/g, "rgb(100, 100, 100)");
-          } catch (e) {
-            // Ignore stylesheet access errors
-          }
-        });
-        
-        // 2. Fetch external styles, replace oklch, and inject
-        let mergedCss = "";
-        for (const link of links) {
-          try {
-            const res = await fetch(link.href);
-            if (res.ok) {
-              const cssText = await res.text();
-              mergedCss += cssText.replace(/oklch\([^)]+\)/g, "rgb(100, 100, 100)") + "\n";
-            }
-          } catch (e) {
-            console.warn("Could not load external stylesheet for PDF generation:", e);
-          }
-          link.disabled = true;
-        }
-        
-        tempStyleEl.innerHTML = mergedCss;
-        document.head.appendChild(tempStyleEl);
-        
-        return () => {
-          tempStyleEl.remove();
-          originalLinkStates.forEach(item => {
-            item.el.disabled = item.disabled;
-          });
-          originalStyleContents.forEach(item => {
-            try {
-              item.el.innerHTML = item.content;
-            } catch (e) {
-              // Ignore stylesheet restore errors
-            }
-          });
-        };
-      };
-
-      // Wait for React to render the print preview container into DOM
-      setTimeout(async () => {
-        try {
-          const element = document.getElementById("resume-preview-sheet-print");
-          if (!element) {
-            throw new Error("Print layout container not found in DOM");
-          }
-
-          // Clone the element to render off-screen cleanly
-          const clone = element.cloneNode(true) as HTMLElement;
-          clone.style.position = "fixed";
-          clone.style.left = "-9999px";
-          clone.style.top = "0";
-          clone.style.width = "820px"; // standard Letter/A4 page layout width for resume
-          clone.style.display = "block";
-          clone.style.background = "white";
-          clone.style.zIndex = "-9999";
-          
-          document.body.appendChild(clone);
-
-          // Force-show images or icons if any (wait 100ms for browser layout recalculation)
-          await new Promise((resolve) => setTimeout(resolve, 100));
-
-          // Run temporary stylesheet replacement to protect html2canvas from oklch crash
-          const restoreStylesheets = await tempConvertStyleSheets();
-
-          const canvas = await html2canvas(clone, {
-            scale: 2, // High DPI print resolution
-            useCORS: true,
-            logging: false,
-            backgroundColor: "#ffffff"
-          });
-
-          // Restore styles immediately
-          restoreStylesheets();
-
-          document.body.removeChild(clone);
-
-          const imgData = canvas.toDataURL("image/png");
-          const pdf = new jsPDF("p", "mm", "a4");
-          const imgWidth = 210; // A4 width in mm
-          const pageHeight = 297; // A4 height in mm
-          const imgHeight = (canvas.height * imgWidth) / canvas.width;
-          
-          let heightLeft = imgHeight;
-          let position = 0;
-
-          pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
-          heightLeft -= pageHeight;
-
-          while (heightLeft >= 0) {
-            position = heightLeft - imgHeight;
-            pdf.addPage();
-            pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
-            heightLeft -= pageHeight;
-          }
-
-          const filename = `${resume.fullName.replace(/\s+/g, "_")}_Tailored_Resume.pdf`;
-          pdf.save(filename);
-
-          logDownloadEvent("Download Completed", { type: "PDF" });
-          showNotification("PDF downloaded successfully.", "success");
-        } catch (genError: any) {
-          console.error("PDF canvas generation failed:", genError);
-          showNotification("Failed to generate PDF file.", "error");
-        }
-      }, 300);
+      const exportResume = prepareResumeForDownload(resume, original);
+      if (!exportResume) return;
+      const doc = buildResumePdf(exportResume, headline);
+      const safeName = (exportResume.fullName || "Resume").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_") || "Resume";
+      doc.save(`${safeName}_Resume.pdf`);
+      logDownloadEvent("Download Completed", { type: "PDF" });
+      showNotification("PDF downloaded.", "success");
     } catch (error: any) {
-      console.error("PDF Print failed:", error);
-      showNotification("Failed to generate PDF.", "error");
+      console.error("PDF generation failed:", error);
+      showNotification("Couldn't create the PDF. Try the Word download instead.", "error");
     }
   };
 
@@ -6518,9 +6425,9 @@ WORK EXPERIENCE
                               <div className="flex items-center gap-1">
                                 <button
                                   type="button"
-                                  onClick={() => updateEditReviews(tailorReviews.map(r => r.mentions.length === 0 && r.status === "pending" ? { ...r, status: "accepted" } : r))}
+                                  onClick={() => updateEditReviews(tailorReviews.map(r => r.mentions.length === 0 && r.warnings.length === 0 && r.status === "pending" ? { ...r, status: "accepted" } : r))}
                                   className="text-xs text-neutral-600 hover:text-black px-2 py-1 rounded-md hover:bg-neutral-100 cursor-pointer"
-                                  title="Accepts wording-only edits. Edits that add a new skill claim still need your review."
+                                  title="Accepts edits that only change wording. Edits that add a skill, number or seniority still need your review."
                                 >
                                   Accept wording-only edits
                                 </button>
@@ -6545,6 +6452,11 @@ WORK EXPERIENCE
                                         {r.status === "accepted" ? "Accepted" : r.status === "edited" ? "Your version" : r.status === "skipped" ? "Kept original" : "Not reviewed"}
                                       </span>
                                     </div>
+                                    {r.warnings.length > 0 && (
+                                      <ul className="text-xs text-amber-800 bg-amber-50 rounded-md px-2 py-1 space-y-0.5" aria-label="New claims in this edit">
+                                        {r.warnings.map(w => <li key={w}>{w}. Only accept if it's true.</li>)}
+                                      </ul>
+                                    )}
                                     {r.mentions.length > 0 && (
                                       <p className="text-xs text-amber-800 bg-amber-50 rounded-md px-2 py-1 inline-block">
                                         Adds {r.mentions.join(" and ")} to this line. Only accept if you really used {r.mentions.length === 1 ? "it" : "them"} here.

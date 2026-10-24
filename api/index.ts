@@ -488,6 +488,18 @@ function heuristicResumeValidation(cleanText: string, fileName: string, original
     };
   }
 
+  // AI is unavailable (rate limit, outage): use the same rules parser as rules mode, which reads
+  // jobs, education and skills far better than the old line-by-line guesswork below.
+  const rulesResult = rulesBasedParseResume(cleanText, fileName);
+  if (rulesResult?.detectedProfile) {
+    return {
+      ...rulesResult,
+      isResume: true,
+      confidenceScore: Math.min(rulesResult.confidenceScore ?? 80, 80),
+      reason: "Parsed with the built-in parser because the AI service was unavailable."
+    };
+  }
+
   // Extract what we can heuristically using a robust rules-based parser
   const lines = cleanText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
   
@@ -715,7 +727,11 @@ function sanitizeResumeTextFields(resume: any): any {
         if (Array.isArray(description)) {
           description = description
             .filter((bullet: any) => typeof bullet === "string" && !shouldStrip(bullet))
-            .map((bullet: string) => bullet.replace(/\b(Experience Record|Candidate Profile|Timeline|Professional Skills)\b/gi, "").trim());
+            .map((bullet: string) => bullet
+              .replace(/\b(Experience Record|Candidate Profile|Timeline|Professional Skills)\b/gi, "")
+              .replace(/^\s*[•●▪◦‣∙·\-–—*]+\s*/, "") // bullet symbols copied from the file belong to the layout, not the text
+              .trim())
+            .filter((bullet: string) => bullet.length > 0);
         }
         return { ...exp, role, company, duration, description };
       })
@@ -733,7 +749,11 @@ function sanitizeResumeTextFields(resume: any): any {
         if (Array.isArray(description)) {
           description = description
             .filter((bullet: any) => typeof bullet === "string" && !shouldStrip(bullet))
-            .map((bullet: string) => bullet.replace(/\b(Experience Record|Candidate Profile|Timeline|Professional Skills)\b/gi, "").trim());
+            .map((bullet: string) => bullet
+              .replace(/\b(Experience Record|Candidate Profile|Timeline|Professional Skills)\b/gi, "")
+              .replace(/^\s*[•●▪◦‣∙·\-–—*]+\s*/, "") // bullet symbols copied from the file belong to the layout, not the text
+              .trim())
+            .filter((bullet: string) => bullet.length > 0);
         }
         return { ...proj, name, duration, description };
       })
@@ -981,6 +1001,7 @@ Rules:
 1. If the screenshot(s) do NOT represent a valid Job Description, set "isValidJd" to false, explain why in "invalidReason", and return empty values for other fields.
 2. If the screenshot(s) represent a valid Job Description, set "isValidJd" to true, "invalidReason" to "", and proceed to simplify and parse the JD.
 3. Strip away corporate jargon and explain clearly what they are looking for in plain language, key high-priority skills, core responsibilities, and target automated keyword search words.
+4. Skill and keyword names must be short, standard names of 1-3 words, exactly as a recruiter would search for them (e.g. "Tableau", "A/B Testing", "Stakeholder Management"). No parentheses, no "or similar", no "familiarity with", no "experience in". If the JD offers alternatives ("Mixpanel or Amplitude"), list each one as its own skill. Never list the job title as a skill.
 
 Format your response strictly as JSON with this schema:
 {
@@ -1021,6 +1042,7 @@ Rules:
 1. If the text is NOT a valid Job Description, set "isValidJd" to false, explain why in "invalidReason", and return empty/blank values for other fields.
 2. If the text is a valid Job Description, set "isValidJd" to true, "invalidReason" to "", and proceed to simplify and parse the JD.
 3. Strip away corporate jargon and explain clearly what they are looking for in plain language, key high-priority skills, core responsibilities, and target automated keyword search words.
+4. Skill and keyword names must be short, standard names of 1-3 words, exactly as a recruiter would search for them (e.g. "Tableau", "A/B Testing", "Stakeholder Management"). No parentheses, no "or similar", no "familiarity with", no "experience in". If the JD offers alternatives ("Mixpanel or Amplitude"), list each one as its own skill. Never list the job title as a skill.
 
 Job Description:
 """
@@ -1224,7 +1246,14 @@ app.post("/api/tailor-resume", async (req, res) => {
 - Rewrite the summary to state the move honestly, e.g. "${careerSwitch.fromRole} moving into ${careerSwitch.toField}, bringing ...", and lead with transferable strengths relevant to the target role.
 - In bullet points, bring forward the parts of their real work that matter for the target role (for example working with engineers, technical requirements, data, automation, stakeholders), without inventing tools, projects, employers, numbers or results.`
       : "";
-    const prompt = `You are a veteran HR Consultant and senior Resume Writer. Your task is to review the Candidate's Resume and tailor it to better align with the requirements in the Job Description, preserving factual honesty but boosting keyword matching, professional tone, and clarity.${confirmedSkillsNote}${careerSwitchNote}
+    // Always on: the candidate reviews every edit, but the model shouldn't invent claims in the first place
+    const honestyRules = `\n\nHONESTY RULES (strict, these override everything below):
+- Never add a number, percentage, metric, uptime, team size, user count, revenue figure or years of experience that is not already written somewhere in the original resume.
+- Never add a tool, method or skill (for example "A/B testing", "Docker", "design systems") to a bullet unless that bullet's original text already describes it, or it is one of the CONFIRMED SKILLS and fits that bullet.
+- Never add or raise seniority: do not add words like "Senior", "Lead", "Principal", "Expert" or "Head of" unless the original job title already contains them, and never describe the candidate using the target job's title.
+- Only state years of experience if the original summary already states them, and use exactly that figure.
+- Rewrite each bullet to say the same thing more clearly and with the job description's wording. Keep every original number exactly as written.`;
+    const prompt = `You are a veteran HR Consultant and senior Resume Writer. Your task is to review the Candidate's Resume and tailor it to better align with the requirements in the Job Description, preserving factual honesty but boosting keyword matching, professional tone, and clarity.${honestyRules}${confirmedSkillsNote}${careerSwitchNote}
 
 Candidate's Original Resume:
 ${JSON.stringify(sourceResume, null, 2)}

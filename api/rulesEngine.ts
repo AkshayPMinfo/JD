@@ -1,19 +1,53 @@
 import { Block } from '../src/types';
 
-// Predefined dictionary of popular technical, business, and soft skills
-const SKILL_DICTIONARY = [
-  // Programming Languages
-  "javascript", "typescript", "python", "java", "c++", "c#", "ruby", "go", "rust", "php", "swift", "kotlin", "scala", "r", "sql", "html", "css", "sass", "shell", "bash", ".net",
+// Skills the rules engine can recognise in a job description.
+// Each entry: canonical display name first, then other ways it's written. An alias starting with "="
+// is matched case-sensitively (e.g. "Go" the language, not "go" the verb). A display name starting with "!"
+// is too generic to match on its own ("Growth", "Testing") and is found only through its aliases.
+const SKILL_CATALOG: string[][] = [
+  // Programming languages
+  ["JavaScript", "js"], ["TypeScript"], ["Python"], ["Java"], ["C++"], ["C#"], ["Ruby"], ["Go", "=Go", "golang"], ["Rust"], ["PHP"],
+  ["Swift"], ["Kotlin"], ["Scala"], ["SQL"], ["HTML"], ["CSS"], ["Sass"], ["Bash", "shell scripting"], [".NET", "dotnet"],
   // Frontend
-  "react", "next.js", "nextjs", "vue", "angular", "svelte", "nuxt", "gatsby", "tailwind", "bootstrap", "mui", "material-ui", "webpack", "vite", "redux", "recoil", "mobx",
-  // Backend & Databases
-  "node.js", "nodejs", "express", "nest.js", "nestjs", "django", "flask", "fastapi", "spring boot", "rails", "postgres", "postgresql", "mysql", "mongodb", "redis", "sqlite", "cassandra", "dynamodb", "prisma", "sequelize", "mongoose",
-  // Cloud & DevOps
-  "aws", "amazon web services", "gcp", "google cloud", "azure", "docker", "kubernetes", "ci/cd", "github actions", "jenkins", "terraform", "vercel", "netlify", "heroku", "nginx", "linux",
-  // Product, Project & Design
-  "product management", "project management", "agile", "scrum", "kanban", "jira", "confluence", "figma", "sketch", "adobe xd", "photoshop", "illustrator", "wireframing", "prototyping", "user research", "competitor analysis", "product roadmap", "backlog grooming", "prds", "user stories", "ab testing", "mixpanel", "amplitude", "google analytics",
-  // General & Business
-  "data analysis", "tableau", "power bi", "excel", "powerpoint", "strategic planning", "stakeholder management", "communication", "team leadership", "problem solving", "critical thinking", "customer support", "sales", "marketing", "seo", "growth hacking", "copywriting"
+  ["React", "react.js", "reactjs"], ["Next.js", "nextjs"], ["Vue", "vue.js"], ["Angular"], ["Svelte"], ["Tailwind CSS", "tailwind"],
+  ["Redux"], ["Webpack"], ["Vite"], ["Storybook"], ["Jest"], ["Cypress"], ["Playwright"], ["!Automated Testing", "automated tests", "unit testing", "unit tests", "test automation", "writing tests", "write tests"],
+  ["Accessibility", "a11y", "wcag"], ["Design Systems", "design system", "component library"], ["!Web Performance", "web performance", "performance optimization", "page performance", "load and interaction performance"],
+  // Backend, data stores, platforms
+  ["Node.js", "nodejs", "node"], ["Express", "express.js"], ["NestJS", "nest.js"], ["Django"], ["Flask"], ["FastAPI"], ["Spring Boot", "spring"],
+  ["REST APIs", "rest api", "restful apis", "restful api"], ["GraphQL"], ["Microservices", "microservice"], ["Distributed Systems", "distributed system"],
+  ["System Design"], ["PostgreSQL", "postgres"], ["MySQL"], ["MongoDB"], ["Redis"], ["DynamoDB"], ["Cassandra"], ["Elasticsearch"],
+  ["Kafka", "apache kafka"], ["RabbitMQ"], ["BigQuery"], ["Snowflake"], ["Spark", "apache spark"],
+  // Cloud and DevOps
+  ["AWS", "amazon web services"], ["GCP", "google cloud"], ["Azure"], ["Docker"], ["Kubernetes", "k8s"], ["CI/CD", "ci/cd pipelines", "continuous integration"],
+  ["Terraform"], ["Jenkins"], ["GitHub Actions"], ["Git"], ["Linux"],
+  // Data and analytics
+  ["Excel", "microsoft excel", "advanced excel"], ["Tableau"], ["Power BI", "powerbi"], ["Looker"], ["pandas"], ["Statistics", "statistical"],
+  ["A/B Testing", "a/b tests", "ab testing", "split testing"], ["Experimentation", "experiments"], ["Data Modeling", "data modelling"],
+  ["Data Analysis", "data analytics"], ["Machine Learning"], ["Dashboards", "dashboard"],
+  // Product
+  ["Product Roadmap", "owning a roadmap", "own the roadmap", "roadmap planning"], ["User Research", "customer interviews"], ["PRDs", "prd", "product requirements"], ["B2B SaaS", "b2b saas"], ["SaaS"],
+  ["Agile", "scrum", "sprints"], ["Jira"], ["Mixpanel"], ["Amplitude"], ["!Growth", "growth goals", "growth metrics", "growth marketing", "activation and retention"], ["Product Management"],
+  // Design
+  ["Figma"], ["Adobe XD"], ["Sketch"], ["Prototyping", "prototypes"], ["Wireframing", "wireframes"], ["Usability Testing", "usability tests"],
+  ["Interaction Design"], ["Visual Design"], ["Design Thinking"],
+  // Marketing
+  ["Google Ads"], ["Meta Ads", "facebook ads"], ["SEO"], ["SEM"], ["Email Marketing", "lifecycle email", "email campaigns"],
+  ["Content Marketing", "content calendar"], ["Social Media Marketing", "social media"], ["Google Analytics"], ["HubSpot"],
+  ["Performance Marketing"], ["ROAS"], ["CAC"], ["Budget Management", "large monthly budgets", "marketing budget"], ["Brand Marketing"],
+  // Sales
+  ["B2B Sales"], ["Inside Sales"], ["Lead Generation"], ["Cold Calling", "cold calls"], ["Salesforce"], ["CRM"], ["Pipeline Management", "managing a pipeline"],
+  ["Negotiation"], ["Quota", "quota attainment", "sales targets"], ["Account Management"], ["Product Demos", "product demo", "demos"],
+  // HR and recruiting
+  ["Technical Recruiting", "technical recruiter", "tech recruiting"], ["Sourcing"], ["Greenhouse"], ["LinkedIn Recruiter"], ["Employer Branding"],
+  ["Employee Relations"], ["Performance Management", "performance review"], ["HR Policies", "hr policy"], ["Onboarding"], ["Talent Acquisition"],
+  ["Campus Hiring"],
+  // Finance and accounting
+  ["Financial Modeling", "financial modelling"], ["Budgeting", "annual budget"], ["Forecasting", "forecasts"], ["Variance Analysis", "variances"],
+  ["Ind AS"], ["IFRS"], ["GAAP"], ["Audit", "audits", "auditing"], ["Internal Controls"], ["SAP", "=SAP"], ["Tally"], ["Taxation"],
+  // People and ways of working
+  ["Stakeholder Management", "stakeholders"], ["Team Leadership", "leading a small team", "lead a team", "team management", "managing or mentoring a team"],
+  ["Mentoring", "mentor engineers", "mentor senior engineers", "mentoring"], ["Communication", "communication skills"], ["Problem Solving"],
+  ["Project Management"], ["Customer Support"]
 ];
 
 function escapeRegExp(str: string): string {
@@ -124,10 +158,10 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
   }
 
   const sectionHeaders: Record<string, RegExp> = {
-    experience: /^(experience|work history|employment|career|professional experience|work record|work experience|experience record)$/i,
-    education: /^(education|academic|academic profile|education background|academic record|education & credentials|education & certifications)$/i,
-    projects: /^(projects|personal projects|academic projects|key projects|repositories|portfolio|selected projects)$/i,
-    skills: /^(skills|technical skills|technologies|tools|competencies|expertise|core competencies|core skills|skills & expertise)$/i,
+    experience: /^(experience|work history|employment|employment history|career|career history|professional experience|work record|work experience|experience record|relevant experience|internships?|internship experience|work and internships?|experience and internships?)$/i,
+    education: /^(education|academic|academics|academic profile|academic background|education background|educational background|academic record|education and credentials|education and certifications|education and training|qualifications|academic qualifications|educational qualifications)$/i,
+    projects: /^(projects|personal projects|academic projects|key projects|repositories|portfolio|selected projects|side projects)$/i,
+    skills: /^(skills|key skills|technical skills|technologies|tools|competencies|expertise|areas of expertise|core competencies|core skills|skills and expertise|tools and skills|skills and tools|tools and technologies|technical skills and tools|skill set|skillset)$/i,
     certifications: /^(certifications?|licenses?|credentials?)$/i,
     languages: /^(languages)$/i,
     achievements: /^(achievements|awards|honors|extracurriculars|key achievements)$/i,
@@ -138,7 +172,7 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
 
   const singleDate = /(?:(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)[a-z]*\.?[\s,]*\d{4}|\d{1,2}\/\d{4}|\b\d{4}\b)/i;
   const dateRegex = new RegExp(`(${singleDate.source})\\s*[-–—]\\s*(${singleDate.source}|present|current|active)`, 'i');
-  const jobKeywords = /\b(manager|engineer|developer|intern|lead|analyst|coordinator|specialist|host|service|worker|head|founder|ceo|pm|consultant|director|writer|designer|assistant|strategist|representative|executive|supervisor|officer|president)\b/i;
+  const jobKeywords = /\b(manager|engineer|developer|intern|lead|analyst|coordinator|specialist|host|service|worker|head|founder|ceo|pm|consultant|director|writer|designer|assistant|strategist|representative|executive|supervisor|officer|president|associate|recruiter|accountant|auditor|nurse|teacher|marketer|scientist|architect|administrator|advisor|counsel+or|trainee|apprentice|programmer|sde|partner|owner|tester)\b/i;
   const actionVerbs = /^(collaborated|conducted|managed|coordinated|developed|created|executed|leveraged|designed|analyzed|implemented|spearheaded|built|partnered|authored|facilitated|mapped|drafted|assisted|led|oversaw|supported|maintained|delivered|drove|launched|established|improved|streamlined|optimized|generated|achieved)/i;
 
   // ── SECTION DETECTION PASS ──────────────────────────────────────────────────
@@ -149,8 +183,10 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
     const clean = normalized.replace(/^[-*•●▪o▪]\s*/, '').trim();
     let sectionLabel: string | null = null;
     if (clean.length < 50) {
+      // "Tools & Skills:" and "Tools and Skills" are the same heading
+      const headingKey = clean.replace(/&/g, " and ").replace(/:\s*$/, "").replace(/\s+/g, " ").trim();
       for (const [sec, rx] of Object.entries(sectionHeaders)) {
-        if (rx.test(clean) && !clean.includes(':') && !clean.includes('|')) {
+        if (rx.test(headingKey) && !headingKey.includes(':') && !clean.includes('|')) {
           sectionLabel = sec;
           break;
         }
@@ -173,8 +209,8 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
   const achievements: string[] = [];
   let summary = '';
 
-  const schoolKeywords = /\b(college|university|school|institute|academy|high school)\b/i;
-  const degreeKeywords = /\b(bachelor'?s?|master'?s?|ph\.?\s?d\.?|doctorate|b\.a\.|m\.a\.|b\.?s\.?c?|m\.?s\.?c?|b\.?\s?tech|m\.?\s?tech|b\.e\.?|m\.e\.?|b\.?com|m\.?com|mba|bba|bca|mca|degree|diploma|associates?|associate's|10th|12th|hsc|ssc|metric|matriculation|intermediate)(?![a-z])/i;
+  const schoolKeywords = /\b(college|university|school|institute|academy|high school|iit|iim|nit|iiit|bits|jntu|icai|icsi|isb|xlri|nift|nid|polytechnic)\b/i;
+  const degreeKeywords = /\b(bachelor'?s?|master'?s?|ph\.?\s?d\.?|doctorate|b\.a\.|m\.a\.|b\.?s\.?c?|m\.?s\.?c?|b\.?\s?tech|m\.?\s?tech|b\.e\.?|m\.e\.?|b\.?com|m\.?com|mba|bba|bca|mca|pgdm|b\.?\s?des|m\.?\s?des|llb|llm|mbbs|b\.?\s?pharm|chartered accountant|cfa|cpa|acca|degree|diploma|associates?|associate's|10th|12th|hsc|ssc|metric|matriculation|intermediate)(?![a-z])/i;
 
   // Splits an education line into its text, a date/year range, and a GPA value.
   // "National Institute of Technology Trichy | 2016 - 2020 | CGPA 8.6"
@@ -295,6 +331,17 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
           }
         }
 
+        // "Frontend Developer, Brightline Health - Remote": title, company, then an optional location
+        if (!company && role.includes(',')) {
+          const withoutLocation = role.replace(/\s+-\s+[^,]{2,40}$/, '').trim();
+          const [first, ...rest] = withoutLocation.split(/,\s*/);
+          const restText = rest.join(', ').trim();
+          if (restText && jobKeywords.test(first) && !jobKeywords.test(restText)) {
+            role = first.trim();
+            company = restText;
+          }
+        }
+
         // If company was embedded in role with a separator (e.g. "TFI Fridays – Host")
         if (company === '' && role.includes('–') || company === '' && role.includes(' - ')) {
           const parts = role.split(/\s*[-–—]\s*/).map(s => s.trim()).filter(Boolean);
@@ -393,7 +440,9 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
       if (next && !next.section && !next.isBullet && next.clean.length < 120) {
         const nextParsed = pullEduDateAndGpa(next.clean);
         const nextFirst = nextParsed.text.split(/\s*[|,\t]\s*/)[0]?.trim() || '';
-        const takeSchool = !school && degree && schoolKeywords.test(nextParsed.text) && !degreeKeywords.test(nextParsed.text);
+        // "School | 2016 - 2020" right under a degree is the school, even without "University" in its name
+        const takeSchool = !school && degree && !degreeKeywords.test(nextParsed.text) && nextFirst.length > 1 &&
+          (schoolKeywords.test(nextParsed.text) || !!nextParsed.duration);
         const takeDegree = !degree && school && degreeKeywords.test(nextParsed.text) && !schoolKeywords.test(nextParsed.text);
         const takeDateOnly = !duration && !nextParsed.text && nextParsed.duration;
         if (takeSchool || takeDegree || takeDateOnly) {
@@ -626,91 +675,153 @@ export function rulesBasedParseResume(extractedText: string, fileName: string) {
 /**
  * Deterministic Rules-Based Parser for Job Descriptions
  */
-export function rulesBasedSimplifyJd(jdText: string) {
-  const cleanText = jdText.toLowerCase();
-  
-  // Extract Job Title
-  let jobTitle = "Tailored Position";
-  const commonTitles = [
-    "software engineer", "frontend developer", "backend developer", "fullstack developer",
-    "web developer", "product manager", "project manager", "data scientist", "data analyst",
-    "qa engineer", "system administrator", "devops engineer", "ui/ux designer",
-    "associate product manager", "product owner", "business analyst", "software developer"
-  ];
-  for (const title of commonTitles) {
-    if (cleanText.includes(title)) {
-      jobTitle = title.split(" ").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-      break;
-    }
+const TITLE_WORDS = /\b(engineer|developer|manager|analyst|designer|scientist|architect|lead|director|head|specialist|executive|associate|consultant|recruiter|partner|accountant|auditor|marketer|officer|coordinator|administrator|intern|nurse|teacher|writer|strategist|representative|programmer|tester)\b/i;
+
+function findJobTitle(jdText: string): string {
+  const lines = jdText.split(/\n/).map(l => l.trim()).filter(Boolean);
+  // 1. The first line of a posting is usually the title: "Senior Backend Engineer - Swiggy (Bengaluru)"
+  if (lines.length) {
+    const first = lines[0]
+      .replace(/\([^)]*\)/g, " ")
+      .split(/\s+[-–—|]\s+|\s+at\s+|:\s/i)[0]
+      .replace(/^(job title|role|position)\s*[:-]?\s*/i, "")
+      .replace(/\s+/g, " ").trim();
+    if (first && first.length <= 60 && first.split(" ").length <= 8 && TITLE_WORDS.test(first)) return first;
   }
+  // 2. "We are hiring a Senior Backend Engineer", "looking for a Data Analyst to ..."
+  const m = jdText.match(/\b(?:hiring|looking for|seeking|searching for)\s+(?:an?|our next|a talented|an experienced)?\s*([A-Z][\w/&+.-]*(?:\s+[A-Z&][\w/&+.-]*){0,5})/);
+  if (m && TITLE_WORDS.test(m[1])) return m[1].trim();
+  return "Tailored Position";
+}
 
-  // Match skills against dictionary
-  const matchedSkills: string[] = [];
-  for (const skill of SKILL_DICTIONARY) {
-    const escaped = escapeRegExp(skill);
-    const regex = new RegExp(`(?:^|[^a-zA-Z0-9#+.-])${escaped}(?:$|[^a-zA-Z0-9#+.-])`, "i");
-    if (regex.test(jdText)) {
-      matchedSkills.push(skill);
-    }
-  }
-
-  // Determine required (high priority) vs preferred (medium priority)
-  const requiredSkills: { name: string; priority: "high" | "medium" }[] = [];
-  const highPriorityKeywords = /\b(must|required|essential|minimum|need|expert|strong knowledge|experience with)\b/i;
-  const sentences = jdText.split(/[.!?\n]/).map(s => s.trim()).filter(s => s.length > 0);
-
-  for (const skill of matchedSkills) {
-    let isHigh = false;
-    for (const sent of sentences) {
-      const escaped = escapeRegExp(skill);
-      if (new RegExp(`(?:^|[^a-zA-Z0-9#+.-])${escaped}(?:$|[^a-zA-Z0-9#+.-])`, "i").test(sent) && highPriorityKeywords.test(sent)) {
-        isHigh = true;
-        break;
+function findSkills(jdText: string): string[] {
+  const found: string[] = [];
+  for (const [rawCanonical, ...aliases] of SKILL_CATALOG) {
+    const generic = rawCanonical.startsWith("!");
+    const canonical = generic ? rawCanonical.slice(1) : rawCanonical;
+    const names = generic ? aliases : [canonical, ...aliases];
+    const hit = names.some(name => {
+      if (name.startsWith("=")) {
+        return new RegExp(`(?:^|[^A-Za-z0-9#+.-])${escapeRegExp(name.slice(1))}(?:$|[^A-Za-z0-9#+-])`).test(jdText);
       }
-    }
-    const displayName = skill.split(" ").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
-    requiredSkills.push({
-      name: displayName,
-      priority: isHigh ? "high" : "medium"
+      if (canonical === "Go") return false; // only the case-sensitive alias counts for Go
+      return new RegExp(`(?:^|[^a-zA-Z0-9#+.-])${escapeRegExp(name)}(?:$|[^a-zA-Z0-9#+-])`, "i").test(jdText);
     });
+    if (hit && !found.includes(canonical)) found.push(canonical);
   }
+  // Prefer specific skills over their generic parent ("B2B SaaS" over "SaaS", "Inside Sales" stays separate)
+  return found.filter(s => !(s === "SaaS" && found.includes("B2B SaaS")));
+}
 
-  if (requiredSkills.length === 0) {
-    requiredSkills.push({ name: "Communication", priority: "high" });
-    requiredSkills.push({ name: "Problem Solving", priority: "high" });
-  }
+// Words that are capitalised in postings but aren't skills
+const NOT_SKILLS = new Set(("requirements responsibilities requirement responsibility experience we you our the this that these those help own keep join " +
+  "build write work familiarity monitoring strong nice plus about role position team company years year remote hybrid onsite on-site india " +
+  "bengaluru bangalore mumbai pune chennai hyderabad delhi gurugram gurgaon noida kolkata ahmedabad san francisco new york london us usa " +
+  "uk ideally preferred required must bsc msc btech mba degree bachelor master a an and or of in with for to on at by is are be will " +
+  "if as from your their they it its play store app apps product products customers customer users user people million " +
+  "ui pm ca tools tool similar standards targets building using working shipping").split(" "));
 
-  // Key responsibilities extraction
-  const keyResponsibilities: string[] = [];
-  const actionVerbs = /^(build|design|manage|coordinate|develop|maintain|lead|collaborate|support|implement|write|test|create|drive|oversee|ensure|work|partner)/i;
+// Second pass for skills the catalog doesn't know: names like "Firebase", "Zendesk", "BLS", and
+// phrases after "experience with", "skills in", "knowledge of" in requirement sentences.
+function findExtraSkills(jdText: string, known: string[], title: string, company: string): string[] {
+  const knownKeys = new Set(known.map(k => k.toLowerCase()));
+  const skipWords = new Set([...title.toLowerCase().split(/\s+/), ...company.toLowerCase().split(/\s+/)].filter(Boolean));
+  const out: string[] = [];
+  const knownWords = new Set(known.flatMap(k => k.toLowerCase().split(/\s+/)));
+  const add = (raw: string) => {
+    const name = raw
+      .replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim()
+      .replace(/^(the|a|an|strong|solid|good|deep|basic|working|advanced|hands-on|modern|similar|maintaining|ideally( with)?|comfort(able)?( with| writing)?|experience( with| building| in)?)\s+/i, "")
+      .replace(/\s+(skills?|targets?|standards?|tools?|experience)$/i, "")
+      .replace(/[\s,.;:]+$/, "").replace(/\s+/g, " ").trim();
+    const key = name.toLowerCase();
+    // a single word that's part of a skill we already have ("Power" from "Power BI", "Ind" from "Ind AS")
+    if (!key.includes(" ") && knownWords.has(key)) return;
+    if (!name || name.length < 2 || name.length > 32 || name.split(/\s+/).length > 3) return;
+    if (knownKeys.has(key) || out.some(o => o.toLowerCase() === key)) return;
+    if (key.split(/\s+/).every(w => NOT_SKILLS.has(w) || skipWords.has(w))) return;
+    if (/\d/.test(name) && !/^[A-Z0-9.+#-]+$/.test(name)) return; // "3+ years" etc.
+    out.push(name.charAt(0).toUpperCase() + name.slice(1));
+  };
+  const lines = jdText.split(/\n/).slice(1).join("\n"); // skip the title line
+  const sentences = lines.split(/[.!?\n;]/).map(x => x.trim()).filter(Boolean);
+  const isRequirement = (sent: string) => /\b(requirements?|experience|skills?|knowledge|familiar|proficien|hands-on|certif|must|plus|preferred|expected|tools? like|such as|with)\b/i.test(sent);
   for (const sent of sentences) {
-    if (actionVerbs.test(sent) && sent.length > 20 && sent.length < 150) {
-      keyResponsibilities.push(sent);
+    if (!isRequirement(sent)) continue;
+    // Phrases: "experience with demand forecasting and inventory management", "skills in patient care and medication administration"
+    const phrase = sent.match(/\b(?:experience (?:with|in|building)|skills? in|knowledge of|expertise in|familiarity with|background in|tools like|such as|hands-on with)\s+([^.;]+)/i);
+    if (phrase) {
+      phrase[1].split(/,|\band\b|\bor\b/).map(x => x.trim()).filter(x => x && x.split(/\s+/).length <= 3 && !/\b(is|are|a|plus|preferred|expected|years?)\b/i.test(x)).forEach(add);
+    }
+    // "strong copywriting and editing skills"
+    const pre = sent.match(/\bstrong\s+([a-z][a-z\s-]{2,40}?)\s+skills\b/i);
+    if (pre) pre[1].split(/\band\b|,/).map(x => x.trim()).forEach(add);
+    // Names and acronyms that aren't the first word of the sentence: Firebase, WordPress, BLS, ACLS, MVVM
+    const tokens = sent.match(/(?<=\s)(?:[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+|[A-Z]{2,6}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})(?=[\s,)]|$)/g) || [];
+    tokens.forEach(add);
+  }
+  return out.slice(0, 8);
+}
+
+function looksLikeJobDescription(jdText: string): boolean {
+  const words = jdText.trim().split(/\s+/).filter(Boolean);
+  if (words.length < 15) return false;
+  const signals = [/\b(requirements?|qualifications?|must have|nice to have)\b/i, /\b(responsibilit(y|ies)|you will|you'll|duties)\b/i,
+    /\b(experience|years|skills?|certification|registration|degree)\b/i, /\b(role|position|hiring|join|team|need|needs|looking for|seeking|wanted)\b/i];
+  return signals.filter(rx => rx.test(jdText)).length >= 2;
+}
+
+export function rulesBasedSimplifyJd(jdText: string) {
+  const isValidJd = looksLikeJobDescription(jdText);
+  const jobTitle = findJobTitle(jdText);
+  // Skills are read even from short text: tailoring re-reads a one-line JD summary ("Role: ... Keywords: ...")
+  const catalogSkills = findSkills(jdText);
+  const firstLineCompany = (jdText.split("\n")[0].match(/\s[-–—|]\s+([A-Z][\w&.' ]{1,40}?)(?:\s*[,(]|$)/) || [])[1] || "";
+  const isSummaryText = /^Role:/m.test(jdText) && /^Keywords:/m.test(jdText);
+  // The general finder runs on any real posting text; validity only decides the "not a JD" warning
+  const matchedSkills = isSummaryText
+    ? catalogSkills
+    : [...catalogSkills, ...findExtraSkills(jdText, catalogSkills, jobTitle, firstLineCompany)];
+
+  // High priority when mentioned in a "requirements / must / strong" sentence
+  const highPriorityKeywords = /\b(must|required|requirements?|essential|minimum|need|expert|strong|deep|hands-on|experience with|proficient)\b/i;
+  const sentences = jdText.split(/[.!?\n;]/).map(s => s.trim()).filter(s => s.length > 0);
+  const mentions = (sent: string, skill: string) =>
+    new RegExp(`(?:^|[^a-zA-Z0-9#+.-])${escapeRegExp(skill)}(?:$|[^a-zA-Z0-9#+-])`, "i").test(sent);
+  const requiredSkills: { name: string; priority: "high" | "medium" }[] = matchedSkills.map(name => ({
+    name,
+    priority: sentences.some(sent => mentions(sent, name) && highPriorityKeywords.test(sent)) ? "high" : "medium"
+  }));
+
+  // Responsibilities: sentences after "Responsibilities:", or that start with an action verb
+  const actionVerbs = /^(build|design|manage|coordinate|develop|maintain|lead|collaborate|support|implement|write|test|create|drive|oversee|ensure|work|partner|own|plan|run|improve|deliver|ship|define|review|analy[sz]e|present|hire|coach|track|set|scale|sell|close|audit|prepare|explain|supervise|communicate|gather|hand off|answer|automate|use)\b/i;
+  const keyResponsibilities: string[] = [];
+  const respBlock = jdText.match(/responsibilities\s*[:-]\s*([\s\S]*?)(?:\n\s*\n|requirements\s*:|qualifications\s*:|nice to have\s*:|$)/i);
+  const candidates = respBlock
+    ? respBlock[1].split(/[.;\n]|,\s*(?=and\s)|\band\s(?=[a-z]+\s)/).map(x => x.replace(/^[\s,•*-]+|[\s,]+$/g, ""))
+    : sentences;
+  for (const c of candidates) {
+    const clean = c.replace(/^(and|also)\s+/i, "").trim();
+    if (clean.length > 12 && clean.length < 160 && actionVerbs.test(clean) && !keyResponsibilities.includes(clean)) {
+      keyResponsibilities.push(clean.charAt(0).toUpperCase() + clean.slice(1));
     }
   }
-  if (keyResponsibilities.length === 0) {
-    keyResponsibilities.push("Collaborate with cross-functional teams to deliver key product features.");
-    keyResponsibilities.push("Assist in definition and scoping of product requirements.");
-  }
 
-  // Keywords to target
-  const keywordsToTarget = requiredSkills.map(s => s.name).slice(0, 8);
+  const companyMatch = jdText.split("\n")[0].match(/\s[-–—|]\s+([A-Z][\w&.' ]{1,40}?)(?:\s*\(|$)/);
+  const company = companyMatch ? companyMatch[1].trim() : "";
 
   return {
-    isValidJd: true,
-    invalidReason: "",
+    isValidJd,
+    invalidReason: isValidJd ? "" : "This doesn't look like a job description. Paste the full posting, including the requirements.",
     jobTitle,
-    companyPitch: `Looking for a detail-oriented candidate to join as a ${jobTitle}.`,
+    companyPitch: jobTitle !== "Tailored Position"
+      ? `${company ? company + " is" : "They're"} hiring a ${jobTitle}${matchedSkills.length ? ` with ${matchedSkills.slice(0, 3).join(", ")}` : ""}.`
+      : "",
     requiredSkills,
-    keyResponsibilities: keyResponsibilities.slice(0, 5),
-    candidateExpectations: [
-      "Demonstrate problem-solving ability and strong technical understanding.",
-      "Exhibit proactive collaboration with team members."
-    ],
-    keywordsToTarget,
-    requiredQualifications: [
-      "Bachelor's degree in a relevant field or equivalent experience."
-    ]
+    keyResponsibilities: keyResponsibilities.slice(0, 6),
+    candidateExpectations: [],
+    keywordsToTarget: [...requiredSkills].sort((a, b) => (a.priority === b.priority ? 0 : a.priority === "high" ? -1 : 1)).map(s => s.name).slice(0, 12),
+    requiredQualifications: []
   };
 }
 
@@ -805,7 +916,8 @@ export function rulesBasedAtsAudit(resume: any, jdText: string) {
     }
   }
   
-  const skillScore = jdSkills.length > 0 ? Math.round((matchedSkillsCount / jdSkills.length) * 100) : 100;
+  // If no skills could be read from the JD we can't say the resume matches: score it neutral, not perfect
+  const skillScore = jdSkills.length > 0 ? Math.round((matchedSkillsCount / jdSkills.length) * 100) : 50;
 
   // Formatting criteria
   const hasName = !!resume.fullName;
@@ -847,7 +959,7 @@ export function rulesBasedAtsAudit(resume: any, jdText: string) {
       passed: skillScore >= 60,
       feedback: skillScore >= 60 
         ? "Excellent keyword density! Your resume contains a significant number of keywords requested in the JD." 
-        : `Your resume matches only ${matchedSkillsCount} of ${jdSkills.length} key skills. Consider adding missing keywords: ${jdSkills.filter(s => !resumeText.includes(s.toLowerCase())).slice(0, 5).join(", ")}.`,
+        : `Your resume matches only ${matchedSkillsCount} of ${jdSkills.length} key skills. Consider adding missing keywords: ${jdSkills.filter(s => !resumeText.includes(s.toLowerCase())).slice(0, 8).join(", ")}.`,
       category: "content" as const
     },
     {

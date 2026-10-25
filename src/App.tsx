@@ -1132,13 +1132,19 @@ export default function App() {
     setTailorJdImageNames((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const processingStages = [
-    { label: "Reading Resume", at: 0 },
-    { label: "Analyzing Job Description", at: 20 },
-    { label: "Comparing Resume vs JD", at: 45 },
-    { label: "Generating Tailored Resume", at: 65 },
-    { label: "Preparing Download Files", at: 88 },
+  // Loading steps shown while we wait: one list for reading the JD, one for tailoring
+  const JD_STAGES = [
+    { label: "Reading the job description", at: 0 },
+    { label: "Finding the key skills", at: 35 },
+    { label: "Checking which ones your resume has", at: 70 }
   ];
+  const TAILOR_STAGES = [
+    { label: "Matching your resume to the job", at: 0 },
+    { label: "Writing suggested edits", at: 30 },
+    { label: "Checking edits for new claims", at: 70 },
+    { label: "Preparing your resume", at: 88 }
+  ];
+  const [processingStages, setProcessingStages] = useState(TAILOR_STAGES);
 
   const JD_MIN_WORDS = 50;
   const JD_RECOMMENDED_MIN_WORDS = 100;
@@ -1211,18 +1217,19 @@ export default function App() {
     };
   };
 
-  const startTailorProgress = (initialStage = "Reading Resume") => {
+  const startTailorProgress = (stages = TAILOR_STAGES) => {
     if (tailorProgressTimerRef.current) {
       window.clearInterval(tailorProgressTimerRef.current);
     }
-    setTailorProcessingStage(initialStage);
+    setProcessingStages(stages);
+    setTailorProcessingStage(stages[0].label);
     setTailorProgress(4);
     const startedAt = Date.now();
     tailorProgressTimerRef.current = window.setInterval(() => {
       const elapsed = Date.now() - startedAt;
       const nextProgress = Math.min(98, 4 + Math.floor((elapsed / ANALYSIS_HARD_TIMEOUT_MS) * 94));
       setTailorProgress(nextProgress);
-      const activeStage = [...processingStages].reverse().find(stage => nextProgress >= stage.at);
+      const activeStage = [...stages].reverse().find(stage => nextProgress >= stage.at);
       if (activeStage) setTailorProcessingStage(activeStage.label);
     }, 300);
   };
@@ -1233,7 +1240,7 @@ export default function App() {
       tailorProgressTimerRef.current = null;
     }
     if (complete) {
-      setTailorProcessingStage("Preparing Download Files");
+      setTailorProcessingStage(processingStages[processingStages.length - 1].label);
       setTailorProgress(100);
     }
   };
@@ -1767,7 +1774,7 @@ export default function App() {
     setTailorStepError(null);
 
     setTailorIsAnalyzing(true);
-    startTailorProgress("Reading the job description...");
+    startTailorProgress(JD_STAGES);
     try {
       const selectedResume = getResumeToTailor();
       if (!selectedResume) throw new Error("No resume selected");
@@ -1813,7 +1820,7 @@ export default function App() {
     }
 
     setTailorIsAnalyzing(true);
-    startTailorProgress("Tailoring your resume...");
+    startTailorProgress(TAILOR_STAGES);
 
     try {
       const selectedResume = getResumeToTailor();
@@ -1823,7 +1830,7 @@ export default function App() {
       const simplifiedJdText = `Role: ${extractedRole}\nCompany Pitch: ${simplifiedJd.companyPitch || ""}\nKeywords: ${(simplifiedJd.keywordsToTarget || []).join(", ")}`;
 
       // Generate tailored resume
-      setTailorProcessingStage("Applying AI Improvements");
+      setTailorProcessingStage("Writing suggested edits");
       const specResume = resumeStructureToResume(selectedResume);
       console.log("[Tailor] Sending resume blocks to /api/tailor-resume:", {
         resumeName: selectedResume.fullName,
@@ -1900,7 +1907,7 @@ export default function App() {
       }
       
       if (mergedTailoredResume) {
-        setTailorProcessingStage("Comparing Resume vs JD");
+        setTailorProcessingStage("Checking edits for new claims");
         const tailoredAtsEvaluation = calculateRealisticAtsScore(mergedTailoredResume, simplifiedJd);
         const diffResult = generateResumeDiff(selectedResume, mergedTailoredResume);
 
@@ -2978,14 +2985,21 @@ WORK EXPERIENCE
   };
 
   // Text-based, single-column PDF that ATS software can read (the old export was a screenshot image)
-  const handlePrintOrSavePDF = (resume: ResumeStructure, original?: ResumeStructure, headline = "", _tailored?: TailoredResume) => {
+  // Headline under the name = the person's own most recent title, never the target job's title
+  // (printing "Senior Product Manager" for an Associate PM would be a false claim)
+  const ownHeadline = (resume?: ResumeStructure | null) => (resume?.workExperience?.[0]?.role || "").trim();
+
+  // Same file name for PDF and Word: "Priya_Sharma_Swiggy_Resume"
+  const fileBaseName = (fullName?: string, company?: string) =>
+    [fullName || "Resume", company || ""].map(part => part.replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_")).filter(Boolean).join("_") + "_Resume";
+
+  const handlePrintOrSavePDF = (resume: ResumeStructure, original?: ResumeStructure, headline = "", _tailored?: TailoredResume, company = "") => {
     try {
       logDownloadEvent("Download Started", { type: "PDF" });
       const exportResume = prepareResumeForDownload(resume, original);
       if (!exportResume) return;
-      const doc = buildResumePdf(exportResume, headline);
-      const safeName = (exportResume.fullName || "Resume").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_") || "Resume";
-      doc.save(`${safeName}_Resume.pdf`);
+      const doc = buildResumePdf(exportResume, ownHeadline(exportResume));
+      doc.save(`${fileBaseName(exportResume.fullName, company)}.pdf`);
       logDownloadEvent("Download Completed", { type: "PDF" });
       showNotification("PDF downloaded.", "success");
     } catch (error: any) {
@@ -3010,11 +3024,13 @@ WORK EXPERIENCE
       const metaLine = (text: string) => paragraph(text, "Meta");
       const entryGap = () => paragraph("", "EntryGap");
       const contactLines = [exportResume.phone, exportResume.email, exportResume.linkedin, exportResume.location, exportResume.website].filter(Boolean);
-      const cell = (content: string, width: number) => `<w:tc><w:tcPr><w:tcW w:w="${width}" w:type="dxa"/><w:tcMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tcMar></w:tcPr>${content}</w:tc>`;
-      const headerTable = () => `<w:tbl><w:tblPr><w:tblW w:w="10080" w:type="dxa"/><w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="single" w:sz="6" w:space="3" w:color="C9CDD3"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/><w:bottom w:w="120" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid><w:gridCol w:w="6048"/><w:gridCol w:w="4032"/></w:tblGrid><w:tr>${cell(paragraph(exportResume.fullName, "HeaderName") + (headline ? paragraph(headline, "HeaderRole") : ""), 6048)}${cell(contactLines.map(line => paragraph(String(line), "HeaderContact")).join(""), 4032)}</w:tr></w:tbl>`;
 
       let body = "";
-      body += headerTable();
+      // Plain paragraphs, not a table: some ATS skip text inside tables, which would lose the contact details
+      body += paragraph(exportResume.fullName, "HeaderName");
+      const headlineText = ownHeadline(exportResume);
+      if (headlineText) body += paragraph(headlineText, "HeaderRole");
+      if (contactLines.length) body += paragraph(contactLines.map(String).join(" | "), "HeaderContact");
       if (exportResume.summary) body += heading("Professional Summary") + paragraph(exportResume.summary);
       if (exportResume.skills.length) {
         body += heading("Core Skills");
@@ -3064,7 +3080,7 @@ WORK EXPERIENCE
       zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/></Types>`);
       zip.folder("_rels")?.file(".rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`);
       zip.folder("word")?.folder("_rels")?.file("document.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rIdNumbering" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/></Relationships>`);
-      zip.folder("word")?.file("styles.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="21"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="BodyText"><w:name w:val="Body Text"/><w:pPr><w:spacing w:after="90" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="21"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="HeaderName"><w:name w:val="Header Name"/><w:pPr><w:spacing w:after="40" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:b/><w:sz w:val="34"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="HeaderRole"><w:name w:val="Header Role"/><w:pPr><w:spacing w:after="40" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:b/><w:color w:val="374151"/><w:sz w:val="22"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="HeaderContact"><w:name w:val="Header Contact"/><w:pPr><w:jc w:val="right"/><w:spacing w:after="20" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:color w:val="111827"/><w:sz w:val="18"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="Heading 1"/><w:pPr><w:spacing w:before="180" w:after="80" w:line="276" w:lineRule="auto"/><w:pBdr><w:bottom w:val="single" w:sz="5" w:space="3" w:color="C9CDD3"/></w:pBdr></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:b/><w:sz w:val="24"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="Heading 2"/><w:pPr><w:spacing w:before="80" w:after="20" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:b/><w:sz w:val="21"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Meta"><w:name w:val="Meta"/><w:pPr><w:spacing w:after="50" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:color w:val="4B5563"/><w:sz w:val="19"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="EntryGap"><w:name w:val="Entry Gap"/><w:pPr><w:spacing w:after="80"/></w:pPr><w:rPr><w:sz w:val="4"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:pPr><w:ind w:left="420" w:hanging="240"/><w:spacing w:after="45" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="21"/></w:rPr></w:style></w:styles>`);
+      zip.folder("word")?.file("styles.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="21"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="BodyText"><w:name w:val="Body Text"/><w:pPr><w:spacing w:after="90" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="21"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="HeaderName"><w:name w:val="Header Name"/><w:pPr><w:spacing w:after="40" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:b/><w:sz w:val="34"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="HeaderRole"><w:name w:val="Header Role"/><w:pPr><w:spacing w:after="40" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:b/><w:color w:val="374151"/><w:sz w:val="22"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="HeaderContact"><w:name w:val="Header Contact"/><w:pPr><w:spacing w:after="20" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:color w:val="111827"/><w:sz w:val="18"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="Heading 1"/><w:pPr><w:spacing w:before="180" w:after="80" w:line="276" w:lineRule="auto"/><w:pBdr><w:bottom w:val="single" w:sz="5" w:space="3" w:color="C9CDD3"/></w:pBdr></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:b/><w:sz w:val="24"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="Heading 2"/><w:pPr><w:spacing w:before="80" w:after="20" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:b/><w:sz w:val="21"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Meta"><w:name w:val="Meta"/><w:pPr><w:spacing w:after="50" w:line="240" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:color w:val="4B5563"/><w:sz w:val="19"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="EntryGap"><w:name w:val="Entry Gap"/><w:pPr><w:spacing w:after="80"/></w:pPr><w:rPr><w:sz w:val="4"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:pPr><w:ind w:left="420" w:hanging="240"/><w:spacing w:after="45" w:line="276" w:lineRule="auto"/></w:pPr><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="21"/></w:rPr></w:style></w:styles>`);
       zip.folder("word")?.file("numbering.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/><w:pPr><w:ind w:left="420" w:hanging="240"/></w:pPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>`);
       zip.folder("word")?.file("document.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1080" w:right="1080" w:bottom="1080" w:left="1080" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>`);
 
@@ -5996,37 +6012,28 @@ WORK EXPERIENCE
               {/* Loader */}
               {tailorIsAnalyzing && (
                 <div className="flex flex-col items-center justify-center py-12 space-y-4 min-h-[300px]">
-                  <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
-                  <p className="text-sm font-semibold text-neutral-800">
-                    {tailorProcessingStage}...
+                  <p className="text-base font-semibold text-black">
+                    {tailorProcessingStage}…
                   </p>
-                  <div className="w-full max-w-md space-y-2">
-                    <div className="h-4 bg-neutral-200 border border-neutral-200 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-[#2563eb] transition-all duration-300"
-                        style={{ width: `${tailorProgress}%` }}
-                      />
-                    </div>
-                    <div className="flex justify-between text-xs font-semibold text-neutral-600">
-                      <span>{tailorProcessingStage}</span>
-                      <span>{tailorProgress}%</span>
+                  <div className="w-full max-w-sm">
+                    <div className="h-1 bg-neutral-200 rounded-full overflow-hidden">
+                      <div className="h-full bg-[#2563eb] transition-all duration-300" style={{ width: `${tailorProgress}%` }} />
                     </div>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-5 gap-1.5 w-full max-w-2xl">
-                    {processingStages.map(stage => {
-                      const isDone = tailorProgress >= stage.at;
-                      const isCurrent = tailorProcessingStage === stage.label;
-                      const status = isCurrent ? "Processing" : isDone ? "✓ Complete" : "Waiting";
+                  <ul className="w-full max-w-sm space-y-1.5 text-sm">
+                    {processingStages.map((stage, idx) => {
+                      const currentIdx = processingStages.findIndex(st => st.label === tailorProcessingStage);
+                      const state = idx < currentIdx ? "done" : idx === currentIdx ? "current" : "waiting";
                       return (
-                        <div key={stage.label} className={`text-[11px] font-semibold rounded-lg border px-2 py-1 text-center ${isCurrent ? "bg-amber-50 border-amber-300 text-amber-800" : isDone ? "bg-blue-50 border-blue-300 text-blue-800" : "bg-white border-neutral-200 text-neutral-400"}`}>
-                          <div>{stage.label}</div>
-                          <div className="text-[11px] mt-0.5">{status}</div>
-                        </div>
+                        <li key={stage.label} className={`flex items-center gap-2 ${state === "waiting" ? "text-neutral-400" : state === "current" ? "text-black font-medium" : "text-neutral-500"}`}>
+                          {state === "done" ? <Check className="w-4 h-4 text-emerald-600" /> : state === "current" ? <Loader2 className="w-4 h-4 animate-spin text-blue-600" /> : <span className="w-4 h-4 rounded-full border border-neutral-300 inline-block" />}
+                          {stage.label}
+                        </li>
                       );
                     })}
-                  </div>
-                  <p className="text-xs text-neutral-555 text-center max-w-md font-semibold">
-                    Target time is 5-15 seconds. If the AI service is slow, Auralis keeps processing and switches to deterministic ATS matching instead of blocking the workflow.
+                  </ul>
+                  <p className="text-xs text-neutral-500 text-center max-w-sm">
+                    This usually takes 5 to 20 seconds.
                   </p>
                 </div>
               )}
@@ -6663,7 +6670,7 @@ WORK EXPERIENCE
                       type="button"
                       onClick={() => {
                         if (tailoredResultResume) {
-                          handlePrintOrSavePDF(tailoredResultResume, undefined, tailorRole);
+                          handlePrintOrSavePDF(tailoredResultResume, undefined, tailorRole, undefined, tailorCompany);
                         }
                       }}
                       className="px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg transition cursor-pointer border border-neutral-200 flex items-center justify-center gap-1.5"
@@ -6678,7 +6685,7 @@ WORK EXPERIENCE
                         if (tailoredResultResume) {
                           downloadResumeAsDocx(
                             tailoredResultResume,
-                            `${tailorCompany.replace(/\s+/g, "_")}_Tailored_Resume`,
+                            fileBaseName(tailoredResultResume.fullName, tailorCompany),
                             getResumeToTailor(),
                             tailorRole
                           );
@@ -6900,7 +6907,7 @@ WORK EXPERIENCE
               <button
                 type="button"
                 onClick={() => {
-                  handlePrintOrSavePDF(selectedSavedVersion.resumeData, selectedSavedVersion.originalResumeData, selectedSavedVersion.jobTitle);
+                  handlePrintOrSavePDF(selectedSavedVersion.resumeData, selectedSavedVersion.originalResumeData, selectedSavedVersion.jobTitle, undefined, selectedSavedVersion.companyName);
                 }}
                 className="px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg transition cursor-pointer border border-neutral-200 flex items-center justify-center gap-1.5"
               >
@@ -6913,7 +6920,7 @@ WORK EXPERIENCE
                 onClick={() => {
                   downloadResumeAsDocx(
                     selectedSavedVersion.resumeData,
-                    `${selectedSavedVersion.companyName.replace(/\s+/g, "_")}_Tailored_Resume`,
+                    fileBaseName(selectedSavedVersion.resumeData.fullName, selectedSavedVersion.companyName),
                     selectedSavedVersion.originalResumeData,
                     selectedSavedVersion.jobTitle
                   );

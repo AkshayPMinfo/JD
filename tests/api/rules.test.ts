@@ -50,7 +50,7 @@ try {
     t.check("U2c", "Two-column: left-column skills found", ["java", "kafka", "docker"].every(s => skills.some((x: string) => x.includes(s))), (p.skills || []).join(", "), { known: KNOWN_TWO_COL });
     t.check("U2d", "Two-column: 2 jobs (Zomato, TCS)", we.length === 2 && lc(we).includes("zomato") && lc(we).includes("tcs"), `count=${we.length}`, { known: KNOWN_TWO_COL });
     t.check("U2e", "Two-column: no left-column leakage into job bullets", !we.some((w: any) => (w.description || []).some((b: string) => /^(java|docker|mysql|bits pilani|kafka)$/i.test(b.trim()))));
-    t.check("U2f", "Two-column: education (BITS Pilani)", lc(p.education).includes("bits pilani"), JSON.stringify(p.education), { known: KNOWN_TWO_COL });
+    t.check("U2f", "Two-column: education (BITS Pilani)", lc(p.education).includes("bits pilani"), JSON.stringify(p.education));
   }
 
   const docx = await upload("resume.docx", DOCX, fx.docx);
@@ -99,13 +99,13 @@ try {
     const kw = lc(j.keywordsToTarget) + lc(j.requiredSkills);
     const missing = ["python", "postgresql", "redis", "kafka", "docker", "kubernetes", "aws", "microservices", "rest"].filter(w => !kw.includes(w));
     t.check("S1a", "Simplify: valid JD recognised", simp.status === 200 && j.isValidJd === true);
-    t.check("S1b", "Simplify: job title extracted", /backend engineer/i.test(j.jobTitle || ""), `jobTitle="${j.jobTitle}"`, { known: KNOWN_JD });
-    t.check("S1c", "Simplify: key skills captured", missing.length === 0, `missed: ${missing.join(", ")}`, { known: KNOWN_JD });
-    t.check("S1d", "Simplify: responsibilities come from the JD", /distributed|mentor|reliab/i.test(lc(j.keyResponsibilities)), JSON.stringify(j.keyResponsibilities), { known: KNOWN_JD });
-    t.check("S1e", "Simplify: skill names properly cased", !(j.keywordsToTarget || []).some((k: string) => ["Aws", "Postgresql", "Ci/cd"].includes(k)), JSON.stringify(j.keywordsToTarget), { known: KNOWN_JD });
+    t.check("S1b", "Simplify: job title extracted", /backend engineer/i.test(j.jobTitle || ""), `jobTitle="${j.jobTitle}"`);
+    t.check("S1c", "Simplify: key skills captured", missing.length === 0, `missed: ${missing.join(", ")}`);
+    t.check("S1d", "Simplify: responsibilities come from the JD", /distributed|mentor|reliab/i.test(lc(j.keyResponsibilities)), JSON.stringify(j.keyResponsibilities));
+    t.check("S1e", "Simplify: skill names properly cased", !(j.keywordsToTarget || []).some((k: string) => ["Aws", "Postgresql", "Ci/cd"].includes(k)), JSON.stringify(j.keywordsToTarget));
   }
   const garbage = await post("/api/simplify-jd", { jdText: "asdf qwerty lorem ipsum hello" });
-  t.check("S2", "Simplify: gibberish JD flagged invalid", garbage.json.isValidJd === false, `isValidJd=${garbage.json.isValidJd}`, { known: "server accepts it; the UI's 50-word check blocks most of these" });
+  t.check("S2", "Simplify: gibberish JD flagged invalid", garbage.json.isValidJd === false, `isValidJd=${garbage.json.isValidJd}`);
   const empty = await post("/api/simplify-jd", {});
   t.check("S3", "Simplify: empty request → 4xx", empty.status >= 400 && empty.status < 500, `status=${empty.status}`);
 
@@ -122,7 +122,7 @@ try {
     t.check("T1b", "Tailor: Python and Redis counted as matched", lc(j.matchedKeywords).includes("python") && lc(j.matchedKeywords).includes("redis"), JSON.stringify(j.matchedKeywords));
     t.check("T1c", "Tailor: score > 0 for a matching resume", j.score > 0, `score=${j.score}`);
     t.check("T1d", "Tailor: doesn't suggest skills already on the resume", !(j.newSkills || []).some((s: string) => ["python", "redis", "postgresql", "sql", "node.js"].includes(s.toLowerCase())), JSON.stringify(j.newSkills));
-    t.check("T1e", "Tailor: reports Kafka/Kubernetes as missing", lc(j.missingKeywords).includes("kafka") && lc(j.missingKeywords).includes("kubernetes"), JSON.stringify(j.missingKeywords), { known: KNOWN_JD });
+    t.check("T1e", "Tailor: reports Kafka/Kubernetes as missing", lc(j.missingKeywords).includes("kafka") && lc(j.missingKeywords).includes("kubernetes"), JSON.stringify(j.missingKeywords));
     t.check("T1g", "Tailor: doesn't invent metrics (% or weeks)", invented.length === 0, invented.join(" | "));
   }
   const tailNoJd = await post("/api/tailor-resume", { resume: specResume });
@@ -153,7 +153,7 @@ try {
     t.check("A1a", "ATS: score is a number 0-100", typeof a === "number" && a >= 0 && a <= 100, `score=${a}`);
     t.check("A1b", "ATS: matching JD scores higher than an unrelated one", a > b, `backend=${a}, nurse=${b}`);
     t.check("A1c", "ATS: unrelated (nurse) JD scores low (<40)", typeof b === "number" && b < 40, `nurse=${b}`, { known: "40% of the score comes from having standard sections" });
-    t.check("A1d", "ATS: feedback names Kafka/Kubernetes as missing", fb.includes("kafka") && fb.includes("kubernetes"), (ats.json.criteria || [])[0]?.feedback, { known: KNOWN_JD });
+    t.check("A1d", "ATS: feedback names Kafka/Kubernetes as missing", fb.includes("kafka") && fb.includes("kubernetes"), (ats.json.criteria || [])[0]?.feedback);
     t.check("A1e", "ATS: doesn't say the phone is missing (resume has one)", !fb.includes("phone number is missing"));
   }
   const atsNoResume = await post("/api/ats-audit", { jdText: JD_BACKEND });

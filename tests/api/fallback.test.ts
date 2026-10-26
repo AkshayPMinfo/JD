@@ -59,7 +59,10 @@ const app = await startApp({
   USE_GEMINI: "true",
   GEMINI_API_KEY: "",
   GROQ_API_KEY: FAKE_KEY,
-  GROQ_BASE_URL: `http://127.0.0.1:${groqPort}`
+  GROQ_BASE_URL: `http://127.0.0.1:${groqPort}`,
+  // No Supabase here, so the daily AI limit is off (see aiLimit.test.ts for the limit itself)
+  VITE_SUPABASE_URL: "",
+  SUPABASE_URL: ""
 });
 const t = new Checks();
 const post = (route: string, body: unknown) => postJson(app.baseUrl, route, body);

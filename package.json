@@ -9,7 +9,7 @@
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "test:api": "tsx tests/api/roleFamily.test.ts && tsx tests/api/skillNames.test.ts && tsx tests/api/educationOrder.test.ts && tsx tests/api/pdfExport.test.ts && tsx tests/api/rules.test.ts && tsx tests/api/fallback.test.ts"
+    "test:api": "tsx tests/api/roleFamily.test.ts && tsx tests/api/skillNames.test.ts && tsx tests/api/educationOrder.test.ts && tsx tests/api/pdfExport.test.ts && tsx tests/api/rules.test.ts && tsx tests/api/fallback.test.ts && tsx tests/api/aiLimit.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

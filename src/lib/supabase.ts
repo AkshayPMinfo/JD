@@ -58,6 +58,7 @@ type SupabaseDiagnosticResponse = {
 export type SupabaseSession = {
   accessToken: string;
   refreshToken?: string;
+  expiresAt?: number; // ms since epoch
   user: {
     id: string;
     email: string;
@@ -136,6 +137,7 @@ const parseAuthResponse = async (
   return {
     accessToken: payload.access_token,
     refreshToken: payload.refresh_token,
+    expiresAt: payload.expires_in ? Date.now() + payload.expires_in * 1000 : undefined,
     user: {
       id: payload.user.id,
       email: payload.user.email || "",
@@ -162,6 +164,17 @@ export const supabaseAuth = {
       body: JSON.stringify({ email, password }),
     });
     return parseAuthResponse(response, { allowEmailConfirmation: true });
+  },
+
+  // Sign-ins expire after about an hour; swap the refresh token for a new one
+  async refreshSession(refreshToken: string): Promise<SupabaseSession> {
+    assertSupabaseConfigured();
+    const response = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    return parseAuthResponse(response);
   },
 
   async signInAnonymously(): Promise<SupabaseSession> {
@@ -391,6 +404,29 @@ export const supabaseData = {
     });
     await assertDataResponse(response, "Could not load resumes.");
     return response.json();
+  },
+
+  // Usage tracking (jd_events). Fire-and-forget; failures are ignored by the caller.
+  async logEvent(accessToken: string, name: string, props: Record<string, unknown> = {}) {
+    if (!isSupabaseConfigured) return;
+    await fetch(`${SUPABASE_URL}/rest/v1/jd_events`, {
+      method: "POST",
+      headers: { ...restHeaders(accessToken), Prefer: "return=minimal" },
+      body: JSON.stringify({ name: name.slice(0, 40), props }),
+      keepalive: true,
+    });
+  },
+
+  // Deletes the person's sign-in and, through the database, all their resumes and data
+  async deleteMyAccount(accessToken: string) {
+    assertSupabaseConfigured();
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/jd_delete_my_account`, {
+      method: "POST",
+      headers: restHeaders(accessToken),
+      body: "{}",
+    });
+    if (response.status === 404) throw new Error("Account deletion isn't switched on yet. Please contact us and we'll delete it for you.");
+    await assertDataResponse(response, "Could not delete your account. Please try again.");
   },
 
   async deleteResume(accessToken: string, id: string) {

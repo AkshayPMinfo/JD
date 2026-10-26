@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import { GoogleGenAI, Type } from "@google/genai";
+import { getAiCredits, useAiCredit, aiAllowed, bearerToken } from "./aiLimit";
 import dotenv from "dotenv";
 import mammoth from "mammoth";
 import { getDocumentProxy, extractText } from "unpdf";
@@ -944,6 +945,13 @@ function withRulesSafetyNet(ai: any, jdText?: string) {
   return result;
 }
 
+// How many AI tailorings the signed-in person has left today (for the app to show)
+app.get("/api/ai-credits", async (req, res) => {
+  if (!USE_GEMINI) { res.json({ aiEnabled: false }); return; }
+  const credits = await getAiCredits(bearerToken(req));
+  res.json({ aiEnabled: true, ...credits });
+});
+
 app.post("/api/simplify-jd", async (req, res) => {
   try {
     let { jdText, jdImageBase64, jdImagesBase64, fileBase64, fileName, fileType } = req.body;
@@ -986,12 +994,18 @@ app.post("/api/simplify-jd", async (req, res) => {
       return;
     }
 
-    if (!USE_GEMINI) {
+    // Reading the job post doesn't use up a credit, but once today's AI tailorings are gone it uses the rules reader too
+    const credits = USE_GEMINI ? await getAiCredits(bearerToken(req)) : null;
+    const useRules = !USE_GEMINI || (credits && !aiAllowed(credits));
+    if (useRules) {
       if (!jdText) {
-        res.status(400).json({ error: "Rules-based mode requires a text or document job description. Image upload requires enabling AI Mode." });
+        res.status(400).json({ error: credits
+          ? "Screenshots need AI, and today's AI limit is used up. Paste the job description as text instead."
+          : "Rules-based mode requires a text or document job description. Image upload requires enabling AI Mode." });
         return;
       }
-      const result = rulesBasedSimplifyJd(jdText);
+      const result: any = rulesBasedSimplifyJd(jdText);
+      if (credits) result.aiUsage = { ...credits, mode: "rules" };
       res.json(result);
       return;
     }
@@ -1154,9 +1168,17 @@ Format your response strictly as JSON with this schema:
       throw new Error("Failed to receive output text from Gemini API");
     }
 
-    res.json(withRulesSafetyNet(JSON.parse(resultText.trim()), jdText));
+    res.json({ ...withRulesSafetyNet(JSON.parse(resultText.trim()), jdText), ...(credits ? { aiUsage: { ...credits, mode: "ai" } } : {}) });
   } catch (error: any) {
     console.error("Error in simplify-jd:", error);
+    // AI unavailable: read the job post without AI instead
+    const jdText = req.body?.jdText;
+    if (jdText) {
+      const result: any = rulesBasedSimplifyJd(jdText);
+      result.aiUsage = { status: "ai-unavailable", mode: "rules", used: 0, limit: 0, remaining: 0, resetsAt: null };
+      res.json(result);
+      return;
+    }
     res.status(500).json({ error: cleanErrorMessage(error) });
   }
 });
@@ -1252,8 +1274,15 @@ app.post("/api/tailor-resume", async (req, res) => {
       return;
     }
 
-    if (!USE_GEMINI) {
-      const result = rulesBasedTailor(resume, jdText, selectedSkills);
+    // Daily AI limit: past it, this tailoring uses the no-AI (rules) mode
+    const token = bearerToken(req);
+    const credits = USE_GEMINI ? await getAiCredits(token) : null;
+    if (!USE_GEMINI || (credits && !aiAllowed(credits))) {
+      const result: any = rulesBasedTailor(resume, jdText, selectedSkills);
+      if (credits) {
+        result.aiUsage = { ...credits, mode: "rules" };
+        console.log("[ai-limit] Tailoring without AI:", credits.status, `${credits.used}/${credits.limit}`);
+      }
       console.log("[Rules Tailor: TailoredResume Output]", JSON.stringify(result, null, 2));
       res.json(result);
       return;
@@ -1486,6 +1515,10 @@ Format your response strictly as JSON matching this schema:
         parsed.newSkills = added;
       }
     }
+    // Count this AI tailoring only once it has worked
+    const usage = await useAiCredit(token);
+    parsed.aiUsage = { ...usage, mode: "ai" };
+    console.log("[ai-limit] AI tailoring used:", usage.status, `${usage.used}/${usage.limit}`);
     res.json(parsed);
   } catch (error: any) {
     console.error("[tailor-resume] ERROR:", {
@@ -1494,6 +1527,20 @@ Format your response strictly as JSON matching this schema:
       status: error?.status || error?.statusCode,
       stack: error?.stack?.slice(0, 300)
     });
+    // Both AIs failed (quota, outage): still give the person a resume, made without AI
+    const { resume, jdText, selectedSkills } = req.body || {};
+    if (resume && jdText) {
+      try {
+        const skills = Array.isArray(selectedSkills) ? selectedSkills.map((x: unknown) => String(x).trim()).filter(Boolean).slice(0, 50) : undefined;
+        const result: any = rulesBasedTailor(resume, jdText, skills);
+        result.aiUsage = { status: "ai-unavailable", mode: "rules", used: 0, limit: 0, remaining: 0, resetsAt: null };
+        console.warn("[tailor-resume] AI unavailable; sent the no-AI version instead.");
+        res.json(result);
+        return;
+      } catch (fallbackError) {
+        console.error("[tailor-resume] No-AI fallback also failed:", fallbackError);
+      }
+    }
     res.status(500).json({ error: cleanErrorMessage(error) });
   }
 });
@@ -1639,6 +1686,16 @@ app.post("/api/analyze-uploaded-resume", async (req, res) => {
         reason,
         error: reason
       });
+      return;
+    }
+
+    // Scanned resumes (a photo or image saved as PDF) have almost no text to read
+    if (normalizeWhitespace(extractedText).length < 80) {
+      const reason = detectedFileType === "pdf"
+        ? "This PDF looks like a scanned image, so there's no text we (or hiring systems) can read. Please upload the original Word file, or export a PDF from Word or Google Docs."
+        : "This file has almost no text in it. Please upload your full resume.";
+      validationLog(fileName || "unknown-file", "Validation Failed", { reason });
+      res.json({ isResume: false, fileType: detectedFileType, extractedText, indicators: [], reason, scanned: detectedFileType === "pdf" });
       return;
     }
 

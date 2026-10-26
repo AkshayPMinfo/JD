@@ -4,6 +4,7 @@
  */
 
 import { educationNewestFirst } from "./utils/educationOrder";
+import PrivacyNotice from "./components/PrivacyNotice";
 import React, { useState, useEffect, useRef } from "react";
 import JSZip from "jszip";
 import {
@@ -93,6 +94,15 @@ function addSwitchExtras(resume: ResumeStructure, certsText: string, projectsTex
 // Rough word stem so "roadmaps"/"roadmap" and "running"/"run" compare equal
 function stem(word: string): string {
   return word.toLowerCase().replace(/ies$/, "y").replace(/(ing|ed|es|s)$/, "");
+}
+
+// "in 5 hours" / "in under an hour" / "tomorrow" for the daily AI limit reset
+function resetsInText(resetsAt?: string | null): string {
+  const ms = resetsAt ? new Date(resetsAt).getTime() - Date.now() : NaN;
+  if (!Number.isFinite(ms)) return "tomorrow";
+  const hours = Math.floor(ms / 3_600_000);
+  if (hours < 1) return "in under an hour";
+  return `in ${hours} ${hours === 1 ? "hour" : "hours"}`;
 }
 
 // Set when a guest leaves to sign in, so their resumes are merged into the account.
@@ -503,6 +513,19 @@ export default function App() {
   // Career switchers can list courses/certificates and side projects for the new field (one per line).
   const [tailorSwitchCerts, setTailorSwitchCerts] = useState("");
   const [tailorSwitchProjects, setTailorSwitchProjects] = useState("");
+  // Privacy notice and "delete my account" dialog
+  const [showPrivacy, setShowPrivacy] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  // Daily AI limit for the signed-in person (from /api/ai-credits and the tailoring response)
+  const [aiCredits, setAiCredits] = useState<{ aiEnabled: boolean; status?: string; used?: number; limit?: number; remaining?: number; resetsAt?: string | null } | null>(null);
+  const refreshAiCredits = async () => {
+    try {
+      const r = await fetch("/api/ai-credits", { headers: await aiAuthHeaders() });
+      if (r.ok) setAiCredits(await r.json());
+    } catch {
+      // the note is optional; tailoring still works
+    }
+  };
   // Set after a download from the tailoring wizard, to show the "downloaded" popup.
   const [tailorDownloaded, setTailorDownloaded] = useState<{ format: "pdf" | "docx"; fileName: string } | null>(null);
   const [tailorReviewBase, setTailorReviewBase] = useState<{ original: ResumeStructure; skills: string[] } | null>(null);
@@ -922,6 +945,7 @@ export default function App() {
       setCurrentStep("resume");
       setAuthMessage(null);
       showNotification(isSignUp ? "Account created successfully." : `Welcome, ${name}! Your resume dashboard is ready.`, "success");
+      trackEvent(isSignUp ? "signed_up" : "signed_in");
     } catch (error: any) {
       if (String(error.message || "").startsWith("Account created.")) {
         setIsSignUp(false);
@@ -934,6 +958,135 @@ export default function App() {
       showNotification(error.message || "Authentication failed. Please try again.", "error");
     } finally {
       setIsAuthSubmitting(false);
+    }
+  };
+
+  // Sign out. Guests leaving to create an account keep their work; after deleting an account everything is wiped.
+  const handleSignOut = async (afterDelete = false) => {
+    // Guests leave to create an account; their resumes stay on this device and move to the new account.
+    const keepGuestWork = !!currentUser?.isGuest && !afterDelete;
+    const storedSession = localStorage.getItem(SUPABASE_SESSION_STORAGE_KEY);
+    if (storedSession) {
+      try {
+        const session = JSON.parse(storedSession);
+        await supabaseAuth.signOut(session.accessToken);
+      } catch {
+        // Local sign-out should still continue even if remote sign-out fails.
+      }
+    }
+    // Clear all local storage and session storage
+    localStorage.removeItem(SUPABASE_SESSION_STORAGE_KEY);
+    sessionStorage.removeItem("jd_resume_customizer_guest_user");
+    localStorage.removeItem("jd_resume_customizer_user");
+    if (!keepGuestWork) {
+      localStorage.removeItem("jd_resume_customizer_active_resume");
+      localStorage.removeItem("jd_resume_customizer_original_resume");
+      localStorage.removeItem("jd_resume_customizer_saved_resumes");
+      localStorage.removeItem("jd_resume_customizer_versions");
+      localStorage.removeItem("jd_resume_customizer_jd");
+      localStorage.removeItem("jd_resume_customizer_active_resume_id");
+      localStorage.removeItem("jd_resume_customizer_has_resume");
+      sessionStorage.removeItem("auralis_platform_unlocked");
+      sessionStorage.removeItem("auralis_onboarding_dismissed");
+      localStorage.removeItem("jd_resume_customizer_onboarding_done");
+    }
+
+    // Reset all states
+    setCurrentUser(null);
+    setCurrentStep("auth");
+    if (!keepGuestWork) {
+      setIsUnlocked(false);
+      setOnboardingChoice(null);
+      setActiveResume(DEMO_RESUMES.software_grad.data);
+      setOriginalResume(DEMO_RESUMES.software_grad.data);
+      setSavedUserResumes([]);
+      setSavedVersions([]);
+      setActiveResumeId(null);
+      setJdText(DEMO_JDS.frontend_eng.text);
+      setTargetCompany("Vercel Systems");
+      setTargetRole("Junior Frontend Engineer");
+    }
+    setAuthEmail("");
+    setAuthPassword("");
+    setAuthConfirmPassword("");
+    setAuthMessage(null);
+    setNotifications([]);
+    setShowPassword(false);
+    setShowConfirmPassword(false);
+
+    if (keepGuestWork) {
+      localStorage.setItem(GUEST_HANDOFF_KEY, "1");
+      setIsSignUp(true);
+      showNotification("Create an account to keep your resumes.", "info");
+    } else {
+      showNotification(afterDelete ? "Your account and all your data were deleted." : "Logged out securely.", "info");
+    }
+  };
+
+  // Delete the account and all data in Supabase, then sign out
+  const handleDeleteMyAccount = async () => {
+    const session = getStoredSupabaseSession();
+    if (!session?.accessToken) {
+      await handleSignOut(true);
+      return;
+    }
+    setIsDeletingAccount(true);
+    try {
+      const headers = await aiAuthHeaders(); // refreshes an expired sign-in first
+      const token = (headers.Authorization || "").replace(/^Bearer\s+/, "") || session.accessToken;
+      await supabaseData.deleteMyAccount(token);
+      setShowPrivacy(false);
+      await handleSignOut(true);
+    } catch (error: any) {
+      showNotification(error.message || "Could not delete your account. Please try again.", "error");
+    } finally {
+      setIsDeletingAccount(false);
+    }
+  };
+
+  // Usage tracking: upload → tailor → download, plus errors. Stored in Supabase (jd_events).
+  const trackEvent = (name: string, props: Record<string, unknown> = {}) => {
+    const session = getStoredSupabaseSession();
+    if (!session?.accessToken) return;
+    supabaseData.logEvent(session.accessToken, name, props).catch(() => {});
+  };
+
+  // Error logging: send unexpected browser errors to jd_events (at most 5 per visit) so problems on the live site get noticed
+  useEffect(() => {
+    let sent = 0;
+    const report = (message: string, where: string) => {
+      if (sent >= 5) return;
+      sent++;
+      trackEvent("error", { message: String(message || "").slice(0, 300), where, page: currentStep });
+    };
+    const onError = (e: ErrorEvent) => report(e.message, `${e.filename || ""}:${e.lineno || ""}`);
+    const onRejection = (e: PromiseRejectionEvent) => report(e.reason?.message || String(e.reason), "promise");
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, [currentStep]);
+
+  // Tells the server who's signed in, for the daily AI limit. Refreshes a sign-in that's about to expire.
+  const aiAuthHeaders = async (): Promise<Record<string, string>> => {
+    const raw = localStorage.getItem(SUPABASE_SESSION_STORAGE_KEY);
+    if (!raw) return {};
+    try {
+      let session = JSON.parse(raw);
+      const expiringSoon = !session.expiresAt || session.expiresAt - Date.now() < 60_000;
+      if (expiringSoon && session.refreshToken) {
+        try {
+          session = await supabaseAuth.refreshSession(session.refreshToken);
+          localStorage.setItem(SUPABASE_SESSION_STORAGE_KEY, JSON.stringify(session));
+        } catch (error) {
+          console.warn("Sign-in refresh failed:", error);
+        }
+      }
+      return session?.accessToken ? { Authorization: `Bearer ${session.accessToken}` } : {};
+    } catch {
+      return {};
     }
   };
 
@@ -1102,6 +1255,7 @@ export default function App() {
     setTailorSwitchCerts("");
     setTailorSwitchProjects("");
     setTailorDownloaded(null);
+    refreshAiCredits();
     setTailorJdText("");
     setTailorJdImages([]);
     setTailorJdImageNames([]);
@@ -1860,7 +2014,7 @@ export default function App() {
       if (!selectedResume) throw new Error("No resume selected");
       const simplifyRes = await fetch("/api/simplify-jd", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await aiAuthHeaders()) },
         body: JSON.stringify({ jdText: jdTextVal })
       }).catch(() => null);
       const simplifiedJd: SimplifiedJD = cleanJdSkills(simplifyRes && simplifyRes.ok
@@ -1871,6 +2025,7 @@ export default function App() {
         return;
       }
       setTailorJdAnalysis(simplifiedJd);
+      trackEvent("jd_read", { mode: (simplifiedJd as any).aiUsage?.mode || "ai", skills: (simplifiedJd.requiredSkills || []).length });
       setTailorRole(simplifiedJd.jobTitle || "Tailored Position");
       setTailorSkillOptions(buildSkillOptions(selectedResume, simplifiedJd));
       // If the JD reader couldn't name the role, the posting's first line is usually the job title
@@ -1928,7 +2083,7 @@ export default function App() {
       try {
         tailorRes = await fetch("/api/tailor-resume", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...(await aiAuthHeaders()) },
           body: JSON.stringify({
             resume: specResume,
             resumeStructure: selectedResume,
@@ -1963,6 +2118,7 @@ export default function App() {
         throw new Error(serverError);
       }
       const raw: any = await tailorRes.json();
+      if (raw?.aiUsage) setAiCredits({ aiEnabled: true, ...raw.aiUsage });
 
       // Rules mode returns highlight-style edits; Gemini returns a whole rewritten resume.
       const isFullRewrite = !!raw?.tailoredResume && !raw?.inlineAdditions;
@@ -2032,6 +2188,7 @@ export default function App() {
 
         setTailoredResultResume(mergedTailoredResume);
         setTailoredResultVersion(newVersion);
+        trackEvent("tailored", { mode: raw?.aiUsage?.mode || (isFullRewrite ? "ai" : "rules"), ats: tailoredAtsEvaluation.score, careerSwitch: !!tailorIsSwitching });
         setTailoredAtsScore(result.score || tailoredAtsEvaluation.score);
 
         // Update locally saved versions
@@ -2235,6 +2392,7 @@ WORK EXPERIENCE
       setCurrentUser(userObj);
       setCurrentStep("resume");
       showNotification("Continuing as Guest.", "success");
+      trackEvent("guest_started");
     } catch (error: any) {
       showNotification(error.message || "Guest login failed. Please try again.", "error");
     } finally {
@@ -2447,7 +2605,7 @@ WORK EXPERIENCE
       });
 
       if (!result.isResume) {
-        setAnalysisResult({ isResume: false });
+        setAnalysisResult({ isResume: false, ...(result.scanned ? { scanned: true, reason: result.reason } : {}) } as any);
         setTempFile(null);
         setUploadError(result.reason || "This document does not look like a professional resume.");
         return;
@@ -2524,6 +2682,7 @@ WORK EXPERIENCE
         setTempFile(null);
         setAnalysisResult(null);
         showNotification("Resume saved successfully!", "success");
+        trackEvent("resume_uploaded", { fileType: file.name.split(".").pop()?.toLowerCase() });
       }
     } catch (err: any) {
       console.error("Resume validation error:", err);
@@ -2621,7 +2780,7 @@ WORK EXPERIENCE
     try {
       const response = await fetch("/api/simplify-jd", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await aiAuthHeaders()) },
         body: JSON.stringify({ jdText })
       });
       if (!response.ok) {
@@ -2652,7 +2811,7 @@ WORK EXPERIENCE
     try {
       const response = await fetch("/api/tailor-resume", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await aiAuthHeaders()) },
         body: JSON.stringify({ resume: activeResume, jdText })
       });
       if (!response.ok) {
@@ -3104,6 +3263,7 @@ WORK EXPERIENCE
       downloadResumeAsDocx(tailoredResultResume, base, getResumeToTailor(), tailorRole);
     }
     setTailorDownloaded({ format, fileName: `${base}.${format}` });
+    trackEvent("downloaded", { format });
   };
 
   const downloadResumeAsDocx = async (resume: ResumeStructure, filename: string, original?: ResumeStructure, headline = "") => {
@@ -3316,20 +3476,14 @@ WORK EXPERIENCE
               
               {/* Left Column: Info about Auralis */}
               <div className="lg:col-span-6 space-y-6 text-left flex flex-col justify-center pt-4 lg:pt-8">
-                {/* Feature Pill Tag */}
-                <div className="inline-flex items-center space-x-2 bg-neutral-100 px-4 py-2 rounded-full border border-neutral-300 shadow-xs self-start">
-                  <span className="bg-black text-white text-xs font-bold px-2.5 py-0.5 rounded-full">New</span>
-                  <span className="text-xs font-semibold text-black">Auralis Resumes v2.0 is now live</span>
-                  <span className="text-xs text-neutral-400">→</span>
-                </div>
    
                 {/* Aggressive architecture tight headline (84px text class with Space Grotesk look) */}
                 <h1 className="text-4xl md:text-5xl lg:text-6xl font-sans font-bold tracking-tighter text-black leading-[0.98] max-w-[540px]">
-                  Create AI resumes that look human
+                  Tailor your resume to any job in minutes
                 </h1>
    
                 <p className="font-sans text-sm md:text-base text-neutral-700 max-w-[500px] leading-relaxed">
-                  Precision-engineered resume infrastructure for fresh graduates and entry-level professionals. Autocut corporate jargon, align keyword metrics, and achieve perfect ATS alignment on a beautiful grayscale dashboard.
+                  Upload your resume, paste a job post, and tick the skills you really have. Auralis suggests honest edits you approve line by line, then gives you a clean PDF or Word file that hiring software can read.
                 </p>
    
 
@@ -3350,6 +3504,11 @@ WORK EXPERIENCE
                     >
                       Continue as Guest
                     </button>
+                    <p className="text-xs text-neutral-500 text-center">
+                      By continuing, you agree to how we handle your data.{" "}
+                      <button type="button" id="btn-privacy-login" onClick={() => setShowPrivacy(true)} className="underline hover:text-black cursor-pointer">Privacy</button>
+                    </p>
+                    {showPrivacy && <PrivacyNotice onClose={() => setShowPrivacy(false)} />}
    
                     <div className="relative flex py-1 items-center">
                       <div className="flex-grow border-t border-neutral-300"></div>
@@ -3371,7 +3530,7 @@ WORK EXPERIENCE
                             id="input-auth-email"
                             type="email"
                             required
-                            placeholder="name@university.edu"
+                            placeholder="you@example.com"
                             value={authEmail}
                             onChange={(e) => {
                               setAuthEmail(e.target.value);
@@ -3732,8 +3891,16 @@ WORK EXPERIENCE
               </div>
             )}
           </div>
+          {!isSidebarCollapsed && (
+            <button type="button" id="btn-privacy" onClick={() => setShowPrivacy(true)} className="mt-3 text-xs text-neutral-500 hover:text-black cursor-pointer">
+              Privacy & delete my data
+            </button>
+          )}
         </div>
       </aside>
+      {showPrivacy && currentUser && (
+        <PrivacyNotice onClose={() => setShowPrivacy(false)} onDeleteAccount={handleDeleteMyAccount} deleting={isDeletingAccount} />
+      )}
 
       {/* Main Panel Content Canvas */}
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
@@ -3823,66 +3990,7 @@ WORK EXPERIENCE
             {/* Sign Out Button */}
             <button
               id="btn-sign-out"
-              onClick={async () => {
-                // Guests leave to create an account; their resumes stay on this device and move to the new account.
-                const keepGuestWork = !!currentUser?.isGuest;
-                const storedSession = localStorage.getItem(SUPABASE_SESSION_STORAGE_KEY);
-                if (storedSession) {
-                  try {
-                    const session = JSON.parse(storedSession);
-                    await supabaseAuth.signOut(session.accessToken);
-                  } catch {
-                    // Local sign-out should still continue even if remote sign-out fails.
-                  }
-                }
-                // Clear all local storage and session storage
-                localStorage.removeItem(SUPABASE_SESSION_STORAGE_KEY);
-                sessionStorage.removeItem("jd_resume_customizer_guest_user");
-                localStorage.removeItem("jd_resume_customizer_user");
-                if (!keepGuestWork) {
-                  localStorage.removeItem("jd_resume_customizer_active_resume");
-                  localStorage.removeItem("jd_resume_customizer_original_resume");
-                  localStorage.removeItem("jd_resume_customizer_saved_resumes");
-                  localStorage.removeItem("jd_resume_customizer_versions");
-                  localStorage.removeItem("jd_resume_customizer_jd");
-                  localStorage.removeItem("jd_resume_customizer_active_resume_id");
-                  localStorage.removeItem("jd_resume_customizer_has_resume");
-                  sessionStorage.removeItem("auralis_platform_unlocked");
-                  sessionStorage.removeItem("auralis_onboarding_dismissed");
-                  localStorage.removeItem("jd_resume_customizer_onboarding_done");
-                }
-
-                // Reset all states
-                setCurrentUser(null);
-                setCurrentStep("auth");
-                if (!keepGuestWork) {
-                  setIsUnlocked(false);
-                  setOnboardingChoice(null);
-                  setActiveResume(DEMO_RESUMES.software_grad.data);
-                  setOriginalResume(DEMO_RESUMES.software_grad.data);
-                  setSavedUserResumes([]);
-                  setSavedVersions([]);
-                  setActiveResumeId(null);
-                  setJdText(DEMO_JDS.frontend_eng.text);
-                  setTargetCompany("Vercel Systems");
-                  setTargetRole("Junior Frontend Engineer");
-                }
-                setAuthEmail("");
-                setAuthPassword("");
-                setAuthConfirmPassword("");
-                setAuthMessage(null);
-                setNotifications([]);
-                setShowPassword(false);
-                setShowConfirmPassword(false);
-
-                if (keepGuestWork) {
-                  localStorage.setItem(GUEST_HANDOFF_KEY, "1");
-                  setIsSignUp(true);
-                  showNotification("Create an account to keep your resumes.", "info");
-                } else {
-                  showNotification("Logged out securely.", "info");
-                }
-              }}
+              onClick={() => handleSignOut()}
               className="text-sm font-medium text-neutral-600 hover:text-black hover:bg-neutral-100 px-3 py-2 rounded-lg transition-colors cursor-pointer"
             >
               {currentUser?.isGuest ? "Create account" : "Sign Out"}
@@ -5013,9 +5121,9 @@ WORK EXPERIENCE
                       <div className="flex items-start gap-3">
                         <XCircle className="w-5 h-5 text-rose-500 mt-0.5 flex-shrink-0" />
                         <div>
-                          <p className="text-sm font-medium text-rose-900">This doesn't look like a resume</p>
+                          <p className="text-sm font-medium text-rose-900">{(analysisResult as any)?.scanned ? "We can't read this PDF" : "This doesn't look like a resume"}</p>
                           <p className="text-sm text-neutral-600 mt-1 leading-relaxed">
-                            We couldn't find resume sections like experience, education or skills. Try another file.
+                            {(analysisResult as any)?.scanned ? (analysisResult as any).reason : "We couldn't find resume sections like experience, education or skills. Try another file."}
                           </p>
                         </div>
                       </div>
@@ -5979,9 +6087,9 @@ WORK EXPERIENCE
                       <div className="flex items-start gap-3">
                         <XCircle className="w-5 h-5 text-rose-500 mt-0.5 flex-shrink-0" />
                         <div>
-                          <p className="text-sm font-medium text-rose-900">This doesn't look like a resume</p>
+                          <p className="text-sm font-medium text-rose-900">{(analysisResult as any)?.scanned ? "We can't read this PDF" : "This doesn't look like a resume"}</p>
                           <p className="text-sm text-neutral-600 mt-1 leading-relaxed">
-                            We couldn't find resume sections like experience, education or skills. Try another file.
+                            {(analysisResult as any)?.scanned ? (analysisResult as any).reason : "We couldn't find resume sections like experience, education or skills. Try another file."}
                           </p>
                         </div>
                       </div>
@@ -6114,6 +6222,21 @@ WORK EXPERIENCE
                     />
                   ))}
                 </div>
+              )}
+              {/* Daily AI limit */}
+              {aiCredits?.aiEnabled && tailorWizardStep <= 3 && !tailorAnalysisError && (
+                aiCredits.status === "limit-reached" ? (
+                  <div id="ai-limit-note" className="mt-4 rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-900 leading-relaxed">
+                    You've used today's {aiCredits.limit} AI {aiCredits.limit === 1 ? "tailoring" : "tailorings"}. This one uses basic mode: your ticked skills are added and keywords are checked, but lines aren't rewritten. AI is back {resetsInText(aiCredits.resetsAt)}.
+                    {currentUser?.isGuest && " Create a free account for 3 a day."}
+                  </div>
+                ) : aiCredits.status === "ok" ? (
+                  <p id="ai-credits-left" className="mt-3 text-xs text-neutral-500">
+                    AI tailorings left today: {aiCredits.remaining} of {aiCredits.limit}
+                  </p>
+                ) : aiCredits.status === "not-signed-in" ? (
+                  <p className="mt-3 text-xs text-amber-700">Your sign-in has expired, so this uses basic mode (no AI). Sign in again to use AI.</p>
+                ) : null
               )}
             </div>
 
@@ -6549,12 +6672,33 @@ WORK EXPERIENCE
                         </div>
                       )}
 
+                      {/* Recruiters look for results; we never invent numbers, so ask for the person's own */}
+                      {isFullRewrite && tailorReviews.length > 0 && (
+                        <p id="numbers-tip" className="text-sm text-neutral-600 bg-neutral-50 rounded-lg px-3 py-2 leading-relaxed">
+                          Tip: recruiters notice real results, like "cut sign-up time by 30%" or "managed a team of 4". We never make up numbers, so click Edit on a line to add your own.
+                        </p>
+                      )}
+
                       {/* Career switch note */}
                       {tailorIsSwitching && tailorRoleCheck && (
                         <p className="text-sm text-amber-900 bg-amber-50 rounded-lg px-3 py-2 leading-relaxed" id="career-switch-note">
                           {isFullRewrite
                             ? `Career switch: suggestions focus on what carries over from ${tailorRoleCheck.resumeFamily.label} to ${tailorRoleCheck.jobFamily.label}. None of them should claim you've already worked in ${tailorRoleCheck.jobFamily.label}.`
-                            : `Career switch tip: add one line to your summary about the move, for example "${tailorRoleCheck.resumeRole} moving into ${tailorRoleCheck.jobFamily.label}, with hands-on experience in …". Turn on AI mode for suggested rewrites.`}
+                            : `Career switch tip: add one line to your summary about the move, for example "${tailorRoleCheck.resumeRole} moving into ${tailorRoleCheck.jobFamily.label}, with hands-on experience in …".${aiCredits?.status === "limit-reached" ? ` AI rewrites are back ${resetsInText(aiCredits.resetsAt)}.` : ""}`}
+                        </p>
+                      )}
+
+                      {/* Basic mode because the AI services were down */}
+                      {!isFullRewrite && aiCredits?.aiEnabled && aiCredits.status === "ai-unavailable" && (
+                        <p id="ai-down-result-note" className="text-sm text-amber-900 bg-amber-50 rounded-lg px-3 py-2 leading-relaxed">
+                          Our AI is busy right now, so this was made in basic mode: your ticked skills were added, but no lines were rewritten. Try again in a few minutes for AI suggestions. This didn't use up one of your AI tailorings.
+                        </p>
+                      )}
+
+                      {/* Basic mode because today's AI limit is used up */}
+                      {!isFullRewrite && aiCredits?.aiEnabled && aiCredits.status === "limit-reached" && (
+                        <p id="ai-limit-result-note" className="text-sm text-amber-900 bg-amber-50 rounded-lg px-3 py-2 leading-relaxed">
+                          Made in basic mode because today's AI limit is used up: your ticked skills were added, but no lines were rewritten. AI is back {resetsInText(aiCredits.resetsAt)}.
                         </p>
                       )}
 

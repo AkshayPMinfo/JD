@@ -92,6 +92,8 @@ export interface SimplifiedJD {
   candidateExpectations: string[];
   keywordsToTarget: string[];
   requiredQualifications?: string[];
+  isValidJd?: boolean;
+  invalidReason?: string;
 }
 
 export interface ResumeSuggestion {

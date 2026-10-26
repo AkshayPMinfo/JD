@@ -89,6 +89,11 @@ function addSwitchExtras(resume: ResumeStructure, certsText: string, projectsTex
   };
 }
 
+// Rough word stem so "roadmaps"/"roadmap" and "running"/"run" compare equal
+function stem(word: string): string {
+  return word.toLowerCase().replace(/ies$/, "y").replace(/(ing|ed|es|s)$/, "");
+}
+
 // Set when a guest leaves to sign in, so their resumes are merged into the account.
 const GUEST_HANDOFF_KEY = "jd_resume_customizer_guest_handoff";
 
@@ -230,7 +235,7 @@ export default function App() {
   const [atsResult, setAtsResult] = useState<ATSCheckResult | null>(null);
 
   // UI Customizations
-  const [selectedStyle, setSelectedStyle] = useState<"classic" | "tech" | "executive" | "two-column">("two-column");
+  const [selectedStyle, setSelectedStyle] = useState<"classic" | "tech" | "executive" | "two-column">("classic"); // matches the one-column download
   const [savedVersions, setSavedVersions] = useState<SavedResumeVersion[]>(() => {
     const saved = localStorage.getItem("jd_resume_customizer_versions");
     try { return saved ? JSON.parse(saved) : []; } catch { return []; }
@@ -1387,7 +1392,12 @@ export default function App() {
   const calculateRealisticAtsScore = (resume: ResumeStructure, jd: SimplifiedJD) => {
     const requiredSkills = (jd.requiredSkills || []).map((s: any) => s?.name || s || "");
     const keywordsToTarget = jd.keywordsToTarget || [];
-    const allKeywords = [...new Set([...requiredSkills, ...keywordsToTarget])].filter(Boolean);
+    // One entry per skill: drop case/plural repeats and longer variants ("PRD Writing" next to "PRD")
+    const allKeywords = (() => {
+      const list = [...requiredSkills, ...keywordsToTarget].map(k => String(k || "").trim()).filter(Boolean);
+      const keys = list.map(k => singularSkill(k.toLowerCase().replace(/\s+/g, " ")));
+      return list.filter((_, i) => keys.indexOf(keys[i]) === i && !keys.some((other, j) => j !== i && other.length < keys[i].length && keys[i].startsWith(other + " ")));
+    })();
     
     // Lowercase items for lookup
     const skillsLower = (resume.skills || []).map(s => String(s || "").toLowerCase());
@@ -1663,7 +1673,9 @@ export default function App() {
     const titleKey = skillKey(jd.jobTitle || "");
     const isSkillLike = (name: string) => {
       const key = skillKey(name);
-      return !!key && key !== titleKey && key.split(" ").length <= 4 && name.length <= 40;
+      // Job titles aren't skills ("Backend Engineer", "Product Manager")
+      const looksLikeTitle = /\b(engineer|developer|manager|analyst|designer|scientist|architect|consultant|specialist|intern|executive|officer|associate|recruiter|accountant)s?$/.test(key);
+      return !!key && key !== titleKey && !looksLikeTitle && key.split(" ").length <= 4 && name.length <= 40;
     };
     const required = dedupeSkillNames((jd.requiredSkills || []).map((sk: any) => sk?.name || sk)).filter(isSkillLike);
     const requiredKeys = new Set(required.map(skillKey));
@@ -1695,9 +1707,10 @@ export default function App() {
   // Compare the AI rewrite with the original, line by line, and list each change for review.
   // `mentions` = ticked skills a line now claims that the original line never mentioned.
   // `warnings` = new claims the original resume never made anywhere: numbers, JD skills, seniority.
-  const buildEditReviews = (original: ResumeStructure, tailored: ResumeStructure, ticked: string[], jdSkills: string[] = []): EditReview[] => {
+  const buildEditReviews = (original: ResumeStructure, tailored: ResumeStructure, ticked: string[], jdSkills: string[] = [], jdText = ""): EditReview[] => {
     const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const has = (text: string, skill: string) => new RegExp(`(^|[^a-z0-9])${esc(skill.toLowerCase())}([^a-z0-9]|$)`, "i").test(text.toLowerCase());
+    // whole-word match, allowing a plural ("PRD" matches "PRDs")
+    const has = (text: string, skill: string) => new RegExp(`(^|[^a-z0-9])${esc(skill.toLowerCase())}(e?s)?([^a-z0-9]|$)`, "i").test(text.toLowerCase());
     const newMentions = (suggested: string, orig: string) => ticked.filter(sk => has(suggested, sk) && !has(orig, sk));
     const originalText = [
       original.summary, ...(original.skills || []), ...(original.certifications || []), ...(original.achievements || []),
@@ -1708,6 +1721,13 @@ export default function App() {
     const numbersOf = (text: string) => new Set((text.match(/\d[\d,.]*/g) || []).map(n => n.replace(/,/g, "").replace(/\.$/, "")));
     const originalNumbers = numbersOf(originalText);
     const SENIORITY = ["senior", "lead", "principal", "staff engineer", "head of", "expert", "chief", "director"];
+    // Everyday job-post words that don't make a claim on their own
+    const GENERIC = new Set("about across ability able analyse analysis analyze based build building candidate clear closely comfort company cross customer customers daily deliver delivery design drive ensure every excellent experience familiarity features functional great growth hands help high hiring ideal impact including improve join knowledge launch looking manage manager managing metrics multiple needs other plus preferred prioritise prioritize product products quality required requirements responsibilities responsible results role strong success support teams their these things through tools track understanding using users within working world would years".split(" ").map(w => stem(w)));
+    const wordsOf = (text: string) => (text.toLowerCase().match(/[a-z][a-z0-9+#/-]{4,}/g) || []);
+    const stemsOf = (text: string) => new Map(wordsOf(text).map(w => [stem(w), w] as [string, string]));
+    const jdStems = new Set([...stemsOf(jdText).keys()].filter(st => !GENERIC.has(st)));
+    const originalStems = new Set(stemsOf(originalText).keys());
+    const tickedStems = new Set(ticked.flatMap(t => [...stemsOf(t).keys()]));
     const claimWarnings = (sugg: string): string[] => {
       const warnings: string[] = [];
       const newNumbers = [...numbersOf(sugg)].filter(n => !originalNumbers.has(n));
@@ -1716,6 +1736,11 @@ export default function App() {
       if (unbacked.length) warnings.push(`Claims ${unbacked.slice(0, 3).join(", ")}, which ${unbacked.length === 1 ? "isn't" : "aren't"} in your resume`);
       const seniority = SENIORITY.filter(w => has(sugg, w) && !has(originalText, w));
       if (seniority.length) warnings.push(`Adds "${seniority[0]}", which isn't in your titles or experience`);
+      // Words lifted from the job post that your resume never used, e.g. "checkout" for a payments job
+      const lifted = [...stemsOf(sugg).entries()].filter(([stem]) => jdStems.has(stem) && !originalStems.has(stem) && !tickedStems.has(stem)).map(([, word]) => word);
+      const alreadyNamed = (w: string) => warnings.some(x => x.toLowerCase().includes(w.toLowerCase()));
+      const liftedNew = lifted.filter(w => !alreadyNamed(w));
+      if (liftedNew.length) warnings.push(`Uses "${liftedNew.slice(0, 3).join('", "')}" from the job post, which your resume doesn't mention`);
       return warnings;
     };
     const reviews: EditReview[] = [];
@@ -1830,6 +1855,10 @@ export default function App() {
       const simplifiedJd: SimplifiedJD = cleanJdSkills(simplifyRes && simplifyRes.ok
         ? await simplifyRes.json()
         : extractJDHeuristically(jdTextVal, companyVal));
+      if (simplifiedJd.isValidJd === false) {
+        setTailorStepError(simplifiedJd.invalidReason ? `This doesn't look like a job description: ${simplifiedJd.invalidReason}` : INVALID_JD_MESSAGE);
+        return;
+      }
       setTailorJdAnalysis(simplifiedJd);
       setTailorRole(simplifiedJd.jobTitle || "Tailored Position");
       setTailorSkillOptions(buildSkillOptions(selectedResume, simplifiedJd));
@@ -1941,7 +1970,7 @@ export default function App() {
           ...(simplifiedJd.requiredSkills || []).map((sk: any) => sk?.name || sk),
           ...(simplifiedJd.keywordsToTarget || [])
         ].map(n => String(n || "").trim()).filter(Boolean);
-        const reviews = buildEditReviews(selectedResume, aiResume, tailorSelectedSkills, jdSkillNames);
+        const reviews = buildEditReviews(selectedResume, aiResume, tailorSelectedSkills, jdSkillNames, tailorJdText || "");
         setTailorReviewBase(base);
         setTailorReviews(reviews);
         setEditingReviewId(null);
@@ -5696,7 +5725,7 @@ WORK EXPERIENCE
                 const previewResume = savedUserResumes.find(r => r.id === previewResumeId);
                 if (!previewResume) return <p className="text-sm text-neutral-500">No resume selected.</p>;
 
-                return <ResumePreview resume={previewResume.data} templateStyle="two-column" />;
+                return <ResumePreview resume={previewResume.data} templateStyle="classic" />;
               })()}
             </div>
 
@@ -6689,7 +6718,7 @@ WORK EXPERIENCE
               {!tailorIsAnalyzing && !tailorAnalysisError && tailorWizardStep === 5 && tailoredResultResume && (
                 <div className="space-y-3 text-left py-2 animate-fadeIn font-sans" id="tailor-final-step">
                   <p className="text-sm text-neutral-600 leading-relaxed">
-                    This is your final resume. Downloads use a plain one-column layout that hiring systems read easily. Not happy with something? Go back to the edits and change it.
+                    This is your final resume, laid out the way it will download. Not happy with something? Go back to the edits and change it.
                   </p>
                   <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white w-full">
                     <div className="overflow-y-auto bg-neutral-50" style={{height: '62vh'}}>
@@ -7046,7 +7075,7 @@ WORK EXPERIENCE
               {/* Right Column: Resume Preview */}
               <div className="w-full md:w-7/12 flex flex-col border border-neutral-200 rounded-xl overflow-hidden bg-neutral-50 max-h-[500px] md:max-h-none">
                 <div className="flex-1 overflow-y-auto p-4 bg-neutral-50 scrollbar-thin">
-                  <ResumePreview resume={selectedSavedVersion.resumeData} templateStyle="two-column" originalResume={selectedSavedVersion.originalResumeData || undefined} />
+                  <ResumePreview resume={selectedSavedVersion.resumeData} templateStyle="classic" originalResume={selectedSavedVersion.originalResumeData || undefined} />
                 </div>
               </div>
             </div>

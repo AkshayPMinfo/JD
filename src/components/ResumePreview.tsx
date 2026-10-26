@@ -14,6 +14,15 @@ interface ResumePreviewProps {
   showHighlights?: boolean;
 }
 
+// Section order used by the downloaded PDF/DOCX (src/utils/resumePdf.ts)
+const SECTION_ORDER = ["summary", "skills", "experience", "projects", "education", "certifications", "achievements", "languages"];
+function sectionRank(block: Block): number {
+  if (block.kind === "header") return -1;
+  const label = String((block as any).label || (block.kind === "text" ? "summary" : "")).toLowerCase();
+  const i = SECTION_ORDER.findIndex(key => label.includes(key) || (key === "summary" && label.includes("profile")));
+  return i === -1 ? SECTION_ORDER.length : i;
+}
+
 export default function ResumePreview({
   resume,
   templateStyle,
@@ -167,7 +176,7 @@ export default function ResumePreview({
     if (item.kind === "job") {
       if (templateStyle === "two-column") {
         return (
-          <div key={jobKey} className="font-serif">
+          <div key={jobKey} className="font-sans">
             <h3 className="font-bold text-black text-sm">
               <span>{item.company}</span>
               {item.title && (
@@ -178,7 +187,7 @@ export default function ResumePreview({
               )}
             </h3>
             <p className="text-[11px] text-neutral-500 font-semibold font-sans mt-0.5">{item.dates}</p>
-            <ul className="list-disc pl-5 mt-2 space-y-1 text-xs text-neutral-700 leading-relaxed font-serif">
+            <ul className="list-disc pl-5 mt-2 space-y-1 text-xs text-neutral-700 leading-relaxed font-sans">
               {item.bullets.map((bullet, bulletIdx) => {
                 const bulletKey = `${jobKey}.${bulletIdx}`;
                 const adds = tailored?.inlineAdditions?.[bulletKey];
@@ -270,14 +279,14 @@ export default function ResumePreview({
       // Default/Classic style
       return (
         <div key={jobKey}>
-          <div className="flex justify-between items-baseline font-medium text-xs font-serif">
+          <div className="flex justify-between items-baseline font-medium text-xs font-sans">
             <span className="font-semibold text-gray-900 text-sm">
               {item.title ? `${item.title} — ` : ""}
               <span className="italic text-gray-700 font-normal">{item.company}</span>
             </span>
             <span className="text-gray-500 font-normal">{item.dates}</span>
           </div>
-          <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed font-serif">
+          <ul className="list-disc pl-4 space-y-1 mt-2 text-xs text-gray-600 leading-relaxed font-sans">
             {item.bullets.map((bullet, bulletIdx) => {
               const bulletKey = `${jobKey}.${bulletIdx}`;
               const adds = tailored?.inlineAdditions?.[bulletKey];
@@ -329,7 +338,7 @@ export default function ResumePreview({
             <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-2 font-sans">
               {block.label || "Profile"}
             </h2>
-            <p className="text-xs text-neutral-700 leading-relaxed font-serif">
+            <p className="text-xs text-neutral-700 leading-relaxed font-sans">
               {renderBullet(block.body, adds, showHighlights, `${blockIdx}.summary`, originalSummary ? [originalSummary] : [])}
             </p>
           </div>
@@ -363,11 +372,11 @@ export default function ResumePreview({
       }
 
       return (
-        <div key={blockIdx} className="mb-6 font-serif">
+        <div key={blockIdx} className="mb-6 font-sans">
           <h2 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-2 border-b border-gray-300 pb-0.5">
             {block.label || "Professional Summary"}
           </h2>
-          <p className="text-xs leading-relaxed text-gray-750 font-serif">
+          <p className="text-xs leading-relaxed text-gray-750 font-sans">
             {renderBullet(block.body, adds, showHighlights, `${blockIdx}.summary`, originalSummary ? [originalSummary] : [])}
           </p>
         </div>
@@ -583,12 +592,12 @@ export default function ResumePreview({
     return (
       <div
         id={id}
-        className="bg-white text-gray-900 p-8 max-w-[820px] mx-auto text-sm print:p-0 print:border-none print:shadow-none font-serif"
+        className="bg-white text-gray-900 p-8 max-w-[820px] mx-auto text-sm print:p-0 print:border-none print:shadow-none font-sans"
       >
         {/* Header */}
         <div className="flex justify-between items-start mb-8">
           <div className="text-left">
-            <h1 className="text-4xl font-extrabold tracking-tight text-black font-serif">
+            <h1 className="text-4xl font-extrabold tracking-tight text-black font-sans">
               {fullName}
             </h1>
           </div>
@@ -641,7 +650,7 @@ export default function ResumePreview({
               <h2 className="text-xs font-black uppercase tracking-wider text-blue-600 mb-4 font-sans">
                 {sec.label}
               </h2>
-              <ul className="list-disc pl-5 space-y-1 text-xs text-neutral-700 font-serif">
+              <ul className="list-disc pl-5 space-y-1 text-xs text-neutral-700 font-sans">
                 {sec.items.map((it, itIdx) => (
                   <li key={itIdx}>{it.kind === "line" ? it.text : ""}</li>
                 ))}
@@ -658,13 +667,13 @@ export default function ResumePreview({
     ? "bg-[#121214] text-gray-200 p-8 font-mono max-w-[800px] mx-auto border border-[#27272a] shadow-lg rounded-lg text-sm print:bg-white print:text-black print:p-0 print:border-none print:shadow-none"
     : templateStyle === "executive"
     ? "bg-white text-gray-950 p-8 font-sans max-w-[800px] mx-auto border-t-8 border-[#1e3a8a] shadow-lg rounded-lg text-sm print:p-0 print:border-none print:shadow-none"
-    : "bg-white text-gray-900 p-8 font-serif max-w-[800px] mx-auto border border-gray-200 shadow-md rounded-lg text-sm print:p-0 print:border-none print:shadow-none";
+    : "bg-white text-gray-900 p-8 font-sans max-w-[800px] mx-auto border border-gray-200 shadow-md rounded-lg text-sm print:p-0 print:border-none print:shadow-none";
 
   const headerClass = templateStyle === "tech"
     ? "border-b-2 border-green-500 pb-4 mb-6 text-left"
     : templateStyle === "executive"
     ? "text-center pb-6 mb-6 border-b border-gray-200"
-    : "text-center pb-5 mb-5 border-b border-gray-200";
+    : "text-left pb-4 mb-5 border-b border-gray-200";
 
   return (
     <div id={id} className={containerClass}>
@@ -695,10 +704,10 @@ export default function ResumePreview({
           </>
         ) : (
           <>
-            <h1 className="text-3xl font-normal tracking-wide text-gray-900 uppercase font-serif">
+            <h1 className="text-2xl font-bold text-gray-900 font-sans">
               {fullName}
             </h1>
-            <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 mt-2.5 text-xs text-gray-500 font-sans">
+            <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5 text-xs text-gray-500 font-sans">
               {email && <span>{email}</span>}
               {email && (phone || linkedin || website) && <span className="text-gray-300">|</span>}
               {phone && <span>{phone}</span>}
@@ -712,7 +721,11 @@ export default function ResumePreview({
       </div>
 
       <div className="text-left space-y-6">
-        {normResume.blocks.map((block, idx) => renderBlock(block, idx))}
+        {/* Same section order as the downloaded PDF/DOCX; keep each block's original index for highlights */}
+        {normResume.blocks
+          .map((block, idx) => ({ block, idx }))
+          .sort((a, b) => sectionRank(a.block) - sectionRank(b.block) || a.idx - b.idx)
+          .map(({ block, idx }) => renderBlock(block, idx))}
       </div>
 
       {/* Kind D: Appended New Sections */}

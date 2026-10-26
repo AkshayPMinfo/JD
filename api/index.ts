@@ -916,6 +916,34 @@ async function generateContentWithRetry(ai: GoogleGenAI | null, options: any, ma
 }
 
 // 1. Simplify Job Description API
+/**
+ * The AI sometimes returns a JD analysis with no title or skills, or wrongly calls a real JD invalid.
+ * Fill those gaps from the rules reader so tailoring never runs with an empty job description.
+ */
+function withRulesSafetyNet(ai: any, jdText?: string) {
+  const result = { ...(ai || {}) };
+  const skillCount = Array.isArray(result.requiredSkills) ? result.requiredSkills.length : 0;
+  console.log("[simplify-jd] AI result:", { isValidJd: result.isValidJd, jobTitle: result.jobTitle, skills: skillCount });
+  if (!jdText) return result; // screenshots: nothing for the rules reader to read
+  const rules: any = rulesBasedSimplifyJd(jdText);
+  if (result.isValidJd === false && rules.isValidJd) {
+    console.log("[simplify-jd] AI called it invalid, rules reader says it is a JD; using rules result. AI reason:", result.invalidReason);
+    return { ...rules, aiInvalidReason: result.invalidReason };
+  }
+  if (result.isValidJd === false) return result;
+  // AI said "valid" but found nothing, and the rules reader doesn't see a JD either: treat as invalid
+  if (skillCount === 0 && !String(result.jobTitle || "").trim() && !rules.isValidJd) return rules;
+  if (!String(result.jobTitle || "").trim()) result.jobTitle = rules.jobTitle;
+  if (skillCount < 3) {
+    const have = new Set((result.requiredSkills || []).map((x: any) => String(x?.name || "").toLowerCase()));
+    result.requiredSkills = [...(result.requiredSkills || []), ...(rules.requiredSkills || []).filter((x: any) => !have.has(String(x.name).toLowerCase()))];
+    console.log("[simplify-jd] AI found too few skills; added rules skills:", result.requiredSkills.length);
+  }
+  if (!Array.isArray(result.keywordsToTarget) || result.keywordsToTarget.length === 0) result.keywordsToTarget = rules.keywordsToTarget;
+  if (!Array.isArray(result.keyResponsibilities) || result.keyResponsibilities.length === 0) result.keyResponsibilities = rules.keyResponsibilities;
+  return result;
+}
+
 app.post("/api/simplify-jd", async (req, res) => {
   try {
     let { jdText, jdImageBase64, jdImagesBase64, fileBase64, fileName, fileType } = req.body;
@@ -1126,7 +1154,7 @@ Format your response strictly as JSON with this schema:
       throw new Error("Failed to receive output text from Gemini API");
     }
 
-    res.json(JSON.parse(resultText.trim()));
+    res.json(withRulesSafetyNet(JSON.parse(resultText.trim()), jdText));
   } catch (error: any) {
     console.error("Error in simplify-jd:", error);
     res.status(500).json({ error: cleanErrorMessage(error) });

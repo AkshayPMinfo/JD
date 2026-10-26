@@ -1,7 +1,7 @@
 import express from "express";
 import path from "path";
 import { GoogleGenAI, Type } from "@google/genai";
-import { getAiCredits, useAiCredit, aiAllowed, bearerToken } from "./aiLimit";
+import { getAiCredits, useAiCredit, aiAllowed, bearerToken } from "./aiLimit.js";
 import dotenv from "dotenv";
 import mammoth from "mammoth";
 import { getDocumentProxy, extractText } from "unpdf";

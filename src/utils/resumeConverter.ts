@@ -1,3 +1,4 @@
+import { educationNewestFirst } from "./educationOrder";
 import { ResumeStructure, Resume, Block, Item, TailoredResume } from "../types";
 
 export function resumeStructureToResume(res: ResumeStructure, rawText?: string): Resume {
@@ -39,7 +40,7 @@ export function resumeStructureToResume(res: ResumeStructure, rawText?: string):
     blocks.push({
       kind: "section",
       label: "Education",
-      items: res.education.map(edu => ({
+      items: educationNewestFirst(res.education).map(edu => ({
         kind: "edu",
         school: edu.school || "",
         degree: edu.degree || "",

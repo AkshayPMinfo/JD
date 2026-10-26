@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { educationNewestFirst } from "./utils/educationOrder";
 import React, { useState, useEffect, useRef } from "react";
 import JSZip from "jszip";
 import {
@@ -315,6 +316,16 @@ export default function App() {
       }
       return false;
     });
+  };
+
+  // Second tailored resume for the same company → "Swiggy (2)", "Swiggy (3)"
+  const generateUniqueCompanyName = (company: string): string => {
+    const base = (company || "Untitled").trim().replace(/\s*\(\d+\)$/, "");
+    const taken = new Set(savedVersions.map(v => (v.companyName || "").trim().toLowerCase()));
+    if (!taken.has(base.toLowerCase())) return base;
+    let n = 2;
+    while (taken.has(`${base} (${n})`.toLowerCase())) n++;
+    return `${base} (${n})`;
   };
 
   // Same name twice (same person, or two people with one name) → "Name", "Name (2)", "Name (3)"
@@ -2002,7 +2013,7 @@ export default function App() {
 
         const newVersion: SavedResumeVersion = {
           id: `ver-${Date.now()}`,
-          companyName: companyVal,
+          companyName: generateUniqueCompanyName(companyVal),
           jobTitle: extractedRole,
           savedAt: formatResumeCreatedDate(new Date().toISOString()),
           resumeData: mergedTailoredResume,
@@ -2761,7 +2772,7 @@ WORK EXPERIENCE
     }
     const newVersion: SavedResumeVersion = {
       id: "v-" + Date.now(),
-      companyName: targetCompany,
+      companyName: generateUniqueCompanyName(targetCompany),
       jobTitle: targetRole,
       savedAt: new Date().toLocaleDateString(undefined, {
         month: "short",
@@ -2824,7 +2835,7 @@ WORK EXPERIENCE
         description: Array.from(new Set((exp.description || []).map(cleanExportValue).filter(Boolean)))
       }))
       .filter(exp => exp.role || exp.company || exp.description.length > 0),
-    education: (resume.education || [])
+    education: educationNewestFirst(resume.education || [])
       .map(edu => ({
         ...edu,
         degree: cleanExportValue(edu.degree),

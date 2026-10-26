@@ -4,6 +4,7 @@
  */
 import { jsPDF } from "jspdf";
 import type { ResumeStructure } from "../types";
+import { educationNewestFirst } from "./educationOrder";
 
 // The built-in PDF fonts cover Latin-1 only. Map common typographic characters to safe ones
 // so nothing turns into blank boxes or garbage in the PDF text layer.
@@ -134,7 +135,7 @@ export function buildResumePdf(resume: ResumeStructure, headline = ""): jsPDF {
     });
   }
 
-  const education = (resume.education || []).filter(e => e.degree || e.school);
+  const education = educationNewestFirst(resume.education || []).filter(e => e.degree || e.school);
   if (education.length) {
     section("Education");
     education.forEach(e => {

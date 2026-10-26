@@ -69,6 +69,29 @@ const SUPABASE_SESSION_STORAGE_KEY = "jd_resume_customizer_supabase_session";
 const PASSWORD_MIN_LENGTH = 8;
 const PASSWORD_RESET_COOLDOWN_SECONDS = 60;
 
+// Adds a career switcher's courses/certificates and side projects (one per line) to a copy of the resume.
+// A project line can be "Name - what I built"; links are kept as typed.
+function addSwitchExtras(resume: ResumeStructure, certsText: string, projectsText: string): ResumeStructure {
+  const lines = (text: string) => text.split("\n").map(l => l.replace(/^[\s•*-]+/, "").trim()).filter(Boolean);
+  const certs = lines(certsText);
+  const projects = lines(projectsText).map((line, i) => {
+    const [name, ...rest] = line.split(/\s+[-–—:]\s+/);
+    const detail = rest.join(" - ").trim();
+    return { id: `switch-project-${i}`, name: name.trim(), description: detail ? [detail] : [] };
+  });
+  if (!certs.length && !projects.length) return resume;
+  const haveCert = new Set((resume.certifications || []).map(c => c.toLowerCase()));
+  const haveProject = new Set((resume.projects || []).map(p => (p.name || "").toLowerCase()));
+  return {
+    ...resume,
+    certifications: [...(resume.certifications || []), ...certs.filter(c => !haveCert.has(c.toLowerCase()))],
+    projects: [...(resume.projects || []), ...projects.filter(p => !haveProject.has(p.name.toLowerCase()))]
+  };
+}
+
+// Set when a guest leaves to sign in, so their resumes are merged into the account.
+const GUEST_HANDOFF_KEY = "jd_resume_customizer_guest_handoff";
+
 export default function App() {
   const onboardingFileInputRef = useRef<HTMLInputElement>(null);
   type AppUser = { email: string; name: string; isGuest?: boolean };
@@ -289,18 +312,14 @@ export default function App() {
     });
   };
 
+  // Same name twice (same person, or two people with one name) → "Name", "Name (2)", "Name (3)"
   const generateUniqueResumeName = (fullName: string): string => {
-    const baseName = (fullName || "Candidate").trim();
-    const existingCount = savedUserResumes.filter(r => {
-      const n = (r.name || "").trim();
-      return n === baseName || n.startsWith(`${baseName} `);
-    }).length;
-    
-    if (existingCount === 0) {
-      return baseName;
-    } else {
-      return `${baseName} ${existingCount}`;
-    }
+    const baseName = (fullName || "Candidate").trim().replace(/\s*\(\d+\)$/, "");
+    const taken = new Set(savedUserResumes.map(r => (r.name || "").trim().toLowerCase()));
+    if (!taken.has(baseName.toLowerCase())) return baseName;
+    let n = 2;
+    while (taken.has(`${baseName} (${n})`.toLowerCase())) n++;
+    return `${baseName} (${n})`;
   };
 
   const isStoredUploadedResumeObviouslyInvalid = (resume: SavedResume): boolean => {
@@ -402,7 +421,11 @@ export default function App() {
 
   const getResumeCardDisplayName = (resume: SavedResume): string => {
     const holderName = resume.data?.fullName?.trim();
-    if (isLikelyResumeHolderName(holderName)) return holderName;
+    if (isLikelyResumeHolderName(holderName)) {
+      // Keep the "(2)" suffix when two resumes share a name
+      const numbered = resume.name?.trim().match(/\s\((\d+)\)$/);
+      return numbered ? `${holderName} (${numbered[1]})` : holderName;
+    }
 
     const originalFileName = cleanResumeFileNameForCard(resume.originalFileName);
     if (originalFileName) return originalFileName;
@@ -461,6 +484,11 @@ export default function App() {
   // Job-switcher check: set when the resume's recent role and the job are in different fields
   const [tailorRoleCheck, setTailorRoleCheck] = useState<RoleCheck | null>(null);
   const [tailorIsSwitching, setTailorIsSwitching] = useState<boolean | null>(null);
+  // Career switchers can list courses/certificates and side projects for the new field (one per line).
+  const [tailorSwitchCerts, setTailorSwitchCerts] = useState("");
+  const [tailorSwitchProjects, setTailorSwitchProjects] = useState("");
+  // Set after a download from the tailoring wizard, to show the "downloaded" popup.
+  const [tailorDownloaded, setTailorDownloaded] = useState<{ format: "pdf" | "docx"; fileName: string } | null>(null);
   const [tailorReviewBase, setTailorReviewBase] = useState<{ original: ResumeStructure; skills: string[] } | null>(null);
   const [editingReviewId, setEditingReviewId] = useState<string | null>(null);
   const [tailorAnalysisResult, setTailorAnalysisResult] = useState<{
@@ -904,6 +932,11 @@ export default function App() {
   };
 
   async function loadPersistedSupabaseData(session: { accessToken: string; user: { id: string; email: string } }) {
+    const guestHandoff = localStorage.getItem(GUEST_HANDOFF_KEY) === "1";
+    localStorage.removeItem(GUEST_HANDOFF_KEY);
+    const readLocalList = <T,>(key: string): T[] => {
+      try { return JSON.parse(localStorage.getItem(key) || "[]") || []; } catch { return []; }
+    };
     try {
       const [resumeRows, tailoredRows] = await Promise.all([
         supabaseData.listResumes(session.accessToken).catch((error) => {
@@ -931,7 +964,11 @@ export default function App() {
         }));
 
         if (supabaseResumes.length > 0) {
-          // Supabase has records — use as authoritative source
+          // Supabase has records — use as authoritative source, plus any resumes made as a guest just before signing in
+          if (guestHandoff) {
+            const ids = new Set(supabaseResumes.map(r => r.id));
+            supabaseResumes.push(...readLocalList<SavedResume>("jd_resume_customizer_saved_resumes").filter(r => !ids.has(r.id)));
+          }
           setSavedUserResumes(supabaseResumes);
           const nextActiveId = (() => {
             // Check if activeResumeId (restored from localStorage) still exists in the fetched list
@@ -1011,6 +1048,10 @@ export default function App() {
         diffModified: row.diff_modified || [],
         diffUnchanged: row.diff_unchanged || [],
       }));
+      if (guestHandoff && versions.length > 0) {
+        const ids = new Set(versions.map(v => v.id));
+        versions.push(...readLocalList<SavedResumeVersion>("jd_resume_customizer_versions").filter(v => !ids.has(v.id)));
+      }
       if (versions.length > 0) {
         setSavedVersions(versions);
       }
@@ -1042,6 +1083,9 @@ export default function App() {
     setEditingReviewId(null);
     setTailorRoleCheck(null);
     setTailorIsSwitching(null);
+    setTailorSwitchCerts("");
+    setTailorSwitchProjects("");
+    setTailorDownloaded(null);
     setTailorJdText("");
     setTailorJdImages([]);
     setTailorJdImageNames([]);
@@ -1823,8 +1867,10 @@ export default function App() {
     startTailorProgress(TAILOR_STAGES);
 
     try {
-      const selectedResume = getResumeToTailor();
-      if (!selectedResume) throw new Error("No resume selected");
+      const pickedResume = getResumeToTailor();
+      if (!pickedResume) throw new Error("No resume selected");
+      // Career switchers' own courses and side projects count as their facts for this tailoring.
+      const selectedResume = tailorIsSwitching ? addSwitchExtras(pickedResume, tailorSwitchCerts, tailorSwitchProjects) : pickedResume;
 
       const extractedRole = simplifiedJd.jobTitle || "Tailored Position";
       const simplifiedJdText = `Role: ${extractedRole}\nCompany Pitch: ${simplifiedJd.companyPitch || ""}\nKeywords: ${(simplifiedJd.keywordsToTarget || []).join(", ")}`;
@@ -3008,6 +3054,18 @@ WORK EXPERIENCE
     }
   };
 
+  // Download the tailored resume from the wizard, then show the "downloaded" popup.
+  const downloadTailored = (format: "pdf" | "docx") => {
+    if (!tailoredResultResume) return;
+    const base = fileBaseName(tailoredResultResume.fullName, tailorCompany);
+    if (format === "pdf") {
+      handlePrintOrSavePDF(tailoredResultResume, undefined, tailorRole, undefined, tailorCompany);
+    } else {
+      downloadResumeAsDocx(tailoredResultResume, base, getResumeToTailor(), tailorRole);
+    }
+    setTailorDownloaded({ format, fileName: `${base}.${format}` });
+  };
+
   const downloadResumeAsDocx = async (resume: ResumeStructure, filename: string, original?: ResumeStructure, headline = "") => {
     try {
       logDownloadEvent("Download Started", { type: "DOCX" });
@@ -3726,6 +3784,8 @@ WORK EXPERIENCE
             <button
               id="btn-sign-out"
               onClick={async () => {
+                // Guests leave to create an account; their resumes stay on this device and move to the new account.
+                const keepGuestWork = !!currentUser?.isGuest;
                 const storedSession = localStorage.getItem(SUPABASE_SESSION_STORAGE_KEY);
                 if (storedSession) {
                   try {
@@ -3739,30 +3799,34 @@ WORK EXPERIENCE
                 localStorage.removeItem(SUPABASE_SESSION_STORAGE_KEY);
                 sessionStorage.removeItem("jd_resume_customizer_guest_user");
                 localStorage.removeItem("jd_resume_customizer_user");
-                localStorage.removeItem("jd_resume_customizer_active_resume");
-                localStorage.removeItem("jd_resume_customizer_original_resume");
-                localStorage.removeItem("jd_resume_customizer_saved_resumes");
-                localStorage.removeItem("jd_resume_customizer_versions");
-                localStorage.removeItem("jd_resume_customizer_jd");
-                localStorage.removeItem("jd_resume_customizer_active_resume_id");
-                localStorage.removeItem("jd_resume_customizer_has_resume");
-                sessionStorage.removeItem("auralis_platform_unlocked");
-                sessionStorage.removeItem("auralis_onboarding_dismissed");
-                localStorage.removeItem("jd_resume_customizer_onboarding_done");
+                if (!keepGuestWork) {
+                  localStorage.removeItem("jd_resume_customizer_active_resume");
+                  localStorage.removeItem("jd_resume_customizer_original_resume");
+                  localStorage.removeItem("jd_resume_customizer_saved_resumes");
+                  localStorage.removeItem("jd_resume_customizer_versions");
+                  localStorage.removeItem("jd_resume_customizer_jd");
+                  localStorage.removeItem("jd_resume_customizer_active_resume_id");
+                  localStorage.removeItem("jd_resume_customizer_has_resume");
+                  sessionStorage.removeItem("auralis_platform_unlocked");
+                  sessionStorage.removeItem("auralis_onboarding_dismissed");
+                  localStorage.removeItem("jd_resume_customizer_onboarding_done");
+                }
 
                 // Reset all states
                 setCurrentUser(null);
                 setCurrentStep("auth");
-                setIsUnlocked(false);
-                setOnboardingChoice(null);
-                setActiveResume(DEMO_RESUMES.software_grad.data);
-                setOriginalResume(DEMO_RESUMES.software_grad.data);
-                setSavedUserResumes([]);
-                setSavedVersions([]);
-                setActiveResumeId(null);
-                setJdText(DEMO_JDS.frontend_eng.text);
-                setTargetCompany("Vercel Systems");
-                setTargetRole("Junior Frontend Engineer");
+                if (!keepGuestWork) {
+                  setIsUnlocked(false);
+                  setOnboardingChoice(null);
+                  setActiveResume(DEMO_RESUMES.software_grad.data);
+                  setOriginalResume(DEMO_RESUMES.software_grad.data);
+                  setSavedUserResumes([]);
+                  setSavedVersions([]);
+                  setActiveResumeId(null);
+                  setJdText(DEMO_JDS.frontend_eng.text);
+                  setTargetCompany("Vercel Systems");
+                  setTargetRole("Junior Frontend Engineer");
+                }
                 setAuthEmail("");
                 setAuthPassword("");
                 setAuthConfirmPassword("");
@@ -3771,11 +3835,17 @@ WORK EXPERIENCE
                 setShowPassword(false);
                 setShowConfirmPassword(false);
 
-                showNotification("Logged out securely.", "info");
+                if (keepGuestWork) {
+                  localStorage.setItem(GUEST_HANDOFF_KEY, "1");
+                  setIsSignUp(true);
+                  showNotification("Create an account to keep your resumes.", "info");
+                } else {
+                  showNotification("Logged out securely.", "info");
+                }
               }}
               className="text-sm font-medium text-neutral-600 hover:text-black hover:bg-neutral-100 px-3 py-2 rounded-lg transition-colors cursor-pointer"
             >
-              Sign Out
+              {currentUser?.isGuest ? "Create account" : "Sign Out"}
             </button>
           </div>
         </header>
@@ -4046,7 +4116,7 @@ WORK EXPERIENCE
 
                     // Push into the library
                     const newId = `resume-manual-${Date.now()}`;
-                    const newName = activeResume.fullName ? `${activeResume.fullName}'s Resume` : "My Resume";
+                    const newName = generateUniqueResumeName(activeResume.fullName ? `${activeResume.fullName}'s Resume` : "My Resume");
                     if (isDuplicateResume(newName, undefined, activeResume)) {
                       showNotification("This resume has already been added.", "error");
                       return;
@@ -4492,7 +4562,7 @@ WORK EXPERIENCE
 
                         // Push the manually created resume into the library
                         const newId = `resume-manual-${Date.now()}`;
-                        const newName = activeResume.fullName ? `${activeResume.fullName}'s Resume` : "My Resume";
+                        const newName = generateUniqueResumeName(activeResume.fullName ? `${activeResume.fullName}'s Resume` : "My Resume");
                         if (isDuplicateResume(newName, undefined, activeResume)) {
                           showNotification("This resume has already been added.", "error");
                           return;
@@ -4909,19 +4979,6 @@ WORK EXPERIENCE
                           </p>
                         </div>
                       </div>
-                      <div className="pt-1.5 flex justify-start">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setTempFile(null);
-                            setUploadError(null);
-                            setAnalysisResult(null);
-                          }}
-                          className="px-3 py-1.5 bg-white hover:bg-neutral-50 text-black text-sm font-medium rounded-lg border border-neutral-200 transition-colors cursor-pointer"
-                        >
-                          Try another file
-                        </button>
-                      </div>
                     </div>
                   )}
 
@@ -4949,6 +5006,19 @@ WORK EXPERIENCE
                     >
                       Cancel
                     </button>
+                    {showInvalidResumeCard && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTempFile(null);
+                          setUploadError(null);
+                          setAnalysisResult(null);
+                        }}
+                        className="w-full sm:w-auto px-4 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-sm rounded-lg transition duration-150 border border-transparent cursor-pointer"
+                      >
+                        Try another file
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -5875,19 +5945,6 @@ WORK EXPERIENCE
                           </p>
                         </div>
                       </div>
-                      <div className="pt-1.5 flex justify-start">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setTempFile(null);
-                            setUploadError(null);
-                            setAnalysisResult(null);
-                          }}
-                          className="px-3 py-1.5 bg-white hover:bg-neutral-50 text-black text-sm font-medium rounded-lg border border-neutral-200 transition-colors cursor-pointer"
-                        >
-                          Try another file
-                        </button>
-                      </div>
                     </div>
                   )}
 
@@ -5932,6 +5989,19 @@ WORK EXPERIENCE
               >
                 Cancel
               </button>
+                    {showInvalidResumeCard && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTempFile(null);
+                          setUploadError(null);
+                          setAnalysisResult(null);
+                        }}
+                        className="w-full sm:w-auto px-4 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-sm rounded-lg transition duration-150 border border-transparent cursor-pointer"
+                      >
+                        Try another file
+                      </button>
+                    )}
 
               {choiceModalPathway !== "upload" && (
                 <button
@@ -5966,7 +6036,7 @@ WORK EXPERIENCE
         >
           <div 
             id="tailor-wizard-modal" 
-            className={`bg-white border border-neutral-200 rounded-2xl p-6 sm:p-8 w-full text-left relative animate-scaleIn flex flex-col max-h-[95vh] ${tailorWizardStep === 4 ? "max-w-4xl" : "max-w-2xl"}`}
+            className={`bg-white border border-neutral-200 rounded-2xl p-6 sm:p-8 w-full text-left relative animate-scaleIn flex flex-col max-h-[95vh] ${tailorWizardStep >= 4 ? "max-w-4xl" : "max-w-2xl"}`}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Close button */}
@@ -5987,16 +6057,17 @@ WORK EXPERIENCE
               <p className="text-sm text-neutral-500 mt-0.5">
                 {tailorAnalysisError ? "Something went wrong" : (
                   <>
-                    {tailorWizardStep === 1 && "Step 1 of 4 · Company & resume"}
-                    {tailorWizardStep === 2 && "Step 2 of 4 · Job description"}
-                    {tailorWizardStep === 3 && "Step 3 of 4 · Choose skills"}
-                    {tailorWizardStep === 4 && "Step 4 of 4 · Review & download"}
+                    {tailorWizardStep === 1 && "Step 1 of 5 · Company & resume"}
+                    {tailorWizardStep === 2 && "Step 2 of 5 · Job description"}
+                    {tailorWizardStep === 3 && "Step 3 of 5 · Choose skills"}
+                    {tailorWizardStep === 4 && "Step 4 of 5 · Review edits"}
+                    {tailorWizardStep === 5 && "Step 5 of 5 · Final resume & download"}
                   </>
                 )}
               </p>
               {!tailorAnalysisError && (
                 <div className="flex gap-1.5 mt-4" aria-hidden="true">
-                  {[1, 2, 3, 4].map((s) => (
+                  {[1, 2, 3, 4, 5].map((s) => (
                     <div
                       key={s}
                       className={`h-1 flex-1 rounded-full transition-colors duration-300 ${s <= tailorWizardStep ? "bg-black" : "bg-neutral-200"}`}
@@ -6205,9 +6276,36 @@ WORK EXPERIENCE
                           </button>
                         </div>
                         {tailorIsSwitching === true && (
-                          <p className="text-xs text-amber-800 leading-relaxed">
-                            We'll frame your resume around transferable skills and won't present you as already working in {tailorRoleCheck.jobFamily.label}. Tick only skills you've really used, even in side projects or courses.
-                          </p>
+                          <div className="space-y-3">
+                            <p className="text-xs text-amber-800 leading-relaxed">
+                              We'll frame your resume around transferable skills and won't present you as already working in {tailorRoleCheck.jobFamily.label}. Tick only skills you've really used, even in side projects or courses.
+                            </p>
+                            <div className="grid grid-cols-2 gap-3">
+                              <label className="block">
+                                <span className="text-xs font-medium text-amber-900">Courses or certificates for this switch <span className="font-normal text-amber-700">(optional)</span></span>
+                                <textarea
+                                  id="input-switch-certs"
+                                  value={tailorSwitchCerts}
+                                  onChange={(e) => setTailorSwitchCerts(e.target.value)}
+                                  rows={3}
+                                  placeholder={"One per line, links welcome\nGoogle Project Management Certificate - coursera.org/verify/ABC123"}
+                                  className="mt-1 w-full p-2 text-sm bg-white border border-amber-200 rounded-lg focus:outline-none focus:border-amber-400 placeholder:text-neutral-400"
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="text-xs font-medium text-amber-900">Side projects for this switch <span className="font-normal text-amber-700">(optional)</span></span>
+                                <textarea
+                                  id="input-switch-projects"
+                                  value={tailorSwitchProjects}
+                                  onChange={(e) => setTailorSwitchProjects(e.target.value)}
+                                  rows={3}
+                                  placeholder={"One per line: name - what you did\nPRD for a habit app - wrote specs and ran 10 user interviews"}
+                                  className="mt-1 w-full p-2 text-sm bg-white border border-amber-200 rounded-lg focus:outline-none focus:border-amber-400 placeholder:text-neutral-400"
+                                />
+                              </label>
+                            </div>
+                            <p className="text-xs text-amber-700">These go on this tailored resume as your own facts. Add only what you've really done.</p>
+                          </div>
                         )}
                         {tailorIsSwitching === false && (
                           <p className="text-xs text-amber-800 leading-relaxed">
@@ -6325,7 +6423,8 @@ WORK EXPERIENCE
               {/* STEP 4: RESULTS & DOWNLOAD (Tailored Resume only) */}
               {!tailorIsAnalyzing && !tailorAnalysisError && tailorWizardStep === 4 && (
                 (() => {
-                  const originalResume = getResumeToTailor();
+                  const pickedResume = getResumeToTailor();
+                  const originalResume = pickedResume && tailorIsSwitching ? addSwitchExtras(pickedResume, tailorSwitchCerts, tailorSwitchProjects) : pickedResume;
                   const tailoredResume = tailoredResultResume;
 
                   if (!originalResume || !tailoredResume) return null;
@@ -6587,6 +6686,50 @@ WORK EXPERIENCE
                 })()
               )}
 
+              {!tailorIsAnalyzing && !tailorAnalysisError && tailorWizardStep === 5 && tailoredResultResume && (
+                <div className="space-y-3 text-left py-2 animate-fadeIn font-sans" id="tailor-final-step">
+                  <p className="text-sm text-neutral-600 leading-relaxed">
+                    This is your final resume. Downloads use a plain one-column layout that hiring systems read easily. Not happy with something? Go back to the edits and change it.
+                  </p>
+                  <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white w-full">
+                    <div className="overflow-y-auto bg-neutral-50" style={{height: '62vh'}}>
+                      <ResumePreview
+                        resume={tailoredResultResume}
+                        templateStyle={selectedStyle}
+                        id="step-5-preview-final"
+                        showHighlights={false}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Small "downloaded" popup with the other format and a way back to editing */}
+              {tailorDownloaded && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 animate-fadeIn" onClick={() => setTailorDownloaded(null)}>
+                  <div id="download-done-popup" role="dialog" aria-label="Resume downloaded" className="bg-white rounded-2xl border border-neutral-200 p-6 w-full max-w-sm text-left space-y-4" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-start gap-3">
+                      <Check className="w-5 h-5 text-emerald-600 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="text-sm font-medium text-black">Resume downloaded</p>
+                        <p className="text-sm text-neutral-600 mt-1 break-all">{tailorDownloaded.fileName}</p>
+                      </div>
+                    </div>
+                    <p className="text-sm text-neutral-600">You can also download it as {tailorDownloaded.format === "pdf" ? "a Word file" : "a PDF"}, or go back and make changes.</p>
+                    <div className="flex flex-wrap gap-2 justify-end">
+                      <button type="button" onClick={() => { setTailorDownloaded(null); setTailorWizardStep(4); }} className="px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-black rounded-lg hover:bg-neutral-100 transition-colors cursor-pointer">
+                        Make changes
+                      </button>
+                      <button type="button" onClick={() => downloadTailored(tailorDownloaded.format === "pdf" ? "docx" : "pdf")} className="px-3 py-1.5 text-sm font-medium rounded-lg border border-neutral-200 text-black hover:bg-neutral-50 transition-colors cursor-pointer">
+                        Download {tailorDownloaded.format === "pdf" ? "DOCX" : "PDF"}
+                      </button>
+                      <button type="button" onClick={() => setTailorDownloaded(null)} className="px-3 py-1.5 bg-[#2563eb] hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer">
+                        OK
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
 
@@ -6668,35 +6811,41 @@ WORK EXPERIENCE
                     </div>
                     <button
                       type="button"
-                      onClick={() => {
-                        if (tailoredResultResume) {
-                          handlePrintOrSavePDF(tailoredResultResume, undefined, tailorRole, undefined, tailorCompany);
-                        }
-                      }}
+                      id="btn-see-final-resume"
+                      onClick={() => setTailorWizardStep(5)}
+                      className="px-4 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-sm rounded-lg border border-transparent transition cursor-pointer"
+                    >
+                      See final resume
+                    </button>
+                  </>
+                )}
+
+                {tailorWizardStep === 5 && (
+                  <>
+                    <button
+                      type="button"
+                      id="btn-back-to-edits"
+                      onClick={() => setTailorWizardStep(4)}
+                      className="mr-auto px-4 py-2 text-sm font-medium text-neutral-600 hover:text-black rounded-lg hover:bg-neutral-100 transition-colors cursor-pointer"
+                    >
+                      ← Back to edits
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => downloadTailored("pdf")}
                       className="px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg transition cursor-pointer border border-neutral-200 flex items-center justify-center gap-1.5"
                     >
                       <FileText className="w-4 h-4 text-blue-600" />
                       <span>Download PDF</span>
                     </button>
-
                     <button
                       type="button"
-                      onClick={() => {
-                        if (tailoredResultResume) {
-                          downloadResumeAsDocx(
-                            tailoredResultResume,
-                            fileBaseName(tailoredResultResume.fullName, tailorCompany),
-                            getResumeToTailor(),
-                            tailorRole
-                          );
-                        }
-                      }}
+                      onClick={() => downloadTailored("docx")}
                       className="px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg transition cursor-pointer border border-neutral-200 flex items-center justify-center gap-1.5"
                     >
                       <Download className="w-4 h-4 text-emerald-600" />
                       <span>Download DOCX</span>
                     </button>
-
                     <button
                       type="button"
                       onClick={() => {

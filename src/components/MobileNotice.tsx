@@ -6,14 +6,20 @@ import { useEffect, useState } from "react";
  */
 const DISMISS_KEY = "auralis_mobile_notice_dismissed";
 
+// A phone: small screen AND a touch screen. A narrow laptop window doesn't count.
+const isPhone = () =>
+  typeof window !== "undefined" &&
+  window.innerWidth < 768 &&
+  window.matchMedia?.("(pointer: coarse)").matches === true;
+
 export default function MobileNotice() {
-  const [isSmall, setIsSmall] = useState(() => typeof window !== "undefined" && window.innerWidth < 768);
+  const [isSmall, setIsSmall] = useState(isPhone);
   const [dismissed, setDismissed] = useState(() => {
     try { return sessionStorage.getItem(DISMISS_KEY) === "1"; } catch { return false; }
   });
 
   useEffect(() => {
-    const onResize = () => setIsSmall(window.innerWidth < 768);
+    const onResize = () => setIsSmall(isPhone());
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);

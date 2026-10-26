@@ -1833,14 +1833,19 @@ export default function App() {
       return !keys.some((other, j) => j !== i && other.length < key.length && key.startsWith(other + " "));
     });
   };
-  const cleanJdSkills = (jd: SimplifiedJD): SimplifiedJD => {
+  const cleanJdSkills = (jd: SimplifiedJD, companyName = ""): SimplifiedJD => {
     // Skills only: drop the job title itself (AI sometimes lists it) and long phrases that aren't skills
     const titleKey = skillKey(jd.jobTitle || "");
+    // The hiring company's own products aren't skills ("Razorpay Checkout"). Skip this for companies
+    // whose products are everyday tools ("Google Analytics", "Microsoft Excel").
+    const companyKey = skillKey(companyName).split(" ")[0] || "";
+    const TOOL_MAKERS = new Set(["google", "microsoft", "amazon", "aws", "adobe", "salesforce", "atlassian", "meta", "apple", "oracle", "sap", "hubspot", "zoho"]);
+    const isOwnProduct = (key: string) => companyKey.length >= 3 && !TOOL_MAKERS.has(companyKey) && key.split(" ").includes(companyKey);
     const isSkillLike = (name: string) => {
       const key = skillKey(name);
       // Job titles aren't skills ("Backend Engineer", "Product Manager")
       const looksLikeTitle = /\b(engineer|developer|manager|analyst|designer|scientist|architect|consultant|specialist|intern|executive|officer|associate|recruiter|accountant)s?$/.test(key);
-      return !!key && key !== titleKey && !looksLikeTitle && key.split(" ").length <= 4 && name.length <= 40;
+      return !!key && key !== titleKey && !looksLikeTitle && !isOwnProduct(key) && key.split(" ").length <= 4 && name.length <= 40;
     };
     const required = dedupeSkillNames((jd.requiredSkills || []).map((sk: any) => sk?.name || sk)).filter(isSkillLike);
     const requiredKeys = new Set(required.map(skillKey));
@@ -1908,10 +1913,18 @@ export default function App() {
       if (liftedNew.length) warnings.push(`Uses "${liftedNew.slice(0, 3).join('", "')}" from the job post, which your resume doesn't mention`);
       return warnings;
     };
+    // Results the line now claims that the original line didn't ("increased footfall", "boosted revenue")
+    const RESULT_WORDS = ["increas", "boost", "grew", "grow", "drove", "driv", "rais", "reduc", "cut ", "doubl", "tripl", "accelerat", "maximi", "enhanc", "improv", "generat"];
+    const resultWarning = (sugg: string, orig: string): string | null => {
+      const s2 = sugg.toLowerCase(), o2 = orig.toLowerCase();
+      const added = RESULT_WORDS.filter(w => s2.includes(w) && !o2.includes(w));
+      return added.length ? "Claims a result your original line doesn't mention. Only accept if it really happened." : null;
+    };
     const reviews: EditReview[] = [];
     const push = (label: string, orig: string, sugg: string, target: EditReview["target"], id: string) => {
       if (!sugg.trim() || sugg.trim() === orig.trim()) return;
-      reviews.push({ id, label, original: orig, suggested: sugg.trim(), text: sugg.trim(), status: "pending", mentions: newMentions(sugg, orig), warnings: claimWarnings(sugg), target });
+      const result = orig.trim() ? resultWarning(sugg, orig) : null;
+      reviews.push({ id, label, original: orig, suggested: sugg.trim(), text: sugg.trim(), status: "pending", mentions: newMentions(sugg, orig), warnings: [...claimWarnings(sugg), ...(result ? [result] : [])], target });
     };
     push("Professional summary", original.summary || "", tailored.summary || "", { kind: "summary" }, "summary");
     (original.workExperience || []).forEach((job, i) => {
@@ -2019,7 +2032,7 @@ export default function App() {
       }).catch(() => null);
       const simplifiedJd: SimplifiedJD = cleanJdSkills(simplifyRes && simplifyRes.ok
         ? await simplifyRes.json()
-        : extractJDHeuristically(jdTextVal, companyVal));
+        : extractJDHeuristically(jdTextVal, companyVal), companyVal);
       if (simplifiedJd.isValidJd === false) {
         setTailorStepError(simplifiedJd.invalidReason ? `This doesn't look like a job description: ${simplifiedJd.invalidReason}` : INVALID_JD_MESSAGE);
         return;

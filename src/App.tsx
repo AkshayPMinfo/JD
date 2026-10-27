@@ -42,9 +42,6 @@ import {
   Sun,
   Moon,
   Bell,
-  Facebook,
-  Twitter,
-  Linkedin,
   Image,
   Eye,
   EyeOff
@@ -3909,117 +3906,6 @@ WORK EXPERIENCE
 
             </section>
   
-            {/* Customer reviews component replacing the Trust Strip */}
-            <section className="py-16 bg-neutral-50/50 border-t border-neutral-200">
-              <div className="max-w-[1100px] mx-auto px-6 text-center">
-                <h2 className="text-2xl sm:text-3xl font-sans font-bold text-[#8257e5] tracking-tight mb-2">Customer reviews</h2>
-                <p className="text-xs sm:text-sm text-neutral-500 font-medium mb-12">What our customers are saying..</p>
-                
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                  {/* Card 1: Lance Jarvis */}
-                  <div className="bg-white rounded-2xl border border-neutral-200/60 flex flex-col justify-between relative">
-                    <div className="text-left px-8 pt-8">
-                      <span className="text-4xl font-serif text-[#1abc9c] font-bold">“</span>
-                    </div>
-                    <div className="px-8 pb-16 pt-2 text-center flex-grow">
-                      <p className="text-xs sm:text-sm text-neutral-500 leading-relaxed italic">
-                        "The simplicity of Auralis Resumes is unmatched. I uploaded my rough resume, and the AI tailored it perfectly with the JD. This app helped me land my first Software Engineering job in under two weeks. Unbelievably seamless!"
-                      </p>
-                    </div>
-                    
-                    <div className="relative mt-auto">
-                      <svg viewBox="0 0 1440 120" className="w-full h-auto block -mb-0.5" preserveAspectRatio="none">
-                        <path d="M0,40 C480,100 960,100 1440,40 L1440,120 L0,120 Z" fill="#1abc9c" />
-                      </svg>
-                      <div className="bg-[#1abc9c] pb-6 pt-1 text-center text-white rounded-b-3xl">
-                        <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full border border-white bg-white overflow-hidden">
-                          <img 
-                            src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&h=150&fit=crop&crop=faces" 
-                            alt="Lance Jarvis" 
-                            className="w-full h-full object-cover" 
-                            referrerPolicy="no-referrer" 
-                          />
-                        </div>
-                        <p className="font-bold text-sm tracking-tight pt-8 text-white">Lance Jarvis</p>
-                        <div className="flex justify-center items-center gap-3 mt-2 text-white/80">
-                          <a href="#" onClick={(e) => e.preventDefault()} className="hover:text-white transition"><Facebook className="w-3.5 h-3.5" /></a>
-                          <a href="#" onClick={(e) => e.preventDefault()} className="hover:text-white transition"><Twitter className="w-3.5 h-3.5" /></a>
-                          <a href="#" onClick={(e) => e.preventDefault()} className="hover:text-white transition"><Linkedin className="w-3.5 h-3.5" /></a>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Card 2: Ericka Lynda */}
-                  <div className="bg-white rounded-2xl border border-neutral-200/60 flex flex-col justify-between relative">
-                    <div className="text-left px-8 pt-8">
-                      <span className="text-4xl font-serif text-[#8e44ad] font-bold">“</span>
-                    </div>
-                    <div className="px-8 pb-16 pt-2 text-center flex-grow">
-                      <p className="text-xs sm:text-sm text-neutral-500 leading-relaxed italic">
-                        "I was struggling to tailor my entry-level portfolio until I found this platform. It completely removes the guesswork by tailoring resumes directly to specific corporate JDs. Thanks to this, I secured my Marketing Specialist interview and got the job!"
-                      </p>
-                    </div>
-                    
-                    <div className="relative mt-auto">
-                      <svg viewBox="0 0 1440 120" className="w-full h-auto block -mb-0.5" preserveAspectRatio="none">
-                        <path d="M0,40 C480,100 960,100 1440,40 L1440,120 L0,120 Z" fill="#8e44ad" />
-                      </svg>
-                      <div className="bg-[#8e44ad] pb-6 pt-1 text-center text-white rounded-b-3xl">
-                        <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full border border-white bg-white overflow-hidden">
-                          <img 
-                            src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&h=150&fit=crop&crop=faces" 
-                            alt="Ericka Lynda" 
-                            className="w-full h-full object-cover" 
-                            referrerPolicy="no-referrer" 
-                          />
-                        </div>
-                        <p className="font-bold text-sm tracking-tight pt-8 text-white">Ericka Lynda</p>
-                        <div className="flex justify-center items-center gap-3 mt-2 text-white/80">
-                          <a href="#" onClick={(e) => e.preventDefault()} className="hover:text-white transition"><Facebook className="w-3.5 h-3.5" /></a>
-                          <a href="#" onClick={(e) => e.preventDefault()} className="hover:text-white transition"><Twitter className="w-3.5 h-3.5" /></a>
-                          <a href="#" onClick={(e) => e.preventDefault()} className="hover:text-white transition"><Linkedin className="w-3.5 h-3.5" /></a>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Card 3: Neil Wilford */}
-                  <div className="bg-white rounded-2xl border border-neutral-200/60 flex flex-col justify-between relative">
-                    <div className="text-left px-8 pt-8">
-                      <span className="text-4xl font-serif text-[#3498db] font-bold">“</span>
-                    </div>
-                    <div className="px-8 pb-16 pt-2 text-center flex-grow">
-                      <p className="text-xs sm:text-sm text-neutral-500 leading-relaxed italic">
-                        "As a recent graduate, resume building felt like a nightmare. Auralis made it incredibly straightforward! It customized my skills section perfectly for the roles I targeted, and I finally landed my first official corporate position."
-                      </p>
-                    </div>
-                    
-                    <div className="relative mt-auto">
-                      <svg viewBox="0 0 1440 120" className="w-full h-auto block -mb-0.5" preserveAspectRatio="none">
-                        <path d="M0,40 C480,100 960,100 1440,40 L1440,120 L0,120 Z" fill="#3498db" />
-                      </svg>
-                      <div className="bg-[#3498db] pb-6 pt-1 text-center text-white rounded-b-3xl">
-                        <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full border border-white bg-white overflow-hidden">
-                          <img 
-                            src="https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&h=150&fit=crop&crop=faces" 
-                            alt="Neil Wilford" 
-                            className="w-full h-full object-cover" 
-                            referrerPolicy="no-referrer" 
-                          />
-                        </div>
-                        <p className="font-bold text-sm tracking-tight pt-8 text-white">Neil Wilford</p>
-                        <div className="flex justify-center items-center gap-3 mt-2 text-white/80">
-                          <a href="#" onClick={(e) => e.preventDefault()} className="hover:text-white transition"><Facebook className="w-3.5 h-3.5" /></a>
-                          <a href="#" onClick={(e) => e.preventDefault()} className="hover:text-white transition"><Twitter className="w-3.5 h-3.5" /></a>
-                          <a href="#" onClick={(e) => e.preventDefault()} className="hover:text-white transition"><Linkedin className="w-3.5 h-3.5" /></a>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
           </div>
         )}
       </main>

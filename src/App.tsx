@@ -3044,6 +3044,23 @@ WORK EXPERIENCE
     showNotification(`Loaded version saved for ${version.companyName}!`, "info");
   };
 
+  // Closing the tailor window before the final step throws away that unfinished tailored copy.
+  // Reaching the final step (or downloading) keeps it in "Tailored resumes".
+  const closeTailorWizard = () => {
+    const unfinished = tailoredResultVersion && tailorWizardStep < 5 && !tailorDownloaded;
+    if (unfinished) {
+      const id = tailoredResultVersion!.id;
+      const session = getStoredSupabaseSession();
+      if (session?.accessToken && currentUser && !currentUser.isGuest) {
+        supabaseData.deleteTailoredResume(session.accessToken, id)
+          .catch((error) => console.warn("Supabase tailored resume delete failed:", error));
+      }
+      setSavedVersions(prev => prev.filter(v => v.id !== id));
+      setTailoredResultVersion(null);
+    }
+    setIsTailorWizardOpen(false);
+  };
+
   const handleDeleteVersion = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const session = getStoredSupabaseSession();
@@ -3514,7 +3531,7 @@ WORK EXPERIENCE
       } else if (showDeleteConfirmModal) {
         setShowDeleteConfirmModal(false);
       } else if (isTailorWizardOpen) {
-        if (!tailorIsAnalyzing) setIsTailorWizardOpen(false);
+        if (!tailorIsAnalyzing) closeTailorWizard();
       } else if (isUploadModalOpen) {
         if (!isAnalyzing) {
           setIsUploadModalOpen(false);
@@ -3530,7 +3547,7 @@ WORK EXPERIENCE
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isTailorWizardOpen, tailorIsAnalyzing, isUploadModalOpen, isAnalyzing, showResumePreviewModal, showSavedVersionPreviewModal, showDeleteSavedVersionConfirmModal, showDeleteConfirmModal]);
+  }, [isTailorWizardOpen, tailorIsAnalyzing, tailorWizardStep, tailoredResultVersion, tailorDownloaded, isUploadModalOpen, isAnalyzing, showResumePreviewModal, showSavedVersionPreviewModal, showDeleteSavedVersionConfirmModal, showDeleteConfirmModal]);
 
   return (
     <div className="min-h-screen font-sans antialiased overflow-x-hidden selection:bg-neutral-200 selection:text-black pb-12 print:bg-white print:pb-0 bg-white text-black">
@@ -6269,7 +6286,7 @@ WORK EXPERIENCE
           className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fadeIn"
           onClick={() => {
             if (!tailorIsAnalyzing) {
-              setIsTailorWizardOpen(false);
+              closeTailorWizard();
             }
           }}
         >
@@ -6282,7 +6299,7 @@ WORK EXPERIENCE
             {!tailorIsAnalyzing && (
               <button
                 id="btn-close-tailor-wizard"
-                onClick={() => setIsTailorWizardOpen(false)}
+                onClick={closeTailorWizard}
                 className="absolute top-4 right-4 p-1.5 rounded-lg text-neutral-500 hover:text-black hover:bg-neutral-100 transition-colors cursor-pointer"
                 title="Close"
               >
@@ -7140,7 +7157,7 @@ WORK EXPERIENCE
                   <>
                     <button
                       type="button"
-                      onClick={() => setIsTailorWizardOpen(false)}
+                      onClick={closeTailorWizard}
                       className="px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg border border-neutral-200 transition cursor-pointer"
                     >
                       Cancel

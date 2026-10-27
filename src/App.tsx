@@ -1032,7 +1032,7 @@ export default function App() {
         setVerifyCode("");
         setAuthPassword("");
         setAuthConfirmPassword("");
-        setAuthMessage({ type: "info", message: `We sent a 6-digit code to ${email}. Type it below to finish creating your account.` });
+        setAuthMessage(null); // the code screen already says where the code went
         return;
       }
       setAuthMessage({ type: "error", message: error.message || "Authentication failed. Please try again." });

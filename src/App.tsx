@@ -5,6 +5,7 @@
 
 import { SAMPLE_RESUME, SAMPLE_JOB_POST } from "./utils/sampleResume";
 import { educationNewestFirst } from "./utils/educationOrder";
+import CodeBoxes from "./components/CodeBoxes";
 import PrivacyNotice from "./components/PrivacyNotice";
 import React, { useState, useEffect, useRef } from "react";
 import JSZip from "jszip";
@@ -3692,19 +3693,8 @@ WORK EXPERIENCE
                         We sent a 6-digit code to <span className="font-medium text-black">{verifyEmail}</span>. It can take a minute; check spam too.
                       </p>
                       <div>
-                        <label htmlFor="input-verify-code" className="block text-xs text-black mb-1.5 font-bold">Code</label>
-                        <input
-                          id="input-verify-code"
-                          type="text"
-                          inputMode="numeric"
-                          autoComplete="one-time-code"
-                          maxLength={6}
-                          autoFocus
-                          placeholder="123456"
-                          value={verifyCode}
-                          onChange={(e) => { setVerifyCode(e.target.value.replace(/\D/g, "")); setAuthMessage(null); }}
-                          className="w-full px-3 py-2.5 bg-white border border-neutral-300 rounded-lg text-lg tracking-[0.4em] text-black placeholder-neutral-300 focus:outline-hidden focus:border-black"
-                        />
+                        <p className="block text-xs text-black mb-1.5 font-bold">Code</p>
+                        <CodeBoxes value={verifyCode} onChange={(code) => { setVerifyCode(code); setAuthMessage(null); }} />
                       </div>
                       {authMessage && (
                         <div id="auth-inline-message" className={`rounded-xl border px-3 py-2 text-xs font-semibold leading-relaxed ${authMessage.type === "error" ? "border-rose-300 bg-rose-50 text-rose-800" : authMessage.type === "info" ? "border-blue-300 bg-blue-50 text-blue-800" : "border-emerald-300 bg-emerald-50 text-emerald-800"}`}>

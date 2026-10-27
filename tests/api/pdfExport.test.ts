@@ -60,7 +60,7 @@ t.check("X8", "Awkward characters come through readable (₹ → Rs., smart quot
 t.check("X9", "Empty sections are left out (no 'Achievements' heading)", !flat.includes("ACHIEVEMENTS"));
 
 // Round trip: upload the exported PDF to our own resume reader, like an ATS would read it
-const app = await startApp({ USE_GEMINI: "false", GEMINI_API_KEY: "", GROQ_API_KEY: "" });
+const app = await startApp({ USE_GEMINI: "false", GEMINI_API_KEY: "", GROQ_API_KEY: "", NVIDIA_API_KEY: "" });
 try {
   const up = await postJson(app.baseUrl, "/api/analyze-uploaded-resume", {
     fileName: "exported.pdf", fileType: "application/pdf", base64Data: Buffer.from(bytes).toString("base64")

@@ -9,7 +9,7 @@ const PDF = "application/pdf";
 const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const KNOWN_JD = "JD reader only knows a short skill/title list; expected to improve with AI mode";
 
-const app = await startApp({ USE_GEMINI: "false", GEMINI_API_KEY: "", GROQ_API_KEY: "" });
+const app = await startApp({ USE_GEMINI: "false", GEMINI_API_KEY: "", GROQ_API_KEY: "", NVIDIA_API_KEY: "" });
 const t = new Checks();
 const post = (route: string, body: unknown) => postJson(app.baseUrl, route, body);
 const fx = await buildFixtures();

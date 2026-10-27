@@ -64,7 +64,7 @@ const listen = (s: http.Server) => new Promise<number>(r => s.listen(0, "127.0.0
 const supaPort = await listen(fakeSupabase);
 const aiPort = await listen(fakeAi);
 const app = await startApp({
-  USE_GEMINI: "true", GEMINI_API_KEY: "", GROQ_API_KEY: "fake", GROQ_BASE_URL: `http://127.0.0.1:${aiPort}`,
+  USE_GEMINI: "true", GEMINI_API_KEY: "", GROQ_API_KEY: "fake", NVIDIA_API_KEY: "", GROQ_BASE_URL: `http://127.0.0.1:${aiPort}`,
   VITE_SUPABASE_URL: `http://127.0.0.1:${supaPort}`, VITE_SUPABASE_ANON_KEY: "anon-key", SUPABASE_URL: "", SUPABASE_ANON_KEY: ""
 });
 

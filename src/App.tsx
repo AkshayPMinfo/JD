@@ -66,7 +66,7 @@ import { cleanSkillName } from "./utils/skillNames";
 import { buildResumePdf } from "./utils/resumePdf";
 import { DEMO_RESUMES, DEMO_JDS } from "./demoData";
 import ResumePreview from "./components/ResumePreview";
-import { supabaseAuth, supabaseData } from "./lib/supabase";
+import { supabaseAuth, supabaseData, type SupabaseSession } from "./lib/supabase";
 
 const SUPABASE_SESSION_STORAGE_KEY = "jd_resume_customizer_supabase_session";
 const PASSWORD_MIN_LENGTH = 8;
@@ -178,6 +178,10 @@ export default function App() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
+  // Sign-up waiting for the 6-digit code from the confirmation email
+  const [verifyEmail, setVerifyEmail] = useState<string | null>(null);
+  const [verifyCode, setVerifyCode] = useState("");
+  const [isVerifying, setIsVerifying] = useState(false);
   const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [isResetPassword, setIsResetPassword] = useState(false);
   const [resetAccessToken, setResetAccessToken] = useState<string | null>(null);
@@ -664,7 +668,18 @@ export default function App() {
         setIsForgotPassword(true);
         setIsResetPassword(false);
         setResetAccessToken(null);
-        setAuthMessage({ type: "error", message: "This reset link is invalid or expired. Please request a new password reset link." });
+        setAuthMessage({ type: "error", message: "This link is invalid or has expired. If you were confirming your email, just sign in; if you were resetting your password, request a new link below." });
+        window.history.replaceState({}, document.title, window.location.pathname);
+        return;
+      }
+
+      // Back from the "confirm your email" link: say so, and let them sign in
+      if ((type === "signup" || type === "email" || type === "invite") && accessToken) {
+        setCurrentStep("auth");
+        setIsSignUp(false);
+        setIsForgotPassword(false);
+        setIsResetPassword(false);
+        setAuthMessage({ type: "success", message: "Your email is confirmed. Sign in to continue." });
         window.history.replaceState({}, document.title, window.location.pathname);
         return;
       }
@@ -865,6 +880,52 @@ export default function App() {
 
   // --------- HANDLERS ---------
   // Auth simulation
+  // After sign-in, sign-up or a confirmed code: save the session, load their data, open the app
+  const finishSignIn = async (session: SupabaseSession, isNew: boolean) => {
+    const name = session.user.email.split("@")[0];
+    const userObj = { email: session.user.email, name };
+    localStorage.setItem(SUPABASE_SESSION_STORAGE_KEY, JSON.stringify(session));
+    await supabaseData.upsertUser(session.accessToken, { id: session.user.id, email: session.user.email });
+    await supabaseData.upsertProfile(session.accessToken, { id: session.user.id, full_name: name });
+    await loadPersistedSupabaseData(session);
+    setCurrentUser(userObj);
+    // Always land on Resume Setup first after login
+    setCurrentStep("resume");
+    setAuthMessage(null);
+    setVerifyEmail(null);
+    setVerifyCode("");
+    showNotification(isNew ? "Account created successfully." : `Welcome, ${name}! Your resume dashboard is ready.`, "success");
+    trackEvent(isNew ? "signed_up" : "signed_in");
+  };
+
+  const handleVerifyCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!verifyEmail) return;
+    if (!/^\d{6}$/.test(verifyCode.trim())) {
+      setAuthMessage({ type: "error", message: "Type the 6-digit code from the email." });
+      return;
+    }
+    setIsVerifying(true);
+    try {
+      const session = await supabaseAuth.verifySignupCode(verifyEmail, verifyCode);
+      await finishSignIn(session, true);
+    } catch (error: any) {
+      setAuthMessage({ type: "error", message: error.message || "Couldn't check the code. Please try again." });
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const handleResendCode = async () => {
+    if (!verifyEmail) return;
+    try {
+      await supabaseAuth.resendSignupCode(verifyEmail);
+      setAuthMessage({ type: "success", message: `New code sent to ${verifyEmail}. Check your inbox and spam folder.` });
+    } catch (error: any) {
+      setAuthMessage({ type: "error", message: error.message || "Couldn't send a new code." });
+    }
+  };
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isAuthSubmitting) return;
@@ -963,30 +1024,15 @@ export default function App() {
       const session = isSignUp
         ? await supabaseAuth.signUp(email, authPassword)
         : await supabaseAuth.signIn(email, authPassword);
-      const name = session.user.email.split("@")[0];
-      const userObj = { email: session.user.email, name };
-      localStorage.setItem(SUPABASE_SESSION_STORAGE_KEY, JSON.stringify(session));
-      await supabaseData.upsertUser(session.accessToken, {
-        id: session.user.id,
-        email: session.user.email,
-      });
-      await supabaseData.upsertProfile(session.accessToken, {
-        id: session.user.id,
-        full_name: name,
-      });
-      await loadPersistedSupabaseData(session);
-      setCurrentUser(userObj);
-      // Always land on Resume Setup first after login
-      setCurrentStep("resume");
-      setAuthMessage(null);
-      showNotification(isSignUp ? "Account created successfully." : `Welcome, ${name}! Your resume dashboard is ready.`, "success");
-      trackEvent(isSignUp ? "signed_up" : "signed_in");
+      await finishSignIn(session, isSignUp);
     } catch (error: any) {
       if (String(error.message || "").startsWith("Account created.")) {
-        setIsSignUp(false);
+        // Email confirmation is on: ask for the 6-digit code from the email
+        setVerifyEmail(email);
+        setVerifyCode("");
+        setAuthPassword("");
         setAuthConfirmPassword("");
-        setAuthMessage({ type: "info", message: error.message });
-        showNotification(error.message, "info");
+        setAuthMessage({ type: "info", message: `We sent a 6-digit code to ${email}. Type it below to finish creating your account.` });
         return;
       }
       setAuthMessage({ type: "error", message: error.message || "Authentication failed. Please try again." });
@@ -3642,6 +3688,41 @@ WORK EXPERIENCE
                       <div className="flex-grow border-t border-neutral-300"></div>
                     </div>
    
+                    {verifyEmail ? (
+                    <form id="verify-code-form" onSubmit={handleVerifyCode} noValidate className="space-y-4 text-left">
+                      <h2 className="text-xl font-semibold text-black tracking-tight">Check your email</h2>
+                      <p className="text-sm text-neutral-600 leading-relaxed">
+                        We sent a 6-digit code to <span className="font-medium text-black">{verifyEmail}</span>. It can take a minute; check spam too.
+                      </p>
+                      <div>
+                        <label htmlFor="input-verify-code" className="block text-xs text-black mb-1.5 font-bold">Code</label>
+                        <input
+                          id="input-verify-code"
+                          type="text"
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
+                          maxLength={6}
+                          autoFocus
+                          placeholder="123456"
+                          value={verifyCode}
+                          onChange={(e) => { setVerifyCode(e.target.value.replace(/\D/g, "")); setAuthMessage(null); }}
+                          className="w-full px-3 py-2.5 bg-white border border-neutral-300 rounded-lg text-lg tracking-[0.4em] text-black placeholder-neutral-300 focus:outline-hidden focus:border-black"
+                        />
+                      </div>
+                      {authMessage && (
+                        <div id="auth-inline-message" className={`rounded-xl border px-3 py-2 text-xs font-semibold leading-relaxed ${authMessage.type === "error" ? "border-rose-300 bg-rose-50 text-rose-800" : authMessage.type === "info" ? "border-blue-300 bg-blue-50 text-blue-800" : "border-emerald-300 bg-emerald-50 text-emerald-800"}`}>
+                          {authMessage.message}
+                        </div>
+                      )}
+                      <button id="btn-verify-code" type="submit" disabled={isVerifying} className={`w-full py-3 text-white text-sm font-medium rounded-lg transition ${isVerifying ? "bg-neutral-400 cursor-not-allowed" : "bg-black hover:bg-neutral-800 cursor-pointer"}`}>
+                        {isVerifying ? "Checking..." : "Confirm and continue"}
+                      </button>
+                      <div className="flex justify-between text-xs font-semibold">
+                        <button type="button" id="btn-resend-code" onClick={handleResendCode} className="text-black underline cursor-pointer">Send a new code</button>
+                        <button type="button" onClick={() => { setVerifyEmail(null); setVerifyCode(""); setAuthMessage(null); setIsSignUp(true); }} className="text-neutral-600 hover:text-black underline cursor-pointer">Use a different email</button>
+                      </div>
+                    </form>
+                    ) : (
                     <form onSubmit={handleAuth} noValidate className="space-y-4 text-left">
                       <h2 className="text-xl font-semibold text-black tracking-tight">
                         {isResetPassword ? "Reset Password" : isForgotPassword ? "Forgot Password" : isSignUp ? "Create Account" : "Sign In"}
@@ -3820,6 +3901,7 @@ WORK EXPERIENCE
                         </button>
                       </div>
                     </form>
+                    )}
                   </div>
    
                 </div>

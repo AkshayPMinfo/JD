@@ -130,7 +130,7 @@ const parseAuthResponse = async (
   }
   if (!payload.access_token || !payload.user?.id) {
     if (options.allowEmailConfirmation) {
-      throw new Error("Account created. Please verify your email, then sign in.");
+      throw new Error("Account created. We emailed you a 6-digit code to confirm it.");
     }
     throw new Error("Supabase did not return a valid session.");
   }
@@ -164,6 +164,42 @@ export const supabaseAuth = {
       body: JSON.stringify({ email, password }),
     });
     return parseAuthResponse(response, { allowEmailConfirmation: true });
+  },
+
+  // Sign-up with a code: the confirmation email carries a 6-digit code ({{ .Token }}) the person types in
+  async verifySignupCode(email: string, code: string): Promise<SupabaseSession> {
+    assertSupabaseConfigured();
+    const response = await fetch(`${SUPABASE_URL}/auth/v1/verify`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ type: "signup", email, token: code.trim() }),
+    });
+    if (!response.ok) {
+      const payload: any = await response.json().catch(() => ({}));
+      const message = String(payload.error_description || payload.msg || payload.error || "");
+      if (/expired|invalid|otp/i.test(message) || response.status === 403) {
+        throw new Error("That code is wrong or has expired. Check the latest email, or send a new code.");
+      }
+      throw new Error(message || "Couldn't check the code. Please try again.");
+    }
+    return parseAuthResponse(new Response(await response.text(), { status: 200 }));
+  },
+
+  async resendSignupCode(email: string): Promise<void> {
+    assertSupabaseConfigured();
+    const response = await fetch(`${SUPABASE_URL}/auth/v1/resend`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ type: "signup", email }),
+    });
+    if (!response.ok) {
+      const payload: any = await response.json().catch(() => ({}));
+      const message = String(payload.error_description || payload.msg || payload.error || "");
+      if (response.status === 429 || /rate limit|only request this after/i.test(message)) {
+        throw new Error("Please wait a minute before asking for another code.");
+      }
+      throw new Error(message || "Couldn't send a new code. Please try again.");
+    }
   },
 
   // Sign-ins expire after about an hour; swap the refresh token for a new one

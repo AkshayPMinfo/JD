@@ -32,7 +32,7 @@ function getAI(): GoogleGenAI | null {
   if (!aiClient) {
     const key = process.env.GEMINI_API_KEY;
     if (!key) {
-      if (process.env.GROQ_API_KEY) return null;
+      if (process.env.GROQ_API_KEY || process.env.NVIDIA_API_KEY) return null;
       throw new Error("No AI key is set. Add GEMINI_API_KEY (and optionally GROQ_API_KEY) to your environment.");
     }
     aiClient = new GoogleGenAI({
@@ -838,11 +838,27 @@ function extractPromptText(contents: any): string | null {
   return texts.join("\n\n");
 }
 
-async function generateWithGroq(options: any): Promise<{ text: string; provider: "groq" }> {
-  const key = process.env.GROQ_API_KEY;
-  if (!key) throw new Error("GROQ_API_KEY is not set");
+// Any OpenAI-style chat API (Groq, NVIDIA). Returns { text } like Gemini's response.
+type ChatProvider = { name: "groq" | "nvidia"; key: string; baseUrl: string; model: string; jsonMode: boolean };
+const NVIDIA_MODEL = process.env.NVIDIA_MODEL || "meta/llama-3.3-70b-instruct";
+const NVIDIA_BASE_URL = (process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1").replace(/\/$/, "");
+
+// Some models wrap JSON in ```json fences or add a sentence around it: keep just the JSON object
+function pickJsonObject(text: string): string {
+  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+  try { JSON.parse(trimmed); return trimmed; } catch { /* fall through */ }
+  const start = trimmed.indexOf("{"), end = trimmed.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    const inner = trimmed.slice(start, end + 1);
+    JSON.parse(inner);
+    return inner;
+  }
+  throw new Error("The reply wasn't valid JSON");
+}
+
+async function generateWithChatApi(provider: ChatProvider, options: any, timeoutMs: number): Promise<{ text: string; provider: string }> {
   const prompt = extractPromptText(options.contents);
-  if (prompt === null) throw new Error("This request includes images, which the Groq fallback can't read.");
+  if (prompt === null) throw new Error(`This request includes images, which ${provider.name} can't read.`);
 
   const schema = options.config?.responseSchema ? geminiSchemaToJsonSchema(options.config.responseSchema) : null;
   const system = [
@@ -851,15 +867,16 @@ async function generateWithGroq(options: any): Promise<{ text: string; provider:
   ].filter(Boolean).join("\n\n");
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), GROQ_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const r = await fetch(`${GROQ_BASE_URL}/chat/completions`, {
+    const r = await fetch(`${provider.baseUrl}/chat/completions`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${provider.key}` },
       body: JSON.stringify({
-        model: GROQ_MODEL,
+        model: provider.model,
         temperature: 0.2,
-        response_format: { type: "json_object" },
+        max_tokens: 8192,
+        ...(provider.jsonMode ? { response_format: { type: "json_object" } } : {}),
         messages: [
           { role: "system", content: system },
           { role: "user", content: prompt }
@@ -869,17 +886,17 @@ async function generateWithGroq(options: any): Promise<{ text: string; provider:
     });
     if (!r.ok) {
       const body = await r.text().catch(() => "");
-      throw new Error(`Groq request failed (${r.status}): ${body.slice(0, 200)}`);
+      throw new Error(`${provider.name} request failed (${r.status}): ${body.slice(0, 200)}`);
     }
     const data: any = await r.json();
     const text = data?.choices?.[0]?.message?.content;
-    if (!text || typeof text !== "string") throw new Error("Groq returned an empty response");
-    JSON.parse(text); // make sure callers get parseable JSON, or fail here and report it
-    return { text, provider: "groq" };
+    if (!text || typeof text !== "string") throw new Error(`${provider.name} returned an empty response`);
+    return { text: pickJsonObject(text), provider: provider.name };
   } finally {
     clearTimeout(timer);
   }
 }
+
 
 async function generateContentWithRetry(ai: GoogleGenAI | null, options: any, maxRetries = 2): Promise<any> {
   let geminiError: any = null;
@@ -910,19 +927,42 @@ async function generateContentWithRetry(ai: GoogleGenAI | null, options: any, ma
     }
   }
 
-  // Gemini failed (rate limit, outage, bad key) or isn't configured: try Groq.
-  if (process.env.GROQ_API_KEY) {
-    const reason = geminiError ? String(geminiError.message || geminiError).slice(0, 120) : "no Gemini key";
-    console.warn(`[AI] Falling back to Groq (${GROQ_MODEL}): ${reason}`);
+  // Free backups, in order. Each has its own daily limit, so when one runs out the next one answers.
+  //  1. Gemini Flash-Lite (same key, separate free quota; can read images too)
+  //  2. Groq
+  //  3. NVIDIA
+  // Stop trying after ~40s so the whole request stays inside Vercel's 60s limit.
+  const started = Date.now();
+  const timeLeft = () => 40000 - (Date.now() - started);
+  let lastError: any = geminiError;
+  const why = (e: any) => String(e?.message || e || "no Gemini key").slice(0, 120);
+
+  const liteModel = process.env.GEMINI_LITE_MODEL || "gemini-3.5-flash-lite";
+  if (ai && geminiError && options.model !== liteModel) {
+    console.warn(`[AI] Falling back to ${liteModel}: ${why(geminiError)}`);
     try {
-      return await generateWithGroq(options);
-    } catch (groqError: any) {
-      console.error("[AI] Groq fallback failed:", String(groqError?.message || groqError).slice(0, 300));
-      throw geminiError || groqError;
+      return await ai.models.generateContent({ ...options, model: liteModel });
+    } catch (e: any) {
+      console.error(`[AI] ${liteModel} failed:`, why(e));
+      lastError = e;
     }
   }
 
-  throw geminiError || new Error("No AI provider is configured.");
+  const chatProviders: ChatProvider[] = [];
+  if (process.env.GROQ_API_KEY) chatProviders.push({ name: "groq", key: process.env.GROQ_API_KEY, baseUrl: GROQ_BASE_URL, model: GROQ_MODEL, jsonMode: true });
+  if (process.env.NVIDIA_API_KEY) chatProviders.push({ name: "nvidia", key: process.env.NVIDIA_API_KEY, baseUrl: NVIDIA_BASE_URL, model: NVIDIA_MODEL, jsonMode: false });
+  for (const provider of chatProviders) {
+    if (timeLeft() < 5000) break;
+    console.warn(`[AI] Falling back to ${provider.name} (${provider.model}): ${why(lastError)}`);
+    try {
+      return await generateWithChatApi(provider, options, Math.min(GROQ_TIMEOUT_MS, timeLeft()));
+    } catch (e: any) {
+      console.error(`[AI] ${provider.name} fallback failed:`, why(e));
+      lastError = e;
+    }
+  }
+
+  throw geminiError || lastError || new Error("No AI provider is configured.");
 }
 
 // 1. Simplify Job Description API

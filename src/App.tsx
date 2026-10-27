@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { SAMPLE_RESUME, SAMPLE_JOB_POST } from "./utils/sampleResume";
 import { educationNewestFirst } from "./utils/educationOrder";
 import PrivacyNotice from "./components/PrivacyNotice";
 import React, { useState, useEffect, useRef } from "react";
@@ -3044,6 +3045,21 @@ WORK EXPERIENCE
     showNotification(`Loaded version saved for ${version.companyName}!`, "info");
   };
 
+  // One click: add a made-up sample resume so visitors can try the flow without their own file
+  const handleUseSampleResume = () => {
+    const newId = `resume-sample-${Date.now()}`;
+    const data: ResumeStructure = JSON.parse(JSON.stringify(SAMPLE_RESUME));
+    setSavedUserResumes(prev => [...prev, { id: newId, name: generateUniqueResumeName(data.fullName), data, fileType: "manual", uploadedAt: new Date().toISOString() }]);
+    setActiveResumeId(newId);
+    setIsUnlocked(true);
+    sessionStorage.setItem("auralis_platform_unlocked", "true");
+    setOnboardingChoice("done");
+    sessionStorage.setItem("auralis_onboarding_dismissed", "true");
+    localStorage.setItem("jd_resume_customizer_onboarding_done", "true");
+    showNotification("Sample resume added. Go to Tailored Resumes and click Create New to try it.", "success");
+    trackEvent("sample_resume_used", {});
+  };
+
   // Closing the tailor window before the final step throws away that unfinished tailored copy.
   // Reaching the final step (or downloading) keeps it in "Tailored resumes".
   const closeTailorWizard = () => {
@@ -4675,6 +4691,14 @@ WORK EXPERIENCE
                         <p className="text-sm text-neutral-500 mt-1.5 max-w-sm leading-relaxed">
                           Upload your resume as a PDF or Word file to get started. Use the Create New button below.
                         </p>
+                        <button
+                          type="button"
+                          id="btn-sample-resume"
+                          onClick={handleUseSampleResume}
+                          className="mt-4 px-4 py-2 text-sm font-medium rounded-lg border border-neutral-200 bg-white hover:bg-neutral-50 text-black cursor-pointer"
+                        >
+                          Just looking? Try a sample resume
+                        </button>
                       </div>
                     </div>
                   ) : (
@@ -6490,7 +6514,12 @@ WORK EXPERIENCE
                             <p className="text-xs font-bold text-rose-600" role="alert">{tailorStepError}</p>
                           ) : (
                             <p className="text-xs text-neutral-500 font-medium">
-                              Paste the whole posting, including requirements and responsibilities.
+                              Paste the whole posting, including requirements and responsibilities.{" "}
+                              {!tailorJdText.trim() && (
+                                <button type="button" id="btn-sample-jd" onClick={() => { setTailorJdText(SAMPLE_JOB_POST); setTailorStepError(null); }} className="text-blue-700 hover:underline cursor-pointer">
+                                  No job post handy? Use a sample
+                                </button>
+                              )}
                             </p>
                           )}
                           <span className={`text-xs font-bold whitespace-nowrap ${tooShort ? "text-rose-600" : "text-neutral-500"}`}>
@@ -6733,7 +6762,12 @@ WORK EXPERIENCE
                         </p>
                         <div className="text-right shrink-0">
                           <p className="text-xs text-neutral-500">ATS score</p>
-                          <p className="text-2xl font-semibold text-emerald-600 leading-tight">{tailoredEval.score}%</p>
+                          <p className="text-2xl font-semibold text-emerald-600 leading-tight" id="ats-score-now">
+                            {typeof tailorAnalysisResult?.originalAtsScore === "number" && tailorAnalysisResult.originalAtsScore < tailoredEval.score && (
+                              <span className="text-base font-medium text-neutral-400 mr-1.5" id="ats-score-before" title="Your resume before tailoring">{tailorAnalysisResult.originalAtsScore}% →</span>
+                            )}
+                            {tailoredEval.score}%
+                          </p>
                         </div>
                       </div>
 

@@ -1318,6 +1318,7 @@ PLAIN WORDING (strict):
 - Do not use these words unless the original resume already uses them: significantly, substantially, dramatically, demonstrably, meticulously, seamlessly, strategically, successfully, effectively, consistently, proactively, highly, comprehensive, innovative, robust, dynamic, impactful, results-driven, cutting-edge, orchestrated, spearheaded, leveraged, utilized, championed, crafted.
 - Keep each bullet about the same length as the original (at most a few words longer). Do not add trailing clauses like "ensuring ...", "contributing to ...", "driving ..." that say nothing new.
 - If a bullet is already clear and matches the job, return it unchanged.
+- Never mention the job, role or job description inside a bullet, and never end a bullet with "demonstrating ...", "showcasing ...", "highlighting ...", "aligning with ..." or "reflecting ...". A bullet describes what the candidate did, nothing else.
 - The summary must never name the hiring company, and must not use phrases like "eager to", "looking to leverage", "passionate about" or "a leading platform like". Describe the candidate, not the employer.`;
     const prompt = `You are a veteran HR Consultant and senior Resume Writer. Your task is to review the Candidate's Resume and tailor it to better align with the requirements in the Job Description, preserving factual honesty but boosting keyword matching, professional tone, and clarity.${honestyRules}${confirmedSkillsNote}${careerSwitchNote}
 
@@ -1516,7 +1517,7 @@ Format your response strictly as JSON matching this schema:
       parsed.tailoredResume = mergeAndSanitizeTailoredResume(sourceResume, parsed.tailoredResume);
       parsed.tailoredResume = sanitizeResumeTextFields(parsed.tailoredResume);
       // Strip puffy words the AI added ("significantly", "orchestrated") unless the candidate used them
-      parsed.tailoredResume = plainResumeWording(parsed.tailoredResume, JSON.stringify(sourceResume));
+      parsed.tailoredResume = plainResumeWording(parsed.tailoredResume, sourceResume);
       // Enforce the checkbox choice: original skills + confirmed skills only, whatever the model returned.
       if (selectedSkills) {
         const original: string[] = Array.isArray(sourceResume?.skills) ? sourceResume.skills : [];

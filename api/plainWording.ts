@@ -64,13 +64,86 @@ export function removeHype(text: string, originalResumeText: string): string {
   return out.trim();
 }
 
-/** Apply removeHype to every line the AI wrote. */
-export function plainResumeWording<T extends { summary?: string; workExperience?: any[]; projects?: any[] }>(tailored: T, originalResumeText: string): T {
-  const clean = (s: any) => (typeof s === "string" ? removeHype(s, originalResumeText) : s);
+const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+  "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"];
+
+/** "Mentored three engineers" -> "Mentored 3 engineers" when the original line wrote 3. Recruiters scan for digits. */
+export function keepDigits(text: string, originalLine: string): string {
+  let out = text;
+  NUMBER_WORDS.forEach((word, n) => {
+    const digitInOriginal = new RegExp(`(^|[^\\d.,])${n}(?![\\d.,]?\\d)`).test(originalLine);
+    if (!digitInOriginal || wordRe(word).test(originalLine)) return;
+    out = out.replace(new RegExp(`(^|[^a-z-])${word}(?=[^a-z-]|$)`, "gi"), (_m, pre) => pre + String(n));
+  });
+  return out;
+}
+
+// Opening verbs that mean the same thing; swapping one for another adds nothing
+const SAME_VERBS = [
+  ["built", "developed", "created", "made"],
+  ["used", "utilized", "utilised", "leveraged", "employed", "applied"],
+  ["wrote", "authored", "drafted", "crafted"],
+  ["helped", "assisted", "supported", "aided"],
+  ["worked", "collaborated", "partnered", "teamed"],
+  ["ran", "conducted", "carried", "performed", "executed"],
+  ["managed", "handled", "oversaw", "looked"]
+];
+const sameVerb = (a: string, b: string) => SAME_VERBS.some(g => g.includes(a) && g.includes(b));
+const words = (t: string) => t.toLowerCase().replace(/[^a-z0-9%₹$ ]+/g, " ").split(/\s+/).filter(Boolean);
+
+/** Undo rewrites that change nothing real: only punctuation or case, or only the opening verb to a same-meaning one. */
+export function undoPointlessChange(text: string, originalLine: string): string {
+  if (!originalLine.trim()) return text;
+  const a = words(text), b = words(originalLine);
+  if (a.join(" ") === b.join(" ")) return originalLine;
+  if (a.length === b.length && a.slice(1).join(" ") === b.slice(1).join(" ") && sameVerb(a[0], b[0])) return originalLine;
+  return text;
+}
+
+// Trailing clauses that only talk about the job or sound like a cover letter, e.g.
+// ", demonstrating capability in X" or ", aligning with the job's mentoring responsibility"
+const FILLER_STARTS = ["demonstrating", "showcasing", "highlighting", "aligning with", "in alignment with", "in line with",
+  "reflecting", "underscoring", "illustrating", "exemplifying", "contributing to", "ensuring", "for performance optimization",
+  "to enhance code quality and", "relevant to", "as required by", "matching the"];
+
+/** Drop filler endings the AI tacks on, unless the candidate's own line already had that wording. */
+export function dropFillerEnding(text: string, originalLine: string): string {
+  const orig = originalLine.toLowerCase();
+  let out = text;
+  for (const start of FILLER_STARTS) {
+    if (orig.includes(start)) continue;
+    // ", demonstrating ... ." at the end of the line
+    out = out.replace(new RegExp(`,\\s*${esc(start)}\\b[^,;]*[.]?\\s*$`, "i"), originalLine.trim().endsWith(".") ? "." : "");
+  }
+  // "the job's" / "this role's" never belongs in a resume line
+  if (/\b(the|this) (job|role|position)('s)?\b/i.test(out) && !/\b(the|this) (job|role|position)/i.test(orig)) {
+    out = out.replace(/,?\s*[^,]*\b(the|this) (job|role|position)('s)?\b[^,.]*/i, "");
+  }
+  out = out.replace(/\s+([.,])/g, "$1").replace(/,\s*\./g, ".").trim();
+  // a cut line keeps its sentence ending like the original
+  if (originalLine.trim().endsWith(".") && !/[.!?]$/.test(out)) out += ".";
+  return out;
+}
+
+/** Clean every line the AI wrote, comparing each with the candidate's own line where there is one. */
+export function plainResumeWording<T extends { summary?: string; workExperience?: any[]; projects?: any[] }>(tailored: T, source: any): T {
+  const originalResumeText = JSON.stringify(source || {});
+  const clean = (s: any, originalLine = "") => {
+    if (typeof s !== "string") return s;
+    const plain = dropFillerEnding(keepDigits(removeHype(s, originalResumeText), originalLine), originalLine);
+    return undoPointlessChange(plain, originalLine);
+  };
+  const match = (list: any[] = [], item: any, i: number) => list.find(x => x?.id && x.id === item?.id) || list[i];
   return {
     ...tailored,
-    summary: clean(tailored.summary),
-    workExperience: (tailored.workExperience || []).map(j => ({ ...j, description: (j.description || []).map(clean) })),
-    projects: (tailored.projects || []).map(p => ({ ...p, description: (p.description || []).map(clean) }))
+    summary: clean(tailored.summary, source?.summary || ""),
+    workExperience: (tailored.workExperience || []).map((j, i) => {
+      const orig = match(source?.workExperience, j, i);
+      return { ...j, description: (j.description || []).map((d: any, k: number) => clean(d, orig?.description?.[k] || "")) };
+    }),
+    projects: (tailored.projects || []).map((p, i) => {
+      const orig = match(source?.projects, p, i);
+      return { ...p, description: (p.description || []).map((d: any, k: number) => clean(d, orig?.description?.[k] || "")) };
+    })
   };
 }

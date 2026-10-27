@@ -840,7 +840,7 @@ function extractPromptText(contents: any): string | null {
 
 // Any OpenAI-style chat API (Groq, NVIDIA). Returns { text } like Gemini's response.
 type ChatProvider = { name: "groq" | "nvidia"; key: string; baseUrl: string; model: string; jsonMode: boolean };
-const NVIDIA_MODEL = process.env.NVIDIA_MODEL || "meta/llama-3.3-70b-instruct";
+const NVIDIA_MODEL = process.env.NVIDIA_MODEL || "openai/gpt-oss-20b";
 const NVIDIA_BASE_URL = (process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1").replace(/\/$/, "");
 
 // Some models wrap JSON in ```json fences or add a sentence around it: keep just the JSON object
@@ -955,6 +955,7 @@ async function generateContentWithRetry(ai: GoogleGenAI | null, options: any, ma
     if (timeLeft() < 5000) break;
     console.warn(`[AI] Falling back to ${provider.name} (${provider.model}): ${why(lastError)}`);
     try {
+      // 25s cap each: a slow free backup must not keep the person waiting (basic mode comes next)
       return await generateWithChatApi(provider, options, Math.min(GROQ_TIMEOUT_MS, timeLeft()));
     } catch (e: any) {
       console.error(`[AI] ${provider.name} fallback failed:`, why(e));

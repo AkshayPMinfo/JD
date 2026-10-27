@@ -571,6 +571,10 @@ export default function App() {
     simplifiedJdObject: SimplifiedJD;
   } | null>(null);
   const [tailoredResultResume, setTailoredResultResume] = useState<ResumeStructure | null>(null);
+  // Every skill the tailored resume could show, job-matched first; the resume keeps the best 10 of these
+  const [tailorSkillPool, setTailorSkillPool] = useState<string[]>([]);
+  const [showMoreSkills, setShowMoreSkills] = useState(false);
+  const [extraSkillInput, setExtraSkillInput] = useState("");
   const [tailoredResultVersion, setTailoredResultVersion] = useState<SavedResumeVersion | null>(null);
   const [tailoredResult, setTailoredResult] = useState<TailoredResume | null>(null);
   const [printTailoredResult, setPrintTailoredResult] = useState<TailoredResume | null>(null);
@@ -2014,7 +2018,20 @@ export default function App() {
   const updateEditReviews = (next: EditReview[]) => {
     setTailorReviews(next);
     if (!tailorReviewBase) return;
-    const resume = applyEditReviews(tailorReviewBase, next);
+    syncTailoredResume(applyEditReviews(tailorReviewBase, next));
+  };
+  // Change the final skills row (step 5 "add more skills"), in both AI and basic mode
+  const setFinalSkills = (skills: string[]) => {
+    if (tailorReviewBase) {
+      const base = { ...tailorReviewBase, skills };
+      setTailorReviewBase(base);
+      syncTailoredResume(applyEditReviews(base, tailorReviews));
+    } else if (tailoredResultResume) {
+      syncTailoredResume({ ...tailoredResultResume, skills });
+    }
+  };
+  // Show the new resume everywhere and keep the saved tailored version and its score in step
+  const syncTailoredResume = (resume: ResumeStructure) => {
     setTailoredResultResume(resume);
     const jd = tailorAnalysisResult?.simplifiedJdObject;
     const evaluation = jd ? calculateRealisticAtsScore(resume, jd) : null;
@@ -2187,13 +2204,28 @@ export default function App() {
       setTailoredResult(isFullRewrite ? null : result);
 
       let mergedTailoredResume: ResumeStructure;
+      const jdSkillNames = [
+        ...(simplifiedJd.requiredSkills || []).map((sk: any) => sk?.name || sk),
+        ...(simplifiedJd.keywordsToTarget || [])
+      ].map(n => String(n || "").trim()).filter(Boolean);
+      // Skills row: the ones this job asks for first, then the person's others, 10 at most
+      const jobSkillKeys = [...jdSkillNames, ...tailorSelectedSkills].map(skillKey).filter(k => k.length >= 2);
+      const isJobSkill = (name: string) => {
+        const key = skillKey(name);
+        return jobSkillKeys.some(j => j === key || (j.length >= 3 && key.includes(j)) || (key.length >= 3 && j.includes(key)));
+      };
+      const bestSkills = (skills: string[], max = 10) => {
+        const unique = skills.filter((sk, i) => skills.findIndex(o => skillKey(o) === skillKey(sk)) === i);
+        const matched = unique.filter(isJobSkill);
+        const others = unique.filter(sk => !isJobSkill(sk));
+        return [...matched, ...others.slice(0, Math.max(0, max - matched.length))];
+      };
+      setShowMoreSkills(false);
+      setExtraSkillInput("");
       if (isFullRewrite) {
         const aiResume = raw.tailoredResume as ResumeStructure;
-        const base = { original: selectedResume, skills: aiResume.skills || selectedResume.skills || [] };
-        const jdSkillNames = [
-          ...(simplifiedJd.requiredSkills || []).map((sk: any) => sk?.name || sk),
-          ...(simplifiedJd.keywordsToTarget || [])
-        ].map(n => String(n || "").trim()).filter(Boolean);
+        setTailorSkillPool(bestSkills(aiResume.skills || selectedResume.skills || [], Infinity));
+        const base = { original: selectedResume, skills: bestSkills(aiResume.skills || selectedResume.skills || []) };
         const reviews = buildEditReviews(selectedResume, aiResume, tailorSelectedSkills, jdSkillNames, tailorJdText || "");
         setTailorReviewBase(base);
         setTailorReviews(reviews);
@@ -2203,6 +2235,8 @@ export default function App() {
         setTailorReviewBase(null);
         setTailorReviews([]);
         mergedTailoredResume = mergeResumeWithAdditions(selectedResume, result);
+        setTailorSkillPool(bestSkills(mergedTailoredResume.skills || [], Infinity));
+        mergedTailoredResume = { ...mergedTailoredResume, skills: bestSkills(mergedTailoredResume.skills || []) };
       }
       
       if (mergedTailoredResume) {
@@ -6985,7 +7019,10 @@ WORK EXPERIENCE
                       <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white w-full">
                         <div className="overflow-y-auto bg-neutral-50" style={{height: '60vh'}}>
                           <ResumePreview
-                            resume={isFullRewrite ? tailoredResume : originalResume}
+                            resume={isFullRewrite ? tailoredResume : (originalResume && tailoredResultResume
+                              // basic mode: show the same trimmed skills row the download will have
+                              ? { ...originalResume, skills: (originalResume.skills || []).filter(sk => (tailoredResultResume.skills || []).includes(sk)) }
+                              : originalResume)}
                             tailored={tailoredResult || undefined}
                             templateStyle={selectedStyle}
                             id="step-3-preview-tailored"
@@ -7003,6 +7040,57 @@ WORK EXPERIENCE
                   <p className="text-sm text-neutral-600 leading-relaxed">
                     This is your final resume, laid out the way it will download. Not happy with something? Go back to the edits and change it.
                   </p>
+                  {(() => {
+                    const current = tailoredResultResume.skills || [];
+                    const lower = new Set(current.map(sk => sk.toLowerCase()));
+                    // skills left out of the top 10, plus any the person added and then unticked
+                    const others = tailorSkillPool.filter(sk => !lower.has(sk.toLowerCase()));
+                    const added = current.filter(sk => !tailorSkillPool.slice(0, 10).some(p => p.toLowerCase() === sk.toLowerCase()));
+                    const choices = [...added, ...others];
+                    const toggle = (sk: string) => setFinalSkills(lower.has(sk.toLowerCase()) ? current.filter(c => c.toLowerCase() !== sk.toLowerCase()) : [...current, sk]);
+                    const addOwn = () => {
+                      const name = extraSkillInput.trim().replace(/\s+/g, " ");
+                      if (!name) return;
+                      if (!lower.has(name.toLowerCase())) setFinalSkills([...current, name]);
+                      setExtraSkillInput("");
+                    };
+                    return (
+                      <div id="final-skills-note" className="rounded-lg bg-neutral-50 px-3 py-2 text-sm text-neutral-700 leading-relaxed">
+                        <p>
+                          Skills: we picked your 10 best, the ones this job asks for first, then your others. A short list is easier for recruiters to read.{" "}
+                          <button type="button" id="btn-more-skills" onClick={() => setShowMoreSkills(v => !v)} className="font-medium text-blue-700 hover:underline cursor-pointer">
+                            {showMoreSkills ? "Done" : "Add more skills"}
+                          </button>
+                        </p>
+                        {showMoreSkills && (
+                          <div className="mt-2 space-y-2">
+                            {choices.length > 0 && (
+                              <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+                                {choices.map(sk => (
+                                  <label key={sk} className="flex items-center gap-1.5 cursor-pointer select-none">
+                                    <input type="checkbox" checked={lower.has(sk.toLowerCase())} onChange={() => toggle(sk)} className="w-4 h-4 accent-blue-600 cursor-pointer" />
+                                    {sk}
+                                  </label>
+                                ))}
+                              </div>
+                            )}
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                id="input-extra-skill"
+                                value={extraSkillInput}
+                                onChange={(e) => setExtraSkillInput(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === "Enter") addOwn(); }}
+                                placeholder="Add your own skill, e.g. Jira"
+                                className="flex-1 bg-white border border-neutral-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-neutral-400"
+                              />
+                              <button type="button" onClick={addOwn} className="px-3 py-1.5 text-sm font-medium rounded-lg border border-neutral-200 bg-white hover:bg-neutral-50 cursor-pointer">Add</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white w-full">
                     <div className="overflow-y-auto bg-neutral-50" style={{height: '62vh'}}>
                       <ResumePreview

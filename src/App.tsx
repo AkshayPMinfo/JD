@@ -97,6 +97,31 @@ function stem(word: string): string {
 }
 
 // "in 5 hours" / "in under an hour" / "tomorrow" for the daily AI limit reset
+// Ready-made endings that add a real result to a resume line; the user types only the number.
+// Picked from the line's own words so they fit ("budget" -> "worth ₹__").
+const RESULT_ENDINGS: { words: RegExp; endings: string[] }[] = [
+  // most specific first, so the best-fitting ending is the first chip
+  { words: /\bbudget|cost|spend|revenue|sales\b/i, endings: ["worth ₹__", "cutting costs by __%"] },
+  { words: /\bresearch|analysis|analy[sz]ed|competitor|market\b/i, endings: ["covering __ competitors", "across __ markets"] },
+  { words: /\bcampaign|marketing|social|content|brand|engagement|posts?|reels?|followers/i, endings: ["reaching __ people", "growing engagement by __%"] },
+  { words: /\bteams?\b|engineers?|developers?|mentor|cross[ -]functional|coordinat|collaborat|stakeholder/i, endings: ["for a team of __", "with __ engineers"] },
+  { words: /\bsprint|backlog|process|execution|pipeline|automat|deliver|deadline|tests?\b/i, endings: ["across __ sprints", "saving __ hours a week"] },
+  { words: /\busers?\b|customers?|merchants?|clients?/i, endings: ["used by __ people", "for __ customers"] }
+];
+const resultEndingsFor = (line: string): string[] => {
+  const picked: string[] = [];
+  for (const group of RESULT_ENDINGS) if (group.words.test(line)) picked.push(...group.endings);
+  for (const fallback of ["__% faster", "saving __ hours a week", "for a team of __"]) picked.push(fallback);
+  return [...new Set(picked)].slice(0, 3);
+};
+// "Led sprint planning." + "for a team of __" + "8" -> "Led sprint planning for a team of 8."
+const addResultToLine = (line: string, ending: string, value: string): string => {
+  const hadPeriod = /\.\s*$/.test(line);
+  // "...planning, saving 4 hours a week" reads better with a comma before an -ing ending
+  const joiner = /^[a-z]+ing\b/i.test(ending) ? ", " : " ";
+  return `${line.replace(/[.,\s]+$/, "")}${joiner}${ending.replace("__", value.trim())}${hadPeriod ? "." : ""}`;
+};
+
 function resetsInText(resetsAt?: string | null): string {
   const ms = resetsAt ? new Date(resetsAt).getTime() - Date.now() : NaN;
   if (!Number.isFinite(ms)) return "tomorrow";
@@ -505,6 +530,7 @@ export default function App() {
     mentions: string[];
     warnings: string[]; // things this edit claims that the original resume never said
     target: { kind: "summary" } | { kind: "exp" | "proj"; item: number; bullet: number };
+    resultOnly?: boolean; // the AI left this line alone; shown only so the user can add a result
   };
   const [tailorReviews, setTailorReviews] = useState<EditReview[]>([]);
   // Job-switcher check: set when the resume's recent role and the job are in different fields
@@ -530,6 +556,10 @@ export default function App() {
   const [tailorDownloaded, setTailorDownloaded] = useState<{ format: "pdf" | "docx"; fileName: string } | null>(null);
   const [tailorReviewBase, setTailorReviewBase] = useState<{ original: ResumeStructure; skills: string[] } | null>(null);
   const [editingReviewId, setEditingReviewId] = useState<string | null>(null);
+  // "Add a result" on a review card: which card and ending was tapped, and the number typed
+  const [resultPick, setResultPick] = useState<{ id: string; ending: string } | null>(null);
+  const [resultValue, setResultValue] = useState("");
+  const [resultError, setResultError] = useState<string | null>(null);
   const [tailorAnalysisResult, setTailorAnalysisResult] = useState<{
     matchedKeywords: string[];
     missingKeywords: string[];
@@ -1947,6 +1977,19 @@ export default function App() {
         push(label, proj.description[b] || "", (tProj.description || [])[b] || "", { kind: "proj", item: i, bullet: b }, `proj-${i}-${b}`);
       }
     });
+    // Lines the AI left unchanged that have no number yet: offer "add a result" on them too (3 lines max overall)
+    const withResultOffer = reviews.filter(r => r.target.kind !== "summary" && !/\d/.test(r.suggested)).length;
+    const room = Math.max(0, 3 - withResultOffer);
+    if (room > 0) {
+      const unchanged: EditReview[] = [];
+      (original.workExperience || []).forEach((job, i) => job.description.forEach((line, b) => {
+        const id = `exp-${i}-${b}`;
+        if (!line.trim() || /\d/.test(line) || reviews.some(r => r.id === id)) return;
+        const name = [job.company, job.role].filter(Boolean).join(" · ") || `Job ${i + 1}`;
+        unchanged.push({ id, label: `${name} · bullet ${b + 1}`, original: line, suggested: line, text: line, status: "accepted", mentions: [], warnings: [], target: { kind: "exp", item: i, bullet: b }, resultOnly: true });
+      }));
+      reviews.push(...unchanged.slice(0, room));
+    }
     return reviews;
   };
 
@@ -6630,8 +6673,8 @@ WORK EXPERIENCE
                       <div className="flex items-start justify-between gap-6">
                         <p className="text-sm text-neutral-600 leading-relaxed max-w-xl">
                           {isFullRewrite
-                            ? (tailorReviews.length > 0
-                              ? `We suggested ${tailorReviews.length} ${tailorReviews.length === 1 ? "edit" : "edits"} below. Accept the ones that are true for you, or write your own. Anything you skip stays exactly as you wrote it.`
+                            ? (tailorReviews.some(r => !r.resultOnly)
+                              ? `We suggested ${tailorReviews.filter(r => !r.resultOnly).length} ${tailorReviews.filter(r => !r.resultOnly).length === 1 ? "edit" : "edits"} below. Accept the ones that are true for you, or write your own. Anything you skip stays exactly as you wrote it.`
                               : "Your resume is ready with your ticked skills added. No other changes were suggested.")
                             : hasChanges
                             ? `Your tailored resume is ready with ${changeCount} ${changeCount === 1 ? "change" : "changes"}. Highlighted text shows what changed. Your original resume is not modified.`
@@ -6687,9 +6730,9 @@ WORK EXPERIENCE
                       )}
 
                       {/* Recruiters look for results; we never invent numbers, so ask for the person's own */}
-                      {isFullRewrite && tailorReviews.length > 0 && (
+                      {isFullRewrite && tailorReviews.some(r => r.target.kind !== "summary" && !/\d/.test(r.suggested)) && (
                         <p id="numbers-tip" className="text-sm text-neutral-600 bg-neutral-50 rounded-lg px-3 py-2 leading-relaxed">
-                          Tip: recruiters notice real results, like "cut sign-up time by 30%" or "managed a team of 4". We never make up numbers, so click Edit on a line to add your own.
+                          Tip: recruiters notice real results, like "for a team of 4". Tap a blue suggestion under a line and type your own number. We never make numbers up.
                         </p>
                       )}
 
@@ -6718,13 +6761,14 @@ WORK EXPERIENCE
 
                       {/* Suggested edits: accept, edit or skip each one */}
                       {isFullRewrite && tailorReviews.length > 0 && (() => {
-                        const decided = tailorReviews.filter(r => r.status !== "pending").length;
-                        const used = tailorReviews.filter(r => r.status === "accepted" || r.status === "edited").length;
+                        const realEdits = tailorReviews.filter(r => !r.resultOnly);
+                        const decided = realEdits.filter(r => r.status !== "pending").length;
+                        const used = realEdits.filter(r => r.status === "accepted" || r.status === "edited").length;
                         return (
                           <div className="space-y-3" id="suggested-edits">
                             <div className="flex items-center justify-between gap-3 flex-wrap">
                               <p className="text-sm font-medium text-black">
-                                Suggested edits <span className="text-neutral-400 font-normal">{decided} of {tailorReviews.length} reviewed · {used} in your resume</span>
+                                Suggested edits <span className="text-neutral-400 font-normal">{decided} of {realEdits.length} reviewed · {used} in your resume</span>
                               </p>
                               <div className="flex items-center gap-1">
                                 <button
@@ -6745,15 +6789,26 @@ WORK EXPERIENCE
                               </div>
                             </div>
                             <div className="border-t border-neutral-200 divide-y divide-neutral-200">
-                              {tailorReviews.map(r => {
+                              {tailorReviews.map((r, _i, all) => {
                                 const isEditing = editingReviewId === r.id;
                                 const inResume = r.status === "accepted" || r.status === "edited";
+                                // Offer "add a result" on up to 3 job/project lines that have no number
+                                const resultIds = all.filter(x => x.target.kind !== "summary" && !/\d/.test(x.suggested)).slice(0, 3).map(x => x.id);
+                                const currentLine = r.status === "edited" ? r.text : r.suggested;
+                                const offerResult = !isEditing && r.status !== "skipped" && resultIds.includes(r.id) && !/\d/.test(currentLine);
+                                const picking = resultPick?.id === r.id;
+                                const saveResult = () => {
+                                  if (!resultPick) return;
+                                  if (!/\d/.test(resultValue)) { setResultError("Type a number first, like 8 or 20"); return; }
+                                  setReviewStatus(r.id, "edited", addResultToLine(currentLine, resultPick.ending, resultValue));
+                                  setResultPick(null); setResultValue(""); setResultError(null);
+                                };
                                 return (
                                   <div key={r.id} className="py-3 space-y-2" id={`review-${r.id}`}>
                                     <div className="flex items-center justify-between gap-3 flex-wrap">
                                       <p className="text-xs text-neutral-500">{r.label}</p>
                                       <span className={`text-xs ${inResume ? "text-emerald-700" : r.status === "skipped" ? "text-neutral-500" : "text-neutral-400"}`}>
-                                        {r.status === "accepted" ? "Accepted" : r.status === "edited" ? "Your version" : r.status === "skipped" ? "Kept original" : "Not reviewed"}
+                                        {r.resultOnly ? (r.status === "edited" ? "Result added" : "Unchanged") : r.status === "accepted" ? "Accepted" : r.status === "edited" ? "Your version" : r.status === "skipped" ? "Kept original" : "Not reviewed"}
                                       </span>
                                     </div>
                                     {r.warnings.length > 0 && (
@@ -6766,6 +6821,9 @@ WORK EXPERIENCE
                                         Adds {r.mentions.join(" and ")} to this line. Only accept if you really used {r.mentions.length === 1 ? "it" : "them"} here.
                                       </p>
                                     )}
+                                    {r.resultOnly && !isEditing ? (
+                                      <p className="text-sm leading-relaxed text-black">{currentLine}</p>
+                                    ) : (
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                       <div>
                                         <p className="text-xs text-neutral-400 mb-1">You wrote</p>
@@ -6774,7 +6832,7 @@ WORK EXPERIENCE
                                         </p>
                                       </div>
                                       <div>
-                                        <p className="text-xs text-neutral-400 mb-1">{isEditing ? "Your version" : "Suggested"}</p>
+                                        <p className="text-xs text-neutral-400 mb-1">{isEditing || r.status === "edited" ? "Your version" : "Suggested"}</p>
                                         {isEditing ? (
                                           <textarea
                                             id={`review-text-${r.id}`}
@@ -6791,6 +6849,61 @@ WORK EXPERIENCE
                                         )}
                                       </div>
                                     </div>
+                                    )}
+                                    {picking && resultPick && (
+                                      <div className="rounded-lg bg-blue-50 px-3 py-2 space-y-2" id={`result-box-${r.id}`}>
+                                        <p className="text-sm text-neutral-800 leading-relaxed">
+                                          {currentLine.replace(/[.,\s]+$/, "")}{/^[a-z]+ing\b/i.test(resultPick.ending) ? ", " : " "}{resultPick.ending.split("__")[0]}
+                                          <input
+                                            id={`result-input-${r.id}`}
+                                            type="text"
+                                            inputMode="decimal"
+                                            autoFocus
+                                            value={resultValue}
+                                            onChange={(e) => { setResultValue(e.target.value); setResultError(null); }}
+                                            onKeyDown={(e) => { if (e.key === "Enter") saveResult(); if (e.key === "Escape") setResultPick(null); }}
+                                            placeholder="8"
+                                            aria-label="Your number"
+                                            className="mx-1 w-16 border-b-2 border-blue-500 bg-white px-1 text-sm text-black focus:outline-none"
+                                          />
+                                          {resultPick.ending.split("__")[1]}
+                                        </p>
+                                        {resultError && <p className="text-xs text-rose-600">{resultError}</p>}
+                                        <div className="flex gap-2">
+                                          <button type="button" onClick={saveResult} className="px-3 py-1.5 bg-[#2563eb] hover:bg-blue-600 text-white text-sm font-medium rounded-lg cursor-pointer">Add to line</button>
+                                          <button type="button" onClick={() => { setResultPick(null); setResultError(null); }} className="px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-black rounded-lg hover:bg-white cursor-pointer">Cancel</button>
+                                        </div>
+                                      </div>
+                                    )}
+                                    {offerResult && !picking && (
+                                      <div className="space-y-1.5" id={`result-offer-${r.id}`}>
+                                        <p className="text-xs text-neutral-500">Add a result? Recruiters notice numbers. Only add what's true.</p>
+                                        <div className="flex flex-wrap gap-1.5">
+                                          {resultEndingsFor(currentLine).map(ending => (
+                                            <button
+                                              key={ending}
+                                              type="button"
+                                              onClick={() => { setEditingReviewId(null); setResultPick({ id: r.id, ending }); setResultValue(""); setResultError(null); }}
+                                              className="px-2.5 py-1 text-xs font-medium rounded-md border border-blue-200 text-blue-700 bg-white hover:bg-blue-50 cursor-pointer"
+                                            >
+                                              + {ending}
+                                            </button>
+                                          ))}
+                                          <button
+                                            type="button"
+                                            onClick={() => { setResultPick(null); setTailorReviews(tailorReviews.map(x => x.id === r.id ? { ...x, text: currentLine } : x)); setEditingReviewId(r.id); }}
+                                            className="px-2.5 py-1 text-xs font-medium rounded-md text-neutral-600 hover:text-black hover:bg-neutral-100 cursor-pointer"
+                                          >
+                                            Write my own
+                                          </button>
+                                        </div>
+                                      </div>
+                                    )}
+                                    {picking ? null : r.resultOnly && !isEditing ? (r.status === "edited" && (
+                                      <button type="button" onClick={() => setReviewStatus(r.id, "accepted", r.original)} className="px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-black rounded-lg hover:bg-neutral-100 cursor-pointer">
+                                        Undo
+                                      </button>
+                                    )) : (
                                     <div className="flex items-center gap-1">
                                       {isEditing ? (
                                         <>
@@ -6837,6 +6950,7 @@ WORK EXPERIENCE
                                         </>
                                       )}
                                     </div>
+                                    )}
                                   </div>
                                 );
                               })}

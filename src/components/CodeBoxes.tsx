@@ -1,7 +1,7 @@
 import { useRef } from "react";
 
 /**
- * Six one-digit boxes for an email code. Typing moves to the next box, Backspace goes back,
+ * One-digit boxes for an email code. Typing moves to the next box, Backspace goes back,
  * and pasting the whole code fills every box at once.
  */
 interface CodeBoxesProps {
@@ -29,7 +29,7 @@ export default function CodeBoxes({ value, onChange, length = 6 }: CodeBoxesProp
   };
 
   return (
-    <div className="flex gap-2 justify-between" role="group" aria-label="6-digit code">
+    <div className="flex gap-1.5 justify-between" role="group" aria-label={`${length}-digit code`}>
       {digits.map((d, i) => (
         <input
           key={i}
@@ -54,7 +54,7 @@ export default function CodeBoxes({ value, onChange, length = 6 }: CodeBoxesProp
             } else if (e.key === "ArrowLeft") focus(i - 1);
             else if (e.key === "ArrowRight") focus(i + 1);
           }}
-          className="w-12 h-14 text-center text-xl font-semibold bg-white border border-neutral-300 rounded-lg text-black focus:outline-hidden focus:border-black focus:ring-2 focus:ring-neutral-100"
+          className="w-10 h-12 min-w-0 flex-1 text-center text-xl font-semibold bg-white border border-neutral-300 rounded-lg text-black focus:outline-hidden focus:border-black focus:ring-2 focus:ring-neutral-100"
         />
       ))}
     </div>

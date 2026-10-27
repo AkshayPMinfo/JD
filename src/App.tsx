@@ -130,6 +130,8 @@ function resetsInText(resetsAt?: string | null): string {
 }
 
 // Set when a guest leaves to sign in, so their resumes are merged into the account.
+// Must match Supabase: Authentication > Sign In / Providers > Email > Email OTP Length
+const SIGNUP_CODE_LENGTH = 6;
 const GUEST_HANDOFF_KEY = "jd_resume_customizer_guest_handoff";
 
 export default function App() {
@@ -176,7 +178,7 @@ export default function App() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
-  // Sign-up waiting for the 6-digit code from the confirmation email
+  // Sign-up waiting for the code from the confirmation email
   const [verifyEmail, setVerifyEmail] = useState<string | null>(null);
   const [verifyCode, setVerifyCode] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
@@ -899,8 +901,8 @@ export default function App() {
   const handleVerifyCode = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!verifyEmail) return;
-    if (!/^\d{6}$/.test(verifyCode.trim())) {
-      setAuthMessage({ type: "error", message: "Type the 6-digit code from the email." });
+    if (!new RegExp(`^\\d{${SIGNUP_CODE_LENGTH}}$`).test(verifyCode.trim())) {
+      setAuthMessage({ type: "error", message: `Type the ${SIGNUP_CODE_LENGTH}-digit code from the email.` });
       return;
     }
     setIsVerifying(true);
@@ -1025,12 +1027,25 @@ export default function App() {
       await finishSignIn(session, isSignUp);
     } catch (error: any) {
       if (String(error.message || "").startsWith("Account created.")) {
-        // Email confirmation is on: ask for the 6-digit code from the email
+        // Email confirmation is on: ask for the code from the email
         setVerifyEmail(email);
         setVerifyCode("");
         setAuthPassword("");
         setAuthConfirmPassword("");
         setAuthMessage(null); // the code screen already says where the code went
+        return;
+      }
+      if (/verify your email/i.test(String(error.message || ""))) {
+        // Signed up earlier but never typed the code: send a fresh one and show the code screen
+        setVerifyEmail(email);
+        setVerifyCode("");
+        setAuthPassword("");
+        try {
+          await supabaseAuth.resendSignupCode(email);
+          setAuthMessage({ type: "info", message: "Your email isn't confirmed yet. We sent you a new code." });
+        } catch (resendError: any) {
+          setAuthMessage({ type: "info", message: `Your email isn't confirmed yet. Type the code from your latest email. (${resendError.message})` });
+        }
         return;
       }
       setAuthMessage({ type: "error", message: error.message || "Authentication failed. Please try again." });
@@ -3690,11 +3705,11 @@ WORK EXPERIENCE
                     <form id="verify-code-form" onSubmit={handleVerifyCode} noValidate className="space-y-4 text-left">
                       <h2 className="text-xl font-semibold text-black tracking-tight">Check your email</h2>
                       <p className="text-sm text-neutral-600 leading-relaxed">
-                        We sent a 6-digit code to <span className="font-medium text-black">{verifyEmail}</span>. It can take a minute; check spam too.
+                        We sent a {SIGNUP_CODE_LENGTH}-digit code to <span className="font-medium text-black">{verifyEmail}</span>. It can take a minute; check spam too.
                       </p>
                       <div>
                         <p className="block text-xs text-black mb-1.5 font-bold">Code</p>
-                        <CodeBoxes value={verifyCode} onChange={(code) => { setVerifyCode(code); setAuthMessage(null); }} />
+                        <CodeBoxes length={SIGNUP_CODE_LENGTH} value={verifyCode} onChange={(code) => { setVerifyCode(code); setAuthMessage(null); }} />
                       </div>
                       {authMessage && (
                         <div id="auth-inline-message" className={`rounded-xl border px-3 py-2 text-xs font-semibold leading-relaxed ${authMessage.type === "error" ? "border-rose-300 bg-rose-50 text-rose-800" : authMessage.type === "info" ? "border-blue-300 bg-blue-50 text-blue-800" : "border-emerald-300 bg-emerald-50 text-emerald-800"}`}>

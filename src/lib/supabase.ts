@@ -130,7 +130,7 @@ const parseAuthResponse = async (
   }
   if (!payload.access_token || !payload.user?.id) {
     if (options.allowEmailConfirmation) {
-      throw new Error("Account created. We emailed you a 6-digit code to confirm it.");
+      throw new Error("Account created. We emailed you a code to confirm it.");
     }
     throw new Error("Supabase did not return a valid session.");
   }
@@ -166,7 +166,7 @@ export const supabaseAuth = {
     return parseAuthResponse(response, { allowEmailConfirmation: true });
   },
 
-  // Sign-up with a code: the confirmation email carries a 6-digit code ({{ .Token }}) the person types in
+  // Sign-up with a code: the confirmation email carries a short code ({{ .Token }}) the person types in
   async verifySignupCode(email: string, code: string): Promise<SupabaseSession> {
     assertSupabaseConfigured();
     const response = await fetch(`${SUPABASE_URL}/auth/v1/verify`, {

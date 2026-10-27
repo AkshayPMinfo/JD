@@ -106,6 +106,31 @@ function twoColumnPdf(): Buffer {
   return Buffer.from(doc.output("arraybuffer"));
 }
 
+/** Normal one-column resume with dates pushed to the right edge: must NOT be read as two columns. */
+function rightDatesPdf(): Buffer {
+  const doc = new jsPDF();
+  doc.setFontSize(10);
+  let y = 16;
+  const line = (left: string, right = "") => {
+    doc.text(left, 14, y);
+    if (right) doc.text(right, 196, y, { align: "right" });
+    y += 6;
+  };
+  line("Ananya Rao"); line("ananya.rao@example.com | +91 98888 77777"); line("");
+  line("EXPERIENCE");
+  line("Product Analyst, Meesho", "Feb 2022 - Present");
+  line("- Built weekly dashboards for the seller growth team");
+  line("- Ran pricing experiments across 3 categories");
+  line("Business Analyst, Paytm", "Jun 2019 - Jan 2022");
+  line("- Analysed payment failure data with SQL");
+  line("- Wrote reports for leadership every month");
+  line("EDUCATION");
+  line("B.Com, Delhi University", "2016 - 2019");
+  line("SKILLS");
+  line("SQL, Excel, Tableau, Python");
+  return Buffer.from(doc.output("arraybuffer"));
+}
+
 /**
  * Mimics PDFs that store "fi"/"fl" as separate ligature glyphs: each line is written as touching
  * chunks ("de" + "fi" + "ne"), which is how text extraction ended up with "de fi ne".
@@ -156,6 +181,7 @@ async function docxFromText(text: string): Promise<Buffer> {
 export interface Fixtures {
   single: Buffer;
   twoColumn: Buffer;
+  rightDates: Buffer;
   alt: Buffer;
   docx: Buffer;
   recipe: Buffer;
@@ -168,6 +194,7 @@ export async function buildFixtures(): Promise<Fixtures> {
   return {
     single: pdfFromText(RESUME_TEXT),
     twoColumn: twoColumnPdf(),
+    rightDates: rightDatesPdf(),
     alt: pdfFromText(ALT_RESUME_TEXT),
     docx: await docxFromText(RESUME_TEXT),
     recipe: pdfFromText(RECIPE_TEXT, 11),

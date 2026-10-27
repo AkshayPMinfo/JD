@@ -126,33 +126,37 @@ async function extractTextFromPdfProxy(pdfData: any): Promise<string> {
 
     if (allItems.length === 0) continue;
 
-    // ── Detect column boundary via X-coordinate gap analysis ─────────────────
+    // ── Detect a two-column layout (e.g. a sidebar with contact and skills) ──
+    // Look for the widest gap between where lines start. It's a real column split only if:
+    //  - it sits in the middle part of the page (20%-80% of the width),
+    //  - almost no text runs across it (a full-width name or heading may),
+    //  - the right side has enough lines AND they start at the same x (a column's left edge).
+    //    Right-aligned dates on a normal resume start at different x's, so they don't count.
+    const pageW: number = (() => { try { return page.getViewport({ scale: 1 }).width || 612; } catch { return 612; } })();
     const xValues = [...new Set(allItems.map(it => Math.round(it.x)))].sort((a, b) => a - b);
-    const pageWidth = xValues[xValues.length - 1] - xValues[0];
-    const maxX = xValues[xValues.length - 1];
-
     let splitX: number | null = null;
-    if (xValues.length >= 4 && pageWidth > 250 && maxX > 300) {
-      // Find the largest gap between consecutive X clusters
-      let maxGap = 0;
-      let maxGapIdx = -1;
+    let spanning: TextItem[] = [];
+    if (xValues.length >= 2) {
+      let maxGap = 0, maxGapIdx = -1;
       for (let i = 1; i < xValues.length; i++) {
         const gap = xValues[i] - xValues[i - 1];
         if (gap > maxGap) { maxGap = gap; maxGapIdx = i; }
       }
-      // Only treat as two-column if the gap is at least 15% of page width
-      // AND the split point falls between 20% and 80% of the page (not near edges)
-      if (maxGap > pageWidth * 0.15 && maxGapIdx > 0) {
-        const candidateSplit = (xValues[maxGapIdx - 1] + xValues[maxGapIdx]) / 2;
-        const relPos = (candidateSplit - xValues[0]) / pageWidth;
-        if (relPos >= 0.2 && relPos <= 0.8) {
-          // Also verify both sides have meaningful content (at least 5% of items each)
-          const leftCount = allItems.filter(it => it.x <= candidateSplit).length;
-          const rightCount = allItems.filter(it => it.x > candidateSplit).length;
-          const minCount = allItems.length * 0.05;
-          if (leftCount >= minCount && rightCount >= minCount) {
-            splitX = candidateSplit;
-          }
+      const candidate = maxGapIdx > 0 ? xValues[maxGapIdx] - 2 : null;
+      if (candidate !== null && maxGap > pageW * 0.12) {
+        const relPos = candidate / pageW;
+        const crosses = (it: TextItem) => it.x < candidate && it.x + it.width > candidate + 2;
+        const across = allItems.filter(crosses);
+        const left = allItems.filter(it => it.x < candidate && !crosses(it));
+        const right = allItems.filter(it => it.x >= candidate);
+        const lines = (list: TextItem[]) => new Set(list.map(it => Math.round(it.y / 3))).size;
+        const xCount = new Map<number, number>();
+        right.forEach(it => xCount.set(Math.round(it.x), (xCount.get(Math.round(it.x)) || 0) + 1));
+        const sharedEdge = right.length ? Math.max(...xCount.values()) / right.length : 0;
+        if (relPos >= 0.2 && relPos <= 0.8 && across.length <= allItems.length * 0.15
+          && lines(left) >= 3 && lines(right) >= 5 && sharedEdge >= 0.6) {
+          splitX = candidate;
+          spanning = across;
         }
       }
     }
@@ -178,10 +182,14 @@ async function extractTextFromPdfProxy(pdfData: any): Promise<string> {
 
     if (splitX !== null) {
       anyColumns = true;
-      const leftItems  = allItems.filter(it => it.x <= splitX).sort((a, b) => b.y - a.y || a.x - b.x);
-      const rightItems = allItems.filter(it => it.x >  splitX).sort((a, b) => b.y - a.y || a.x - b.x);
+      const split = splitX;
+      // Full-width lines (usually the name at the top) come first, then each column top to bottom
+      const spanSet = new Set(spanning);
+      const top = spanning.sort((a, b) => b.y - a.y || a.x - b.x);
+      const leftItems  = allItems.filter(it => !spanSet.has(it) && it.x < split).sort((a, b) => b.y - a.y || a.x - b.x);
+      const rightItems = allItems.filter(it => !spanSet.has(it) && it.x >= split).sort((a, b) => b.y - a.y || a.x - b.x);
 
-      leftPageTexts.push(renderColumn(leftItems));
+      leftPageTexts.push([renderColumn(top), renderColumn(leftItems)].filter(Boolean).join("\n"));
       rightPageTexts.push(renderColumn(rightItems));
     } else {
       // Single-column page: treat as left-column text for grouping

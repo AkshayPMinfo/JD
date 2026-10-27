@@ -8,7 +8,6 @@ import { buildFixtures, JD_BACKEND, JD_NURSE } from "./fixtures.ts";
 const PDF = "application/pdf";
 const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const KNOWN_JD = "JD reader only knows a short skill/title list; expected to improve with AI mode";
-const KNOWN_TWO_COL = "two-column PDFs are read line by line across both columns";
 
 const app = await startApp({ USE_GEMINI: "false", GEMINI_API_KEY: "", GROQ_API_KEY: "" });
 const t = new Checks();
@@ -47,10 +46,18 @@ try {
     const skills = (p.skills || []).map((s: string) => s.toLowerCase());
     t.check("U2a", "Two-column PDF accepted", j.isResume === true, j.reason);
     t.check("U2b", "Two-column: name and email", p.fullName === "Rahul Verma" && p.email === "rahul.verma@example.com");
-    t.check("U2c", "Two-column: left-column skills found", ["java", "kafka", "docker"].every(s => skills.some((x: string) => x.includes(s))), (p.skills || []).join(", "), { known: KNOWN_TWO_COL });
-    t.check("U2d", "Two-column: 2 jobs (Zomato, TCS)", we.length === 2 && lc(we).includes("zomato") && lc(we).includes("tcs"), `count=${we.length}`, { known: KNOWN_TWO_COL });
+    t.check("U2c", "Two-column: left-column skills found", ["java", "kafka", "docker"].every(s => skills.some((x: string) => x.includes(s))), (p.skills || []).join(", "));
+    t.check("U2d", "Two-column: 2 jobs (Zomato, TCS)", we.length === 2 && lc(we).includes("zomato") && lc(we).includes("tcs"), `count=${we.length}`);
     t.check("U2e", "Two-column: no left-column leakage into job bullets", !we.some((w: any) => (w.description || []).some((b: string) => /^(java|docker|mysql|bits pilani|kafka)$/i.test(b.trim()))));
     t.check("U2f", "Two-column: education (BITS Pilani)", lc(p.education).includes("bits pilani"), JSON.stringify(p.education));
+  }
+
+  const rightDates = await upload("resume_rightdates.pdf", PDF, fx.rightDates);
+  {
+    const p = rightDates.json.detectedProfile || {};
+    const we = p.workExperience || [];
+    t.check("U2g", "Dates on the right: still read as one column (2 jobs)", we.length === 2 && lc(we).includes("meesho") && lc(we).includes("paytm"), `count=${we.length}`);
+    t.check("U2h", "Dates on the right: job dates kept with their job", (we[0]?.duration || "").includes("2022") && (we[1]?.duration || "").includes("2019"), we.map((w: any) => w.duration).join(" / "));
   }
 
   const docx = await upload("resume.docx", DOCX, fx.docx);

@@ -1917,8 +1917,9 @@ export default function App() {
     const RESULT_WORDS = ["increas", "boost", "grew", "grow", "drove", "driv", "rais", "reduc", "cut ", "doubl", "tripl", "accelerat", "maximi", "enhanc", "improv", "generat"];
     const resultWarning = (sugg: string, orig: string): string | null => {
       const s2 = sugg.toLowerCase(), o2 = orig.toLowerCase();
-      const added = RESULT_WORDS.filter(w => s2.includes(w) && !o2.includes(w));
-      return added.length ? "Claims a result your original line doesn't mention. Only accept if it really happened." : null;
+      // Only when the original line states no result at all ("raising coverage" -> "increased coverage" is fine)
+      if (RESULT_WORDS.some(w => o2.includes(w))) return null;
+      return RESULT_WORDS.some(w => s2.includes(w)) ? "Claims a result your original line doesn't mention" : null;
     };
     const reviews: EditReview[] = [];
     const push = (label: string, orig: string, sugg: string, target: EditReview["target"], id: string) => {

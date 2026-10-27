@@ -26,10 +26,23 @@ const wordRe = (w: string) => new RegExp(`(^|[^a-z-])${esc(w)}(?=[^a-z-]|$)`, "i
 
 const keepCase = (from: string, to: string) => (from[0] === from[0].toUpperCase() ? to[0].toUpperCase() + to.slice(1) : to);
 
+/**
+ * Some models write numbers with special spaces and hyphens ("35 %", "1 000", "2 M", "order‑tracking").
+ * Put them back the normal way so numbers match the original resume.
+ */
+export function normalizeTypography(text: string): string {
+  return text
+    .replace(/[\u2010\u2011]/g, "-")
+    .replace(/(\d)[\u00a0\u202f\u2009 ]%/g, "$1%")
+    .replace(/(\d)[\u00a0\u202f\u2009](\d{3})(?!\d)/g, "$1,$2")
+    .replace(/(\d)[\u00a0\u202f\u2009]([KMB])\b/g, "$1$2")
+    .replace(/[\u00a0\u202f\u2009]/g, " ");
+}
+
 export function removeHype(text: string, originalResumeText: string): string {
   if (!text) return text;
   const original = originalResumeText.toLowerCase();
-  let out = text;
+  let out = normalizeTypography(text);
   for (const w of [...HYPE_ADVERBS, ...HYPE_ADJECTIVES]) {
     if (wordRe(w).test(original)) continue;
     // "significantly increased" -> "increased"; "a comprehensive plan" -> "a plan"; "an innovative app" -> "an app"

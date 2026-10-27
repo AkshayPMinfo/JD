@@ -19,4 +19,6 @@ eq("P5", "Keeps a word the candidate used", "Ran highly effective campaigns.", "
 eq("P6", "Leverage → use", "Leveraged SQL to find drop-offs.", "Used SQL to find drop-offs.");
 eq("P7", "Plain line stays the same", "Managed product backlogs and sprint planning.", "Managed product backlogs and sprint planning.");
 eq("P8", "Doesn't touch words inside other words", "Worked with highlyrated teams in Highlands.", "Worked with highlyrated teams in Highlands.");
+eq("P9", "Fixes odd number spacing", "Reduced latency by 35\u202f% for 1\u202f000 users and 2\u202fM requests", "Reduced latency by 35% for 1,000 users and 2M requests");
+eq("P10", "Fixes special hyphens", "Built order\u2011tracking APIs", "Built order-tracking APIs");
 process.exit(t.report("Plain wording"));

@@ -3902,23 +3902,6 @@ WORK EXPERIENCE
                 <div id="auth-panel" className="bg-white border border-neutral-200 rounded-2xl p-6 sm:p-10 relative overflow-hidden w-full max-w-[480px]">
                   
                   <div className="space-y-6">
-                    <button
-                      id="btn-quick-guest"
-                      onClick={handleGuestAccess}
-                      disabled={isAuthSubmitting}
-                      className={`w-full py-3 bg-black hover:bg-neutral-800 text-white text-sm font-medium rounded-lg transition-colors duration-150 ${
-                        isAuthSubmitting ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
-                      }`}
-                    >
-                      Continue as Guest
-                    </button>
-                    <p className="text-xs text-neutral-500 text-center">
-                      By continuing, you agree to how we handle your data.{" "}
-                      <button type="button" id="btn-privacy-login" onClick={() => setShowPrivacy(true)} className="underline hover:text-black cursor-pointer">Privacy</button>
-                    </p>
-                    {showPrivacy && <PrivacyNotice onClose={() => setShowPrivacy(false)} />}
-   
-                    <p className="text-center text-xs text-neutral-500 pt-1">or use an account</p>
                     {(() => {
                       const activeTab = isForgotPassword || isResetPassword ? "forgot" : isSignUp ? "signup" : "signin";
                       const tabs: { id: "signin" | "signup" | "forgot"; label: string }[] = [
@@ -4144,6 +4127,27 @@ WORK EXPERIENCE
                     </form>
                       );
                     })()}
+                    <div className="relative flex py-1 items-center">
+                      <div className="flex-grow border-t border-neutral-200"></div>
+                      <span className="flex-shrink mx-3 text-neutral-500 text-xs">or</span>
+                      <div className="flex-grow border-t border-neutral-200"></div>
+                    </div>
+                    <button
+                      id="btn-quick-guest"
+                      onClick={handleGuestAccess}
+                      disabled={isAuthSubmitting}
+                      className={`w-full py-3 bg-white border border-neutral-300 hover:bg-neutral-50 text-black text-sm font-medium rounded-lg transition-colors duration-150 ${
+                        isAuthSubmitting ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                      }`}
+                    >
+                      Continue as Guest
+                    </button>
+                    <p className="text-xs text-neutral-500 text-center">
+                      By continuing, you agree to how we handle your data.{" "}
+                      <button type="button" id="btn-privacy-login" onClick={() => setShowPrivacy(true)} className="underline hover:text-black cursor-pointer">Privacy</button>
+                    </p>
+                    {showPrivacy && <PrivacyNotice onClose={() => setShowPrivacy(false)} />}
+   
                   </div>
    
                 </div>

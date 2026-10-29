@@ -70,6 +70,17 @@ const SUPABASE_SESSION_STORAGE_KEY = "jd_resume_customizer_supabase_session";
 const PASSWORD_MIN_LENGTH = 8;
 const PASSWORD_RESET_COOLDOWN_SECONDS = 60;
 
+// Reads the email out of a sign-in token (used on the reset-link screen)
+function emailFromToken(token: string | null): string | null {
+  if (!token) return null;
+  try {
+    const part = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    return JSON.parse(atob(part)).email || null;
+  } catch {
+    return null;
+  }
+}
+
 // Adds a career switcher's courses/certificates and side projects (one per line) to a copy of the resume.
 // A project line can be "Name - what I built"; links are kept as typed.
 function addSwitchExtras(resume: ResumeStructure, certsText: string, projectsText: string): ResumeStructure {
@@ -182,6 +193,11 @@ export default function App() {
   const [verifyEmail, setVerifyEmail] = useState<string | null>(null);
   const [verifyCode, setVerifyCode] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
+  // Password reset by code: the email the code went to, and the code typed
+  const [resetEmail, setResetEmail] = useState<string | null>(null);
+  const [resetCode, setResetCode] = useState("");
+  // What's happening while we sign them in (shown under the button)
+  const [authProgress, setAuthProgress] = useState<string | null>(null);
   const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [isResetPassword, setIsResetPassword] = useState(false);
   const [resetAccessToken, setResetAccessToken] = useState<string | null>(null);
@@ -885,9 +901,12 @@ export default function App() {
     const name = session.user.email.split("@")[0];
     const userObj = { email: session.user.email, name };
     localStorage.setItem(SUPABASE_SESSION_STORAGE_KEY, JSON.stringify(session));
+    setAuthProgress(isNew ? "Setting up your account..." : "Signing you in...");
     await supabaseData.upsertUser(session.accessToken, { id: session.user.id, email: session.user.email });
     await supabaseData.upsertProfile(session.accessToken, { id: session.user.id, full_name: name });
+    setAuthProgress("Loading your resumes...");
     await loadPersistedSupabaseData(session);
+    setAuthProgress(null);
     setCurrentUser(userObj);
     // Always land on Resume Setup first after login
     setCurrentStep("resume");
@@ -906,6 +925,7 @@ export default function App() {
       return;
     }
     setIsVerifying(true);
+    setAuthProgress("Checking your code...");
     try {
       const session = await supabaseAuth.verifySignupCode(verifyEmail, verifyCode);
       await finishSignIn(session, true);
@@ -913,6 +933,7 @@ export default function App() {
       setAuthMessage({ type: "error", message: error.message || "Couldn't check the code. Please try again." });
     } finally {
       setIsVerifying(false);
+      setAuthProgress(null);
     }
   };
 
@@ -924,6 +945,33 @@ export default function App() {
     } catch (error: any) {
       setAuthMessage({ type: "error", message: error.message || "Couldn't send a new code." });
     }
+  };
+
+  const handleResendResetCode = async () => {
+    if (!resetEmail || resetCooldownSeconds > 0) return;
+    try {
+      await supabaseAuth.sendPasswordReset(resetEmail, `${window.location.origin}${window.location.pathname}`);
+      setResetCooldownSeconds(PASSWORD_RESET_COOLDOWN_SECONDS);
+      setAuthMessage({ type: "success", message: `New code sent to ${resetEmail}. Use the newest email.` });
+    } catch (error: any) {
+      setAuthMessage({ type: "error", message: error.message || "Couldn't send a new code." });
+    }
+  };
+
+  // "Edit" next to a locked email: go back to typing the email, keeping what they typed
+  const editAuthEmail = (email: string, mode: "signup" | "reset") => {
+    setVerifyEmail(null);
+    setVerifyCode("");
+    setResetEmail(null);
+    setResetCode("");
+    setIsResetPassword(false);
+    setResetAccessToken(null);
+    setIsSignUp(mode === "signup");
+    setIsForgotPassword(mode === "reset");
+    setAuthEmail(email);
+    setAuthPassword("");
+    setAuthConfirmPassword("");
+    setAuthMessage(null);
   };
 
   const handleAuth = async (e: React.FormEvent) => {
@@ -976,6 +1024,41 @@ export default function App() {
       showNotification("Please provide a valid email address.", "error");
       return;
     }
+    if (isForgotPassword && resetEmail) {
+      // Step 2 of reset: code + new password, then they're signed in
+      if (!new RegExp(`^\\d{${SIGNUP_CODE_LENGTH}}$`).test(resetCode.trim())) {
+        setAuthMessage({ type: "error", message: `Type the ${SIGNUP_CODE_LENGTH}-digit code from the email.` });
+        return;
+      }
+      if (authPassword.length < PASSWORD_MIN_LENGTH) {
+        setAuthMessage({ type: "error", message: `Password must be at least ${PASSWORD_MIN_LENGTH} characters.` });
+        return;
+      }
+      if (authPassword !== authConfirmPassword) {
+        setAuthMessage({ type: "error", message: "Passwords do not match." });
+        return;
+      }
+      setIsAuthSubmitting(true);
+      setAuthProgress("Checking your code...");
+      try {
+        const session = await supabaseAuth.verifyRecoveryCode(resetEmail, resetCode);
+        setAuthProgress("Saving your new password...");
+        await supabaseAuth.updatePassword(session.accessToken, authPassword);
+        setIsForgotPassword(false);
+        setResetEmail(null);
+        setResetCode("");
+        setAuthPassword("");
+        setAuthConfirmPassword("");
+        await finishSignIn(session, false);
+        showNotification("Password updated. You're signed in.", "success");
+      } catch (error: any) {
+        setAuthMessage({ type: "error", message: error.message || "Could not update password. Please try again." });
+      } finally {
+        setIsAuthSubmitting(false);
+        setAuthProgress(null);
+      }
+      return;
+    }
     if (isForgotPassword) {
       if (resetCooldownSeconds > 0) {
         setAuthMessage({ type: "info", message: `You can request another reset email in ${resetCooldownSeconds} seconds.` });
@@ -991,14 +1074,17 @@ export default function App() {
           requestId: diagnostic.requestId,
         });
         setResetCooldownSeconds(PASSWORD_RESET_COOLDOWN_SECONDS);
-        setAuthMessage({ type: "success", message: "Password reset link sent. Please check your inbox and spam folder." });
-        showNotification("Password reset link sent. Please check your inbox and spam folder.", "success");
+        setResetEmail(email);
+        setResetCode("");
+        setAuthPassword("");
+        setAuthConfirmPassword("");
+        setAuthMessage(null); // the code screen already says where the code went
       } catch (error: any) {
         console.error("Password reset request failed", {
           email,
           message: error.message,
         });
-        setAuthMessage({ type: "error", message: error.message || "Could not send reset link. Please try again." });
+        setAuthMessage({ type: "error", message: error.message || "Could not send the reset code. Please try again." });
       } finally {
         setIsAuthSubmitting(false);
       }
@@ -1020,6 +1106,7 @@ export default function App() {
       return;
     }
     setIsAuthSubmitting(true);
+    setAuthProgress(isSignUp ? "Creating your account..." : "Checking your details...");
     try {
       const session = isSignUp
         ? await supabaseAuth.signUp(email, authPassword)
@@ -1052,6 +1139,7 @@ export default function App() {
       showNotification(error.message || "Authentication failed. Please try again.", "error");
     } finally {
       setIsAuthSubmitting(false);
+      setAuthProgress(null);
     }
   };
 
@@ -3701,36 +3789,36 @@ WORK EXPERIENCE
                       <div className="flex-grow border-t border-neutral-300"></div>
                     </div>
    
-                    {verifyEmail ? (
-                    <form id="verify-code-form" onSubmit={handleVerifyCode} noValidate className="space-y-4 text-left">
-                      <h2 className="text-xl font-semibold text-black tracking-tight">Check your email</h2>
-                      <p className="text-sm text-neutral-600 leading-relaxed">
-                        We sent a {SIGNUP_CODE_LENGTH}-digit code to <span className="font-medium text-black">{verifyEmail}</span>. It can take a minute; check spam too.
-                      </p>
-                      <div>
-                        <p className="block text-xs text-black mb-1.5 font-bold">Code</p>
-                        <CodeBoxes length={SIGNUP_CODE_LENGTH} value={verifyCode} onChange={(code) => { setVerifyCode(code); setAuthMessage(null); }} />
-                      </div>
-                      {authMessage && (
-                        <div id="auth-inline-message" className={`rounded-xl border px-3 py-2 text-xs font-semibold leading-relaxed ${authMessage.type === "error" ? "border-rose-300 bg-rose-50 text-rose-800" : authMessage.type === "info" ? "border-blue-300 bg-blue-50 text-blue-800" : "border-emerald-300 bg-emerald-50 text-emerald-800"}`}>
-                          {authMessage.message}
-                        </div>
-                      )}
-                      <button id="btn-verify-code" type="submit" disabled={isVerifying} className={`w-full py-3 text-white text-sm font-medium rounded-lg transition ${isVerifying ? "bg-neutral-400 cursor-not-allowed" : "bg-black hover:bg-neutral-800 cursor-pointer"}`}>
-                        {isVerifying ? "Checking..." : "Confirm and continue"}
-                      </button>
-                      <div className="flex justify-between text-xs font-semibold">
-                        <button type="button" id="btn-resend-code" onClick={handleResendCode} className="text-black underline cursor-pointer">Send a new code</button>
-                        <button type="button" onClick={() => { setVerifyEmail(null); setVerifyCode(""); setAuthMessage(null); setIsSignUp(true); }} className="text-neutral-600 hover:text-black underline cursor-pointer">Use a different email</button>
-                      </div>
-                    </form>
-                    ) : (
-                    <form onSubmit={handleAuth} noValidate className="space-y-4 text-left">
+                    {(() => {
+                      // Once a code (or reset link) is out, the email is shown locked with an Edit button
+                      const lockedEmail = verifyEmail || resetEmail || (isResetPassword ? emailFromToken(resetAccessToken) : null);
+                      const codeFor: "signup" | "reset" | null = verifyEmail ? "signup" : resetEmail ? "reset" : null;
+                      const settingNewPassword = isResetPassword || !!resetEmail;
+                      const busy = isAuthSubmitting || isVerifying;
+                      const sendCooldown = isForgotPassword && !resetEmail && resetCooldownSeconds > 0;
+                      const hideEmail = isResetPassword && !lockedEmail;
+                      return (
+                    <form id={verifyEmail ? "verify-code-form" : "auth-form"} onSubmit={verifyEmail ? handleVerifyCode : handleAuth} noValidate className="space-y-4 text-left">
                       <h2 className="text-xl font-semibold text-black tracking-tight">
-                        {isResetPassword ? "Reset Password" : isForgotPassword ? "Forgot Password" : isSignUp ? "Create Account" : "Sign In"}
+                        {verifyEmail ? "Create Account" : settingNewPassword ? "Reset Password" : isForgotPassword ? "Forgot Password" : isSignUp ? "Create Account" : "Sign In"}
                       </h2>
-   
-                      {!isResetPassword && (
+
+                      {lockedEmail ? (
+                        <div>
+                          <label className="block text-xs text-black mb-1.5 font-bold">Email Address</label>
+                          <div id="locked-email" className="flex items-center justify-between gap-2 pl-3 pr-2 py-2 bg-neutral-100 border border-neutral-200 rounded-lg">
+                            <span className="text-sm text-black truncate">{lockedEmail}</span>
+                            <button
+                              type="button"
+                              id="btn-edit-email"
+                              onClick={() => editAuthEmail(lockedEmail, verifyEmail ? "signup" : "reset")}
+                              className="flex items-center gap-1 px-2 py-1 text-xs font-semibold text-black rounded-md hover:bg-white cursor-pointer"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" /> Edit
+                            </button>
+                          </div>
+                        </div>
+                      ) : !hideEmail && (
                         <div>
                           <label className="block text-xs text-black mb-1.5 font-bold">Email Address</label>
                           <input
@@ -3747,10 +3835,33 @@ WORK EXPERIENCE
                           />
                         </div>
                       )}
-   
-                      {!isForgotPassword && (
+
+                      {codeFor && (
+                        <div id="code-section">
+                          <p className="block text-xs text-black mb-1 font-bold">{SIGNUP_CODE_LENGTH}-digit code</p>
+                          <p className="text-xs text-neutral-600 mb-2 leading-relaxed">
+                            {codeFor === "signup" ? "We emailed you a code to confirm your account." : "We emailed you a code to reset your password."} It usually arrives within a minute; check spam too.
+                          </p>
+                          {codeFor === "signup" ? (
+                            <CodeBoxes length={SIGNUP_CODE_LENGTH} value={verifyCode} onChange={(code) => { setVerifyCode(code); setAuthMessage(null); }} />
+                          ) : (
+                            <CodeBoxes length={SIGNUP_CODE_LENGTH} value={resetCode} onChange={(code) => { setResetCode(code); setAuthMessage(null); }} />
+                          )}
+                          <button
+                            type="button"
+                            id="btn-resend-code"
+                            disabled={codeFor === "reset" && resetCooldownSeconds > 0}
+                            onClick={codeFor === "signup" ? handleResendCode : handleResendResetCode}
+                            className="mt-2 text-xs font-semibold text-black underline cursor-pointer disabled:text-neutral-400 disabled:no-underline disabled:cursor-not-allowed"
+                          >
+                            {codeFor === "reset" && resetCooldownSeconds > 0 ? `Send a new code in ${resetCooldownSeconds}s` : "Send a new code"}
+                          </button>
+                        </div>
+                      )}
+
+                      {!verifyEmail && (!isForgotPassword || resetEmail) && (
                         <div>
-                          <label className="block text-xs text-black mb-1.5 font-bold">{isResetPassword ? "New Password" : "Password"}</label>
+                          <label className="block text-xs text-black mb-1.5 font-bold">{settingNewPassword ? "New Password" : "Password"}</label>
                           <div className="relative">
                             <input
                               id="input-auth-password"
@@ -3773,7 +3884,7 @@ WORK EXPERIENCE
                               {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                             </button>
                           </div>
-                          {!isSignUp && !isResetPassword && (
+                          {!settingNewPassword && (
                             <button
                               id="btn-forgot-password"
                               type="button"
@@ -3781,6 +3892,8 @@ WORK EXPERIENCE
                                 setIsForgotPassword(true);
                                 setIsSignUp(false);
                                 setIsResetPassword(false);
+                                setResetEmail(null);
+                                setResetCode("");
                                 setAuthPassword("");
                                 setAuthConfirmPassword("");
                                 setAuthMessage(null);
@@ -3795,7 +3908,7 @@ WORK EXPERIENCE
                         </div>
                       )}
 
-                      {(isSignUp || isResetPassword) && (
+                      {!verifyEmail && (isSignUp || settingNewPassword) && (
                         <div>
                           <label className="block text-xs text-black mb-1.5 font-bold">Confirm Password</label>
                           <div className="relative">
@@ -3838,57 +3951,60 @@ WORK EXPERIENCE
                         </div>
                       )}
 
-                      {isForgotPassword && resetCooldownSeconds > 0 && (
+                      {sendCooldown && (
                         <div
                           id="password-reset-cooldown"
                           className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold leading-relaxed text-amber-800"
                         >
-                          You can request another reset email in {resetCooldownSeconds} seconds.
+                          You can request another reset code in {resetCooldownSeconds} seconds.
                         </div>
                       )}
-   
+
                       <button
-                        id="btn-auth-submit"
+                        id={verifyEmail ? "btn-verify-code" : "btn-auth-submit"}
                         type="submit"
-                        disabled={isAuthSubmitting || (isForgotPassword && resetCooldownSeconds > 0)}
-                        className={`w-full py-3 text-white text-sm font-medium rounded-lg transition mt-4 ${
-                          isAuthSubmitting || (isForgotPassword && resetCooldownSeconds > 0)
-                            ? "bg-neutral-400 cursor-not-allowed"
-                            : "bg-black hover:bg-neutral-800 cursor-pointer"
+                        disabled={busy || sendCooldown}
+                        className={`w-full py-3 text-white text-sm font-medium rounded-lg transition mt-4 flex items-center justify-center gap-2 ${
+                          busy ? "bg-neutral-700 cursor-wait" : sendCooldown ? "bg-neutral-400 cursor-not-allowed" : "bg-black hover:bg-neutral-800 cursor-pointer"
                         }`}
                       >
-                        {isAuthSubmitting
-                          ? isResetPassword
-                            ? "Updating Password..."
-                            : isForgotPassword
-                              ? "Sending Reset Link..."
-                              : isSignUp
-                                ? "Creating Account..."
-                                : "Signing In..."
-                          : isResetPassword
-                            ? "Update Password"
-                            : isForgotPassword
-                              ? resetCooldownSeconds > 0
-                                ? `Wait ${resetCooldownSeconds}s`
-                                : "Send Reset Link"
-                              : isSignUp
-                                ? "Create Account"
-                                : "Sign In"}
+                        {busy && <Loader2 className="w-4 h-4 animate-spin" />}
+                        {busy
+                          ? authProgress || "Please wait..."
+                          : verifyEmail
+                            ? "Confirm and continue"
+                            : settingNewPassword
+                              ? "Update Password"
+                              : isForgotPassword
+                                ? sendCooldown
+                                  ? `Wait ${resetCooldownSeconds}s`
+                                  : "Send Reset Code"
+                                : isSignUp
+                                  ? "Create Account"
+                                  : "Sign In"}
                       </button>
-   
+                      {busy && (
+                        <p id="auth-progress-note" className="text-[11px] text-neutral-500 text-center -mt-2">This can take a few seconds. Please keep this page open.</p>
+                      )}
+
                       <div className="text-center mt-3">
-                        {!isSignUp && !isForgotPassword && !isResetPassword && (
+                        {!isSignUp && !isForgotPassword && !isResetPassword && !verifyEmail && (
                           <p className="text-xs text-neutral-600 mb-2 font-semibold">Don't have an account?</p>
                         )}
                         <button
                           id="btn-toggle-auth-mode"
                           type="button"
+                          disabled={busy}
                           onClick={() => {
-                            if (isForgotPassword || isResetPassword) {
+                            if (isForgotPassword || isResetPassword || verifyEmail) {
                               setIsForgotPassword(false);
                               setIsResetPassword(false);
                               setIsSignUp(false);
                               setResetAccessToken(null);
+                              setResetEmail(null);
+                              setResetCode("");
+                              setVerifyEmail(null);
+                              setVerifyCode("");
                             } else {
                               setIsSignUp(!isSignUp);
                             }
@@ -3899,11 +4015,12 @@ WORK EXPERIENCE
                           }}
                           className="text-xs text-black hover:text-neutral-800 underline font-semibold transition"
                         >
-                          {isForgotPassword || isResetPassword ? "Back to Sign In" : isSignUp ? "Already have an account? Sign In" : "Create Account"}
+                          {isForgotPassword || isResetPassword || verifyEmail ? "Back to Sign In" : isSignUp ? "Already have an account? Sign In" : "Create Account"}
                         </button>
                       </div>
                     </form>
-                    )}
+                      );
+                    })()}
                   </div>
    
                 </div>

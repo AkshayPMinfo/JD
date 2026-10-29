@@ -185,6 +185,25 @@ export const supabaseAuth = {
     return parseAuthResponse(new Response(await response.text(), { status: 200 }));
   },
 
+  // Password reset: the code from the "Reset password" email signs them in so they can set a new password
+  async verifyRecoveryCode(email: string, code: string): Promise<SupabaseSession> {
+    assertSupabaseConfigured();
+    const response = await fetch(`${SUPABASE_URL}/auth/v1/verify`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ type: "recovery", email, token: code.trim() }),
+    });
+    if (!response.ok) {
+      const payload: any = await response.json().catch(() => ({}));
+      const message = String(payload.error_description || payload.msg || payload.error || "");
+      if (/expired|invalid|otp/i.test(message) || response.status === 403) {
+        throw new Error("That code is wrong or has expired. Check the latest email, or send a new code.");
+      }
+      throw new Error(message || "Couldn't check the code. Please try again.");
+    }
+    return parseAuthResponse(new Response(await response.text(), { status: 200 }));
+  },
+
   async resendSignupCode(email: string): Promise<void> {
     assertSupabaseConfigured();
     const response = await fetch(`${SUPABASE_URL}/auth/v1/resend`, {

@@ -166,23 +166,47 @@ export const supabaseAuth = {
     return parseAuthResponse(response, { allowEmailConfirmation: true });
   },
 
-  // Sign-up with a code: the confirmation email carries a short code ({{ .Token }}) the person types in
-  async verifySignupCode(email: string, code: string): Promise<SupabaseSession> {
+  // Create Account step 1: email a 6-digit code. Makes the account (no password yet) if it's new.
+  async sendEmailCode(email: string): Promise<void> {
     assertSupabaseConfigured();
-    const response = await fetch(`${SUPABASE_URL}/auth/v1/verify`, {
+    const response = await fetch(`${SUPABASE_URL}/auth/v1/otp`, {
       method: "POST",
       headers: authHeaders(),
-      body: JSON.stringify({ type: "signup", email, token: code.trim() }),
+      body: JSON.stringify({ email, create_user: true }),
+    }).catch(() => {
+      throw new Error("Couldn't send the code. Check your connection and try again.");
     });
     if (!response.ok) {
       const payload: any = await response.json().catch(() => ({}));
       const message = String(payload.error_description || payload.msg || payload.error || "");
-      if (/expired|invalid|otp/i.test(message) || response.status === 403) {
-        throw new Error("That code is wrong or has expired. Check the latest email, or send a new code.");
+      if (response.status === 429 || /rate limit|only request this after/i.test(message)) {
+        throw new Error("Please wait a minute before asking for another code.");
       }
-      throw new Error(message || "Couldn't check the code. Please try again.");
+      if (/invalid/i.test(message)) throw new Error("Please enter a valid email address.");
+      throw new Error(message || "Couldn't send the code. Please try again.");
     }
-    return parseAuthResponse(new Response(await response.text(), { status: 200 }));
+  },
+
+  // Check the emailed code. "email" covers codes from both the sign-up and the code emails;
+  // "signup" is the fallback for older confirmation codes.
+  async verifySignupCode(email: string, code: string): Promise<SupabaseSession> {
+    assertSupabaseConfigured();
+    let lastMessage = "";
+    for (const type of ["email", "signup"]) {
+      const response = await fetch(`${SUPABASE_URL}/auth/v1/verify`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ type, email, token: code.trim() }),
+      });
+      if (response.ok) return parseAuthResponse(new Response(await response.text(), { status: 200 }));
+      const payload: any = await response.json().catch(() => ({}));
+      lastMessage = String(payload.error_description || payload.msg || payload.error || "");
+      if (response.status === 429) break;
+    }
+    if (/expired|invalid|otp|token/i.test(lastMessage) || !lastMessage) {
+      throw new Error("That code is wrong or has expired. Check the latest email, or send a new code.");
+    }
+    throw new Error(lastMessage);
   },
 
   // Password reset: the code from the "Reset password" email signs them in so they can set a new password

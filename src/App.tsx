@@ -193,6 +193,8 @@ export default function App() {
   const [verifyEmail, setVerifyEmail] = useState<string | null>(null);
   const [verifyCode, setVerifyCode] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
+  // Create Account: after the code is confirmed, the session waits here while they pick a password
+  const [signupSession, setSignupSession] = useState<SupabaseSession | null>(null);
   // Password reset by code: the email the code went to, and the code typed
   const [resetEmail, setResetEmail] = useState<string | null>(null);
   const [resetCode, setResetCode] = useState("");
@@ -928,7 +930,15 @@ export default function App() {
     setAuthProgress("Checking your code...");
     try {
       const session = await supabaseAuth.verifySignupCode(verifyEmail, verifyCode);
-      await finishSignIn(session, true);
+      if (isSignUp) {
+        // Email is confirmed; next they choose a password
+        setSignupSession(session);
+        setAuthPassword("");
+        setAuthConfirmPassword("");
+        setAuthMessage(null);
+      } else {
+        await finishSignIn(session, false);
+      }
     } catch (error: any) {
       setAuthMessage({ type: "error", message: error.message || "Couldn't check the code. Please try again." });
     } finally {
@@ -940,7 +950,8 @@ export default function App() {
   const handleResendCode = async () => {
     if (!verifyEmail) return;
     try {
-      await supabaseAuth.resendSignupCode(verifyEmail);
+      if (isSignUp) await supabaseAuth.sendEmailCode(verifyEmail);
+      else await supabaseAuth.resendSignupCode(verifyEmail);
       setAuthMessage({ type: "success", message: `New code sent to ${verifyEmail}. Check your inbox and spam folder.` });
     } catch (error: any) {
       setAuthMessage({ type: "error", message: error.message || "Couldn't send a new code." });
@@ -958,10 +969,39 @@ export default function App() {
     }
   };
 
+  // Create Account step 3: save the password, then open the app
+  const handleSetSignupPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!signupSession || isAuthSubmitting) return;
+    if (authPassword.length < PASSWORD_MIN_LENGTH) {
+      setAuthMessage({ type: "error", message: `Password must be at least ${PASSWORD_MIN_LENGTH} characters.` });
+      return;
+    }
+    if (authPassword !== authConfirmPassword) {
+      setAuthMessage({ type: "error", message: "Passwords do not match." });
+      return;
+    }
+    setIsAuthSubmitting(true);
+    setAuthProgress("Saving your password...");
+    try {
+      await supabaseAuth.updatePassword(signupSession.accessToken, authPassword);
+      setSignupSession(null);
+      setAuthPassword("");
+      setAuthConfirmPassword("");
+      await finishSignIn(signupSession, true);
+    } catch (error: any) {
+      setAuthMessage({ type: "error", message: error.message || "Couldn't save the password. Please try again." });
+    } finally {
+      setIsAuthSubmitting(false);
+      setAuthProgress(null);
+    }
+  };
+
   // "Edit" next to a locked email: go back to typing the email, keeping what they typed
   const editAuthEmail = (email: string, mode: "signup" | "reset") => {
     setVerifyEmail(null);
     setVerifyCode("");
+    setSignupSession(null);
     setResetEmail(null);
     setResetCode("");
     setIsResetPassword(false);
@@ -1022,6 +1062,24 @@ export default function App() {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       setAuthMessage({ type: "error", message: "Please provide a valid email address." });
       showNotification("Please provide a valid email address.", "error");
+      return;
+    }
+    if (isSignUp) {
+      // Create Account step 1: email a code first; the password comes after the code
+      setIsAuthSubmitting(true);
+      setAuthProgress("Sending your code...");
+      try {
+        await supabaseAuth.sendEmailCode(email);
+        setVerifyEmail(email);
+        setVerifyCode("");
+        setSignupSession(null);
+        setAuthMessage(null);
+      } catch (error: any) {
+        setAuthMessage({ type: "error", message: error.message || "Couldn't send the code. Please try again." });
+      } finally {
+        setIsAuthSubmitting(false);
+        setAuthProgress(null);
+      }
       return;
     }
     if (isForgotPassword && resetEmail) {
@@ -3792,15 +3850,15 @@ WORK EXPERIENCE
                     {(() => {
                       // Once a code (or reset link) is out, the email is shown locked with an Edit button
                       const lockedEmail = verifyEmail || resetEmail || (isResetPassword ? emailFromToken(resetAccessToken) : null);
-                      const codeFor: "signup" | "reset" | null = verifyEmail ? "signup" : resetEmail ? "reset" : null;
+                      const codeFor: "signup" | "reset" | null = verifyEmail && !signupSession ? "signup" : resetEmail ? "reset" : null;
                       const settingNewPassword = isResetPassword || !!resetEmail;
                       const busy = isAuthSubmitting || isVerifying;
                       const sendCooldown = isForgotPassword && !resetEmail && resetCooldownSeconds > 0;
                       const hideEmail = isResetPassword && !lockedEmail;
                       return (
-                    <form id={verifyEmail ? "verify-code-form" : "auth-form"} onSubmit={verifyEmail ? handleVerifyCode : handleAuth} noValidate className="space-y-4 text-left">
+                    <form id={signupSession ? "signup-password-form" : verifyEmail ? "verify-code-form" : "auth-form"} onSubmit={signupSession ? handleSetSignupPassword : verifyEmail ? handleVerifyCode : handleAuth} noValidate className="space-y-4 text-left">
                       <h2 className="text-xl font-semibold text-black tracking-tight">
-                        {verifyEmail ? "Create Account" : settingNewPassword ? "Reset Password" : isForgotPassword ? "Forgot Password" : isSignUp ? "Create Account" : "Sign In"}
+                        {verifyEmail ? (isSignUp ? "Create Account" : "Confirm your email") : settingNewPassword ? "Reset Password" : isForgotPassword ? "Forgot Password" : isSignUp ? "Create Account" : "Sign In"}
                       </h2>
 
                       {lockedEmail ? (
@@ -3833,7 +3891,30 @@ WORK EXPERIENCE
                             }}
                             className="w-full pl-3 pr-3 py-2.5 bg-white border border-neutral-300 rounded-lg text-sm text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
                           />
+                          {isSignUp && (
+                            <>
+                              <p id="signup-email-note" className="mt-1.5 text-[11px] text-neutral-500">Use your own email. We'll send the code here.</p>
+                              <button
+                                id="btn-forgot-password"
+                                type="button"
+                                onClick={() => {
+                                  setIsForgotPassword(true);
+                                  setIsSignUp(false);
+                                  setAuthMessage(null);
+                                }}
+                                className="mt-1 text-[11px] text-black hover:text-neutral-700 underline font-semibold"
+                              >
+                                Forgot Password?
+                              </button>
+                            </>
+                          )}
                         </div>
+                      )}
+
+                      {signupSession && (
+                        <p id="email-confirmed" className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
+                          <Check className="w-3.5 h-3.5" /> Email confirmed. Now choose a password.
+                        </p>
                       )}
 
                       {codeFor && (
@@ -3859,7 +3940,7 @@ WORK EXPERIENCE
                         </div>
                       )}
 
-                      {!verifyEmail && (!isForgotPassword || resetEmail) && (
+                      {(signupSession || (!verifyEmail && !isSignUp && (!isForgotPassword || resetEmail))) && (
                         <div>
                           <label className="block text-xs text-black mb-1.5 font-bold">{settingNewPassword ? "New Password" : "Password"}</label>
                           <div className="relative">
@@ -3884,7 +3965,7 @@ WORK EXPERIENCE
                               {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                             </button>
                           </div>
-                          {!settingNewPassword && (
+                          {!settingNewPassword && !signupSession && (
                             <button
                               id="btn-forgot-password"
                               type="button"
@@ -3908,7 +3989,7 @@ WORK EXPERIENCE
                         </div>
                       )}
 
-                      {!verifyEmail && (isSignUp || settingNewPassword) && (
+                      {(signupSession || (!verifyEmail && settingNewPassword)) && (
                         <div>
                           <label className="block text-xs text-black mb-1.5 font-bold">Confirm Password</label>
                           <div className="relative">
@@ -3971,8 +4052,10 @@ WORK EXPERIENCE
                         {busy && <Loader2 className="w-4 h-4 animate-spin" />}
                         {busy
                           ? authProgress || "Please wait..."
-                          : verifyEmail
-                            ? "Confirm and continue"
+                          : signupSession
+                            ? "Create Account"
+                            : verifyEmail
+                            ? "Verify code"
                             : settingNewPassword
                               ? "Update Password"
                               : isForgotPassword
@@ -3980,7 +4063,7 @@ WORK EXPERIENCE
                                   ? `Wait ${resetCooldownSeconds}s`
                                   : "Send Reset Code"
                                 : isSignUp
-                                  ? "Create Account"
+                                  ? "Send code"
                                   : "Sign In"}
                       </button>
                       {busy && (
@@ -4005,6 +4088,7 @@ WORK EXPERIENCE
                               setResetCode("");
                               setVerifyEmail(null);
                               setVerifyCode("");
+                              setSignupSession(null);
                             } else {
                               setIsSignUp(!isSignUp);
                             }

@@ -3774,7 +3774,16 @@ WORK EXPERIENCE
       if (exportResume.summary) body += heading("Professional Summary") + paragraph(exportResume.summary);
       if (exportResume.skills.length) {
         body += heading("Core Skills");
-        exportResume.skills.forEach(skill => { body += bullet(skill); });
+        // Two columns to save space: each line is plain text "• A <tab> • B" (no table), so hiring software still reads it
+        const halfWidth = 5040; // half of the 10,080-twip text width (Letter page, 0.75" margins)
+        for (let i = 0; i < exportResume.skills.length; i += 2) {
+          const left = exportResume.skills[i];
+          const right = exportResume.skills[i + 1];
+          body += `<w:p><w:pPr><w:pStyle w:val="BodyText"/><w:tabs><w:tab w:val="left" w:pos="${halfWidth}"/></w:tabs><w:spacing w:after="30"/></w:pPr>`
+            + `<w:r><w:t xml:space="preserve">• ${textXml(left)}</w:t></w:r>`
+            + (right ? `<w:r><w:tab/><w:t xml:space="preserve">• ${textXml(right)}</w:t></w:r>` : "")
+            + `</w:p>`;
+        }
       }
       if (exportResume.workExperience.length) {
         body += heading("Work Experience");

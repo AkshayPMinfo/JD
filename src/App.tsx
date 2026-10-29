@@ -69,6 +69,8 @@ import { supabaseAuth, supabaseData, type SupabaseSession } from "./lib/supabase
 const SUPABASE_SESSION_STORAGE_KEY = "jd_resume_customizer_supabase_session";
 const PASSWORD_MIN_LENGTH = 8;
 const PASSWORD_RESET_COOLDOWN_SECONDS = 60;
+// Written when someone deletes their data, so other open tabs reload
+const DATA_DELETED_SIGNAL_KEY = "jd_resume_customizer_data_deleted_at";
 
 // Reads the email out of a sign-in token (used on the reset-link screen)
 function emailFromToken(token: string | null): string | null {
@@ -1326,6 +1328,8 @@ export default function App() {
         "jd_resume_customizer_has_resume",
       ].forEach((key) => localStorage.removeItem(key));
       sessionStorage.removeItem("auralis_platform_unlocked");
+      // Tells other open tabs to reload, so they can't save the deleted resumes back
+      localStorage.setItem(DATA_DELETED_SIGNAL_KEY, String(Date.now()));
       setIsUnlocked(false);
       setActiveResume(DEMO_RESUMES.software_grad.data);
       setOriginalResume(DEMO_RESUMES.software_grad.data);
@@ -1344,6 +1348,16 @@ export default function App() {
       setIsDeletingAccount(false);
     }
   };
+
+  // Another tab deleted the data or signed out: reload so this tab shows the same thing
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === DATA_DELETED_SIGNAL_KEY) window.location.reload();
+      if (e.key === SUPABASE_SESSION_STORAGE_KEY && e.newValue === null && currentUser) window.location.reload();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [currentUser]);
 
   // Usage tracking: upload → tailor → download, plus errors. Stored in Supabase (jd_events).
   const trackEvent = (name: string, props: Record<string, unknown> = {}) => {

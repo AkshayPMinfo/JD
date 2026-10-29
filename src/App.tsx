@@ -999,6 +999,25 @@ export default function App() {
     }
   };
 
+  // The Sign in / Create account / Forgot password switch: start that flow fresh
+  const switchAuthTab = (tab: "signin" | "signup" | "forgot") => {
+    setVerifyEmail(null);
+    setVerifyCode("");
+    setSignupSession(null);
+    setResetEmail(null);
+    setResetCode("");
+    setResetSession(null);
+    setIsResetPassword(false);
+    setResetAccessToken(null);
+    setIsSignUp(tab === "signup");
+    setIsForgotPassword(tab === "forgot");
+    setAuthPassword("");
+    setAuthConfirmPassword("");
+    setShowPassword(false);
+    setShowConfirmPassword(false);
+    setAuthMessage(null);
+  };
+
   // "Edit" next to a locked email: go back to typing the email, keeping what they typed
   const editAuthEmail = (email: string, mode: "signup" | "reset") => {
     setVerifyEmail(null);
@@ -1300,6 +1319,45 @@ export default function App() {
       await handleSignOut(true);
     } catch (error: any) {
       showNotification(error.message || "Could not delete your account. Please try again.", "error");
+    } finally {
+      setIsDeletingAccount(false);
+    }
+  };
+
+  // Delete resumes, versions and job posts but keep the account signed in
+  const handleDeleteMyData = async () => {
+    const session = getStoredSupabaseSession();
+    setIsDeletingAccount(true);
+    try {
+      if (session?.accessToken && session.user?.id) {
+        const headers = await aiAuthHeaders(); // refreshes an expired sign-in first
+        const token = (headers.Authorization || "").replace(/^Bearer\s+/, "") || session.accessToken;
+        await supabaseData.deleteMyData(token, session.user.id);
+      }
+      [
+        "jd_resume_customizer_active_resume",
+        "jd_resume_customizer_original_resume",
+        "jd_resume_customizer_saved_resumes",
+        "jd_resume_customizer_versions",
+        "jd_resume_customizer_jd",
+        "jd_resume_customizer_active_resume_id",
+        "jd_resume_customizer_has_resume",
+      ].forEach((key) => localStorage.removeItem(key));
+      sessionStorage.removeItem("auralis_platform_unlocked");
+      setIsUnlocked(false);
+      setActiveResume(DEMO_RESUMES.software_grad.data);
+      setOriginalResume(DEMO_RESUMES.software_grad.data);
+      setSavedUserResumes([]);
+      setSavedVersions([]);
+      setActiveResumeId(null);
+      setJdText(DEMO_JDS.frontend_eng.text);
+      setTargetCompany("Vercel Systems");
+      setTargetRole("Junior Frontend Engineer");
+      setShowPrivacy(false);
+      setCurrentStep("resume");
+      showNotification("Your resumes and versions were deleted. Your account is still here.", "info");
+    } catch (error: any) {
+      showNotification(error.message || "Could not delete your data. Please try again.", "error");
     } finally {
       setIsDeletingAccount(false);
     }
@@ -3860,13 +3918,35 @@ WORK EXPERIENCE
                     </p>
                     {showPrivacy && <PrivacyNotice onClose={() => setShowPrivacy(false)} />}
    
-                    <div className="relative flex py-1 items-center">
-                      <div className="flex-grow border-t border-neutral-300"></div>
-                      <span className="flex-shrink mx-4 text-neutral-500 text-xs font-bold">
-                        OR
-                      </span>
-                      <div className="flex-grow border-t border-neutral-300"></div>
-                    </div>
+                    <p className="text-center text-xs text-neutral-500 pt-1">or use an account</p>
+                    {(() => {
+                      const activeTab = isForgotPassword || isResetPassword ? "forgot" : isSignUp ? "signup" : "signin";
+                      const tabs: { id: "signin" | "signup" | "forgot"; label: string }[] = [
+                        { id: "signin", label: "Sign in" },
+                        { id: "signup", label: "Create account" },
+                        { id: "forgot", label: "Forgot password" },
+                      ];
+                      return (
+                        <div id="auth-tabs" role="tablist" className="flex gap-1.5 p-1 bg-neutral-100 rounded-full">
+                          {tabs.map((tab) => (
+                            <button
+                              key={tab.id}
+                              type="button"
+                              role="tab"
+                              id={`tab-${tab.id}`}
+                              aria-selected={activeTab === tab.id}
+                              disabled={isAuthSubmitting || isVerifying}
+                              onClick={() => switchAuthTab(tab.id)}
+                              className={`flex-1 py-2 px-2 text-xs rounded-full transition cursor-pointer ${
+                                activeTab === tab.id ? "bg-white text-black font-semibold border border-neutral-300" : "text-neutral-600 hover:text-black"
+                              }`}
+                            >
+                              {tab.label}
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })()}
    
                     {(() => {
                       // Once a code (or reset link) is out, the email is shown locked with an Edit button
@@ -3915,21 +3995,7 @@ WORK EXPERIENCE
                             className="w-full pl-3 pr-3 py-2.5 bg-white border border-neutral-300 rounded-lg text-sm text-black placeholder-neutral-400 focus:outline-hidden focus:border-black"
                           />
                           {isSignUp && (
-                            <>
-                              <p id="signup-email-note" className="mt-1.5 text-[11px] text-neutral-500">Use your own email. We'll send the code here.</p>
-                              <button
-                                id="btn-forgot-password"
-                                type="button"
-                                onClick={() => {
-                                  setIsForgotPassword(true);
-                                  setIsSignUp(false);
-                                  setAuthMessage(null);
-                                }}
-                                className="mt-1 text-[11px] text-black hover:text-neutral-700 underline font-semibold"
-                              >
-                                Forgot Password?
-                              </button>
-                            </>
+                            <p id="signup-email-note" className="mt-1.5 text-[11px] text-neutral-500">Use your own email. We'll send the code here.</p>
                           )}
                         </div>
                       )}
@@ -3988,28 +4054,7 @@ WORK EXPERIENCE
                               {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                             </button>
                           </div>
-                          {!settingNewPassword && !signupSession && (
-                            <button
-                              id="btn-forgot-password"
-                              type="button"
-                              onClick={() => {
-                                setIsForgotPassword(true);
-                                setIsSignUp(false);
-                                setIsResetPassword(false);
-                                setResetEmail(null);
-                                setResetCode("");
-                                setResetSession(null);
-                                setAuthPassword("");
-                                setAuthConfirmPassword("");
-                                setAuthMessage(null);
-                                setShowPassword(false);
-                                setShowConfirmPassword(false);
-                              }}
-                              className="mt-2 text-[11px] text-black hover:text-neutral-700 underline font-semibold"
-                            >
-                              Forgot Password?
-                            </button>
-                          )}
+                          <p id="password-case-note" className="mt-1.5 text-[11px] text-neutral-500">Passwords are case sensitive (A and a are different).</p>
                         </div>
                       )}
 
@@ -4096,39 +4141,6 @@ WORK EXPERIENCE
                         <p id="auth-progress-note" className="text-[11px] text-neutral-500 text-center -mt-2">This can take a few seconds. Please keep this page open.</p>
                       )}
 
-                      <div className="text-center mt-3">
-                        {!isSignUp && !isForgotPassword && !isResetPassword && !verifyEmail && (
-                          <p className="text-xs text-neutral-600 mb-2 font-semibold">Don't have an account?</p>
-                        )}
-                        <button
-                          id="btn-toggle-auth-mode"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => {
-                            if (isForgotPassword || isResetPassword || verifyEmail) {
-                              setIsForgotPassword(false);
-                              setIsResetPassword(false);
-                              setIsSignUp(false);
-                              setResetAccessToken(null);
-                              setResetEmail(null);
-                              setResetCode("");
-                              setResetSession(null);
-                              setVerifyEmail(null);
-                              setVerifyCode("");
-                              setSignupSession(null);
-                            } else {
-                              setIsSignUp(!isSignUp);
-                            }
-                            setAuthEmail("");
-                            setAuthPassword("");
-                            setAuthConfirmPassword("");
-                            setAuthMessage(null);
-                          }}
-                          className="text-xs text-black hover:text-neutral-800 underline font-semibold transition"
-                        >
-                          {isForgotPassword || isResetPassword || verifyEmail ? "Back to Sign In" : isSignUp ? "Already have an account? Sign In" : "Create Account"}
-                        </button>
-                      </div>
                     </form>
                       );
                     })()}
@@ -4224,7 +4236,7 @@ WORK EXPERIENCE
         </div>
       </aside>
       {showPrivacy && currentUser && (
-        <PrivacyNotice onClose={() => setShowPrivacy(false)} onDeleteAccount={handleDeleteMyAccount} deleting={isDeletingAccount} />
+        <PrivacyNotice onClose={() => setShowPrivacy(false)} onDeleteData={handleDeleteMyData} onDeleteAccount={handleDeleteMyAccount} deleting={isDeletingAccount} isGuest={!!currentUser?.isGuest} />
       )}
 
       {/* Main Panel Content Canvas */}

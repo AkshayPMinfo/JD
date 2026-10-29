@@ -2,17 +2,20 @@ import { useState } from "react";
 import { X } from "lucide-react";
 
 /**
- * Plain-language privacy notice, with "delete my account and data" for signed-in people.
+ * Plain-language privacy notice. Signed-in people get two choices:
+ * delete their data (keep the account) or delete the account (everything).
  */
 interface PrivacyNoticeProps {
   onClose: () => void;
   // Shown only when someone is signed in (including guests)
+  onDeleteData?: () => void;
   onDeleteAccount?: () => void;
   deleting?: boolean;
+  isGuest?: boolean;
 }
 
-export default function PrivacyNotice({ onClose, onDeleteAccount, deleting = false }: PrivacyNoticeProps) {
-  const [confirming, setConfirming] = useState(false);
+export default function PrivacyNotice({ onClose, onDeleteData, onDeleteAccount, deleting = false, isGuest = false }: PrivacyNoticeProps) {
+  const [confirming, setConfirming] = useState<"data" | "account" | null>(null);
 
   return (
     <div className="fixed inset-0 z-[70] bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
@@ -46,38 +49,48 @@ export default function PrivacyNotice({ onClose, onDeleteAccount, deleting = fal
           </div>
           <div>
             <p className="font-medium text-black">Deleting your data</p>
-            <p>You can delete your account at any time. This permanently removes your resumes, tailored versions and job posts.</p>
+            <p>You can delete just your data (resumes, tailored versions and job posts) and keep your account, or delete your account and everything with it.</p>
           </div>
         </div>
 
-        {onDeleteAccount && (
-          <div className="mt-6 pt-4 border-t border-neutral-200">
-            {!confirming ? (
-              <button
-                type="button"
-                id="btn-delete-account"
-                onClick={() => setConfirming(true)}
-                className="text-sm font-medium text-rose-600 hover:text-rose-700"
-              >
-                Delete my account and data
-              </button>
-            ) : (
-              <div className="rounded-lg bg-rose-50 p-3 space-y-3">
-                <p className="text-sm text-rose-900">This permanently deletes your account, resumes and tailored versions. It can't be undone.</p>
-                <div className="flex gap-2 justify-end">
-                  <button type="button" onClick={() => setConfirming(false)} disabled={deleting} className="px-3 py-1.5 text-sm font-medium text-neutral-700 rounded-lg hover:bg-white">
-                    Cancel
+        {(onDeleteData || onDeleteAccount) && (
+          <div className="mt-6 pt-4 border-t border-neutral-200 space-y-3">
+            {onDeleteData && !isGuest && (
+              <div id="delete-data-box" className="rounded-xl border border-neutral-200 p-4">
+                <p className="text-sm font-semibold text-black">Delete my data</p>
+                <p className="text-xs text-neutral-600 mt-1 leading-relaxed">Removes your resumes, tailored versions and job posts. Your account stays, so you can sign in and start again.</p>
+                {confirming === "data" ? (
+                  <div className="mt-3 flex gap-2 justify-end">
+                    <button type="button" onClick={() => setConfirming(null)} disabled={deleting} className="px-3 py-1.5 text-sm font-medium text-neutral-700 rounded-lg hover:bg-neutral-100">Cancel</button>
+                    <button type="button" id="btn-confirm-delete-data" onClick={onDeleteData} disabled={deleting} className="px-3 py-1.5 text-sm font-medium text-white bg-black hover:bg-neutral-800 rounded-lg disabled:opacity-60">
+                      {deleting ? "Deleting..." : "Yes, delete my data"}
+                    </button>
+                  </div>
+                ) : (
+                  <button type="button" id="btn-delete-data" onClick={() => setConfirming("data")} className="mt-3 px-3 py-1.5 text-sm font-medium text-black border border-neutral-300 rounded-lg hover:bg-neutral-50">
+                    Delete my data
                   </button>
-                  <button
-                    type="button"
-                    id="btn-confirm-delete-account"
-                    onClick={onDeleteAccount}
-                    disabled={deleting}
-                    className="px-3 py-1.5 text-sm font-medium text-white bg-rose-600 hover:bg-rose-700 rounded-lg disabled:opacity-60"
-                  >
-                    {deleting ? "Deleting..." : "Yes, delete everything"}
+                )}
+              </div>
+            )}
+            {onDeleteAccount && (
+              <div id="delete-account-box" className="rounded-xl border border-rose-200 p-4">
+                <p className="text-sm font-semibold text-rose-700">{isGuest ? "Delete my guest data" : "Delete account"}</p>
+                <p className="text-xs text-neutral-600 mt-1 leading-relaxed">
+                  {isGuest ? "Removes everything you made as a guest." : "Removes everything, including your login. This can't be undone."}
+                </p>
+                {confirming === "account" ? (
+                  <div className="mt-3 flex gap-2 justify-end">
+                    <button type="button" onClick={() => setConfirming(null)} disabled={deleting} className="px-3 py-1.5 text-sm font-medium text-neutral-700 rounded-lg hover:bg-neutral-100">Cancel</button>
+                    <button type="button" id="btn-confirm-delete-account" onClick={onDeleteAccount} disabled={deleting} className="px-3 py-1.5 text-sm font-medium text-white bg-rose-600 hover:bg-rose-700 rounded-lg disabled:opacity-60">
+                      {deleting ? "Deleting..." : "Yes, delete everything"}
+                    </button>
+                  </div>
+                ) : (
+                  <button type="button" id="btn-delete-account" onClick={() => setConfirming("account")} className="mt-3 px-3 py-1.5 text-sm font-medium text-rose-600 border border-rose-200 rounded-lg hover:bg-rose-50">
+                    {isGuest ? "Delete guest data" : "Delete account"}
                   </button>
-                </div>
+                )}
               </div>
             )}
           </div>

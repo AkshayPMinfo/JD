@@ -496,6 +496,19 @@ export const supabaseData = {
     });
   },
 
+  // Deletes resumes, tailored versions and job posts, but keeps the account so they can sign in again
+  async deleteMyData(accessToken: string, userId: string) {
+    assertSupabaseConfigured();
+    // tailored versions first, since they point at resumes
+    for (const table of ["jd_tailored_resumes", "jd_resumes", "jd_job_descriptions"]) {
+      const response = await fetch(`${SUPABASE_URL}/rest/v1/${table}?user_id=eq.${encodeURIComponent(userId)}`, {
+        method: "DELETE",
+        headers: restHeaders(accessToken),
+      });
+      await assertDataResponse(response, "Could not delete your data. Please try again.");
+    }
+  },
+
   // Deletes the person's sign-in and, through the database, all their resumes and data
   async deleteMyAccount(accessToken: string) {
     assertSupabaseConfigured();

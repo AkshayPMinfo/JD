@@ -3,6 +3,7 @@ import path from "path";
 import { GoogleGenAI, Type } from "@google/genai";
 import { getAiCredits, useAiCredit, aiAllowed, bearerToken } from "./aiLimit.js";
 import { plainResumeWording } from "./plainWording.js";
+import { repairSplitEmail } from "./contactRepair.js";
 import dotenv from "dotenv";
 import mammoth from "mammoth";
 import { getDocumentProxy, extractText } from "unpdf";
@@ -711,6 +712,7 @@ function sanitizeResumeTextFields(resume: any): any {
   };
 
   // Sanitize name, email, phone
+  Object.assign(resume, repairSplitEmail(resume));
   if (typeof resume.fullName === "string" && shouldStrip(resume.fullName)) resume.fullName = "";
   if (typeof resume.email === "string" && shouldStrip(resume.email)) resume.email = "";
   if (typeof resume.phone === "string" && shouldStrip(resume.phone)) resume.phone = "";

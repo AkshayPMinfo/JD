@@ -3,6 +3,7 @@
  * section headings. No images, tables, columns or icons, so applicant tracking systems can read it.
  */
 import { jsPDF } from "jspdf";
+import { type ResumeColor, resumeColorHex, hexToRgb } from "./resumeColors";
 import type { ResumeStructure } from "../types";
 import { educationNewestFirst } from "./educationOrder";
 
@@ -30,7 +31,9 @@ const MARGIN_BOTTOM = 16;
 const CONTENT_W = PAGE_W - MARGIN_X * 2;
 const PT_TO_MM = 0.3528;
 
-export function buildResumePdf(resume: ResumeStructure, headline = ""): jsPDF {
+export function buildResumePdf(resume: ResumeStructure, headline = "", color: ResumeColor = "classic"): jsPDF {
+  // Accent colour for the name, headings and lines; "classic" keeps the original black and grey
+  const accent = color === "classic" ? null : hexToRgb(resumeColorHex(color));
   const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
   const name = toPdfSafeText(resume.fullName) || "Resume";
   doc.setProperties({ title: `${name} - Resume`, author: name, subject: "Resume", creator: "Auralis Resumes" });
@@ -43,13 +46,13 @@ export function buildResumePdf(resume: ResumeStructure, headline = ""): jsPDF {
       y = MARGIN_TOP;
     }
   };
-  const write = (text: string, opts: { size: number; bold?: boolean; italic?: boolean; color?: number; indent?: number; gapAfter?: number }) => {
+  const write = (text: string, opts: { size: number; bold?: boolean; italic?: boolean; color?: number; rgb?: [number, number, number]; indent?: number; gapAfter?: number }) => {
     const clean = toPdfSafeText(text);
     if (!clean) return;
     const style = opts.bold && opts.italic ? "bolditalic" : opts.bold ? "bold" : opts.italic ? "italic" : "normal";
     doc.setFont("helvetica", style);
     doc.setFontSize(opts.size);
-    doc.setTextColor(opts.color ?? 20);
+    if (opts.rgb) doc.setTextColor(...opts.rgb); else doc.setTextColor(opts.color ?? 20);
     const indent = opts.indent ?? 0;
     const lines: string[] = doc.splitTextToSize(clean, CONTENT_W - indent);
     const lh = lineHeight(opts.size);
@@ -83,17 +86,17 @@ export function buildResumePdf(resume: ResumeStructure, headline = ""): jsPDF {
     y += 3;
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
-    doc.setTextColor(20);
+    if (accent) doc.setTextColor(...accent); else doc.setTextColor(20);
     doc.text(title.toUpperCase(), MARGIN_X, y + lineHeight(11) * 0.8);
     y += lineHeight(11) + 0.6;
-    doc.setDrawColor(190);
+    if (accent) doc.setDrawColor(...accent); else doc.setDrawColor(190);
     doc.setLineWidth(0.25);
     doc.line(MARGIN_X, y, PAGE_W - MARGIN_X, y);
     y += 2;
   };
 
   // Header: name, optional headline, one contact line
-  write(name, { size: 18, bold: true, gapAfter: 0.5 });
+  write(name, { size: 18, bold: true, gapAfter: 0.5, rgb: accent || undefined });
   if (headline && headline !== "Tailored Position") write(headline, { size: 11, color: 60, gapAfter: 0.5 });
   const contact = [resume.phone, resume.email, resume.linkedin, resume.website, resume.location]
     .map(toPdfSafeText).filter(Boolean).join(" | ");

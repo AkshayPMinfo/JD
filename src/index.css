@@ -322,3 +322,10 @@ body {
   margin-bottom: 1.5rem;
 }
 
+
+/* Final-step preview: the chosen resume colour on the name, section headings and their lines */
+.resume-accent-preview[style*="--resume-accent"] h1,
+.resume-accent-preview[style*="--resume-accent"] h2 {
+  color: var(--resume-accent) !important;
+  border-color: var(--resume-accent) !important;
+}

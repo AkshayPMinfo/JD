@@ -1018,24 +1018,6 @@ export default function App() {
     setAuthMessage(null);
   };
 
-  // "Edit" next to a locked email: go back to typing the email, keeping what they typed
-  const editAuthEmail = (email: string, mode: "signup" | "reset") => {
-    setVerifyEmail(null);
-    setVerifyCode("");
-    setSignupSession(null);
-    setResetEmail(null);
-    setResetCode("");
-    setResetSession(null);
-    setIsResetPassword(false);
-    setResetAccessToken(null);
-    setIsSignUp(mode === "signup");
-    setIsForgotPassword(mode === "reset");
-    setAuthEmail(email);
-    setAuthPassword("");
-    setAuthConfirmPassword("");
-    setAuthMessage(null);
-  };
-
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isAuthSubmitting) return;
@@ -3950,17 +3932,12 @@ WORK EXPERIENCE
                       {lockedEmail ? (
                         <div>
                           <label className="block text-xs text-black mb-1.5 font-bold">Email Address</label>
-                          <div id="locked-email" className="flex items-center justify-between gap-2 pl-3 pr-2 py-2 bg-neutral-100 border border-neutral-200 rounded-lg">
-                            <span className="text-sm text-black truncate">{lockedEmail}</span>
-                            <button
-                              type="button"
-                              id="btn-edit-email"
-                              onClick={() => editAuthEmail(lockedEmail, verifyEmail ? "signup" : "reset")}
-                              className="flex items-center gap-1 px-2 py-1 text-xs font-semibold text-black rounded-md hover:bg-white cursor-pointer"
-                            >
-                              <Edit3 className="w-3.5 h-3.5" /> Edit
-                            </button>
+                          <div id="locked-email" className="px-3 py-2.5 bg-neutral-100 border border-neutral-200 rounded-lg">
+                            <span className="block text-sm text-black truncate">{lockedEmail}</span>
                           </div>
+                          <p id="wrong-email-note" className="mt-1.5 text-[11px] text-neutral-500">
+                            Wrong email? Click <span className="font-semibold text-black">{isSignUp || verifyEmail ? "Create account" : "Forgot password"}</span> above to start again.
+                          </p>
                         </div>
                       ) : !hideEmail && (
                         <div>

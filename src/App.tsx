@@ -198,6 +198,8 @@ export default function App() {
   // Password reset by code: the email the code went to, and the code typed
   const [resetEmail, setResetEmail] = useState<string | null>(null);
   const [resetCode, setResetCode] = useState("");
+  // Reset: after the code is confirmed, the session waits here while they pick a new password
+  const [resetSession, setResetSession] = useState<SupabaseSession | null>(null);
   // What's happening while we sign them in (shown under the button)
   const [authProgress, setAuthProgress] = useState<string | null>(null);
   const [isForgotPassword, setIsForgotPassword] = useState(false);
@@ -1004,6 +1006,7 @@ export default function App() {
     setSignupSession(null);
     setResetEmail(null);
     setResetCode("");
+    setResetSession(null);
     setIsResetPassword(false);
     setResetAccessToken(null);
     setIsSignUp(mode === "signup");
@@ -1082,12 +1085,30 @@ export default function App() {
       }
       return;
     }
-    if (isForgotPassword && resetEmail) {
-      // Step 2 of reset: code + new password, then they're signed in
+    if (isForgotPassword && resetEmail && !resetSession) {
+      // Reset step 2: check the code first; the password boxes appear only after it's right
       if (!new RegExp(`^\\d{${SIGNUP_CODE_LENGTH}}$`).test(resetCode.trim())) {
         setAuthMessage({ type: "error", message: `Type the ${SIGNUP_CODE_LENGTH}-digit code from the email.` });
         return;
       }
+      setIsAuthSubmitting(true);
+      setAuthProgress("Checking your code...");
+      try {
+        const session = await supabaseAuth.verifyRecoveryCode(resetEmail, resetCode);
+        setResetSession(session);
+        setAuthPassword("");
+        setAuthConfirmPassword("");
+        setAuthMessage(null);
+      } catch (error: any) {
+        setAuthMessage({ type: "error", message: error.message || "Couldn't check the code. Please try again." });
+      } finally {
+        setIsAuthSubmitting(false);
+        setAuthProgress(null);
+      }
+      return;
+    }
+    if (isForgotPassword && resetSession) {
+      // Reset step 3: save the new password, then they're signed in
       if (authPassword.length < PASSWORD_MIN_LENGTH) {
         setAuthMessage({ type: "error", message: `Password must be at least ${PASSWORD_MIN_LENGTH} characters.` });
         return;
@@ -1097,14 +1118,14 @@ export default function App() {
         return;
       }
       setIsAuthSubmitting(true);
-      setAuthProgress("Checking your code...");
+      setAuthProgress("Saving your new password...");
       try {
-        const session = await supabaseAuth.verifyRecoveryCode(resetEmail, resetCode);
-        setAuthProgress("Saving your new password...");
-        await supabaseAuth.updatePassword(session.accessToken, authPassword);
+        await supabaseAuth.updatePassword(resetSession.accessToken, authPassword);
+        const session = resetSession;
         setIsForgotPassword(false);
         setResetEmail(null);
         setResetCode("");
+        setResetSession(null);
         setAuthPassword("");
         setAuthConfirmPassword("");
         await finishSignIn(session, false);
@@ -3850,7 +3871,9 @@ WORK EXPERIENCE
                     {(() => {
                       // Once a code (or reset link) is out, the email is shown locked with an Edit button
                       const lockedEmail = verifyEmail || resetEmail || (isResetPassword ? emailFromToken(resetAccessToken) : null);
-                      const codeFor: "signup" | "reset" | null = verifyEmail && !signupSession ? "signup" : resetEmail ? "reset" : null;
+                      const codeFor: "signup" | "reset" | null = verifyEmail && !signupSession ? "signup" : resetEmail && !resetSession ? "reset" : null;
+                      // Password boxes for a reset show only once the code is confirmed (or they came from a reset link)
+                      const askNewPassword = isResetPassword || !!resetSession;
                       const settingNewPassword = isResetPassword || !!resetEmail;
                       const busy = isAuthSubmitting || isVerifying;
                       const sendCooldown = isForgotPassword && !resetEmail && resetCooldownSeconds > 0;
@@ -3911,9 +3934,9 @@ WORK EXPERIENCE
                         </div>
                       )}
 
-                      {signupSession && (
+                      {(signupSession || resetSession) && (
                         <p id="email-confirmed" className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
-                          <Check className="w-3.5 h-3.5" /> Email confirmed. Now choose a password.
+                          <Check className="w-3.5 h-3.5" /> {signupSession ? "Email confirmed. Now choose a password." : "Code confirmed. Now choose a new password."}
                         </p>
                       )}
 
@@ -3940,7 +3963,7 @@ WORK EXPERIENCE
                         </div>
                       )}
 
-                      {(signupSession || (!verifyEmail && !isSignUp && (!isForgotPassword || resetEmail))) && (
+                      {(signupSession || askNewPassword || (!verifyEmail && !isSignUp && !isForgotPassword)) && (
                         <div>
                           <label className="block text-xs text-black mb-1.5 font-bold">{settingNewPassword ? "New Password" : "Password"}</label>
                           <div className="relative">
@@ -3975,6 +3998,7 @@ WORK EXPERIENCE
                                 setIsResetPassword(false);
                                 setResetEmail(null);
                                 setResetCode("");
+                                setResetSession(null);
                                 setAuthPassword("");
                                 setAuthConfirmPassword("");
                                 setAuthMessage(null);
@@ -3989,7 +4013,7 @@ WORK EXPERIENCE
                         </div>
                       )}
 
-                      {(signupSession || (!verifyEmail && settingNewPassword)) && (
+                      {(signupSession || askNewPassword) && (
                         <div>
                           <label className="block text-xs text-black mb-1.5 font-bold">Confirm Password</label>
                           <div className="relative">
@@ -4056,7 +4080,9 @@ WORK EXPERIENCE
                             ? "Create Account"
                             : verifyEmail
                             ? "Verify code"
-                            : settingNewPassword
+                            : resetEmail && !resetSession
+                              ? "Verify code"
+                              : settingNewPassword
                               ? "Update Password"
                               : isForgotPassword
                                 ? sendCooldown
@@ -4086,6 +4112,7 @@ WORK EXPERIENCE
                               setResetAccessToken(null);
                               setResetEmail(null);
                               setResetCode("");
+                              setResetSession(null);
                               setVerifyEmail(null);
                               setVerifyCode("");
                               setSignupSession(null);

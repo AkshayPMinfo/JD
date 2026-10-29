@@ -68,6 +68,7 @@ import { RESUME_COLORS, DEFAULT_RESUME_COLOR, resumeColorHex, type ResumeColor }
 import { DEMO_RESUMES, DEMO_JDS } from "./demoData";
 import ResumePreview from "./components/ResumePreview";
 import { supabaseAuth, supabaseData, type SupabaseSession } from "./lib/supabase";
+import { validateJobDescriptionText as checkJobDescriptionText, JD_MIN_WORDS, JD_MAX_WORDS } from "./utils/jdValidation";
 
 const SUPABASE_SESSION_STORAGE_KEY = "jd_resume_customizer_supabase_session";
 const PASSWORD_MIN_LENGTH = 8;
@@ -1746,10 +1747,6 @@ export default function App() {
   ];
   const [processingStages, setProcessingStages] = useState(TAILOR_STAGES);
 
-  const JD_MIN_WORDS = 50;
-  const JD_RECOMMENDED_MIN_WORDS = 100;
-  const JD_RECOMMENDED_MAX_WORDS = 1000;
-  const JD_MAX_WORDS = 5000;
   const INVALID_JD_MESSAGE = "This does not appear to be a valid Job Description. Please enter or paste a proper Job Description.";
   const ANALYSIS_WARNING_MS = 30000;
   const ANALYSIS_HARD_TIMEOUT_MS = 60000;
@@ -1763,58 +1760,9 @@ export default function App() {
   };
 
   const validateJobDescriptionText = (jdText: string) => {
-    console.info("[JD Validation] JD Validation Started");
-    const normalizedText = jdText
-      .replace(/\s+/g, " ")
-      .trim();
-    const words = normalizedText.match(/\b[\w'+.-]+\b/g) || [];
-    const lowerText = normalizedText.toLowerCase();
-
-    const indicatorChecks = [
-      { name: "Responsibilities", matched: /\b(responsibilities|responsibility|duties|what you'?ll do|day[-\s]?to[-\s]?day|key tasks|deliverables)\b/i.test(normalizedText) },
-      { name: "Requirements", matched: /\b(requirements|required|must have|minimum qualifications|basic qualifications|candidate should|you should have)\b/i.test(normalizedText) },
-      { name: "Qualifications", matched: /\b(qualifications|qualified|eligibility|background|degree|bachelor|master|mba|education)\b/i.test(normalizedText) },
-      { name: "Skills", matched: /\b(skills|competencies|proficiency|expertise|tools|technologies|tech stack|knowledge of)\b/i.test(normalizedText) },
-      { name: "Experience", matched: /\b(experience|years of experience|professional experience|worked with|track record)\b/i.test(normalizedText) },
-      { name: "Role Description", matched: /\b(role description|about the role|job description|position overview|the role|job summary|we are looking for|we're looking for)\b/i.test(normalizedText) },
-      { name: "Preferred Skills", matched: /\b(preferred|nice to have|good to have|bonus|plus|preferred qualifications)\b/i.test(normalizedText) },
-      { name: "Education Requirements", matched: /\b(education requirements|degree required|bachelor'?s degree|master'?s degree|educational background)\b/i.test(normalizedText) },
-    ];
-
-    const foundIndicators = indicatorChecks
-      .filter(indicator => indicator.matched)
-      .map(indicator => indicator.name);
-    const isLoremIpsum = /\blorem ipsum\b|\bdolor sit amet\b|\bconsectetur adipiscing\b/i.test(lowerText);
-    const isCoverLetter = /\b(dear hiring manager|dear recruiter|dear sir|dear madam|writing to apply|express my interest|my attached resume|my resume|sincerely)\b/i.test(lowerText);
-    const isResume = /\b(work experience|education|skills|certifications|summary of qualifications|projects|professional experience)\b/i.test(lowerText) && 
-      (/\b(gpa|bachelor of|master of|phd|school|university|contact details|email|phone)\b/i.test(lowerText) || /^\+?[0-9]{1,4}[-.\s]?[0-9]{3,4}[-.\s]?[0-9]{3,4}$/m.test(lowerText));
-
-    const isValid =
-      words.length >= JD_MIN_WORDS &&
-      words.length <= JD_MAX_WORDS &&
-      foundIndicators.length >= 2 &&
-      !isLoremIpsum &&
-      !isCoverLetter &&
-      !isResume;
-
-    console.info("[JD Validation] JD Indicators Found", foundIndicators);
-    console.info("[JD Validation] Word Count", words.length);
-    console.info(`[JD Validation] Validation ${isValid ? "Passed" : "Failed"}`, {
-      wordCount: words.length,
-      indicatorCount: foundIndicators.length,
-      recommendedRange: `${JD_RECOMMENDED_MIN_WORDS}-${JD_RECOMMENDED_MAX_WORDS} words`,
-      maxWords: JD_MAX_WORDS,
-      isLoremIpsum
-    });
-
-    return {
-      isValid,
-      wordCount: words.length,
-      foundIndicators,
-      isTooLong: words.length > JD_MAX_WORDS,
-      isTooShort: words.length < JD_MIN_WORDS,
-      isLoremIpsum
-    };
+    const result = checkJobDescriptionText(jdText);
+    console.info(`[JD Validation] Validation ${result.isValid ? "Passed" : "Failed"}`, result);
+    return result;
   };
 
   const startTailorProgress = (stages = TAILOR_STAGES) => {

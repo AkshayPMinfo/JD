@@ -1367,6 +1367,8 @@ PLAIN WORDING (strict):
 - Do not use these words unless the original resume already uses them: significantly, substantially, dramatically, demonstrably, meticulously, seamlessly, strategically, successfully, effectively, consistently, proactively, highly, comprehensive, innovative, robust, dynamic, impactful, results-driven, cutting-edge, orchestrated, spearheaded, leveraged, utilized, championed, crafted.
 - Keep each bullet about the same length as the original (at most a few words longer). Do not add trailing clauses like "ensuring ...", "contributing to ...", "driving ..." that say nothing new.
 - If a bullet is already clear and matches the job, return it unchanged.
+- Keep every bullet to at most 2 lines (about 30 words). Keep the same number of bullets for each job; never add new ones.
+- Never write in the first person (no "I", "me", "my") and never use "aspiring", "motivated", "passionate" or "committed to".
 - Never mention the job, role or job description inside a bullet, and never end a bullet with "demonstrating ...", "showcasing ...", "highlighting ...", "aligning with ..." or "reflecting ...". A bullet describes what the candidate did, nothing else.
 - The summary must never name the hiring company, and must not use phrases like "eager to", "looking to leverage", "passionate about" or "a leading platform like". Describe the candidate, not the employer.`;
     const prompt = `You are a veteran HR Consultant and senior Resume Writer. Your task is to review the Candidate's Resume and tailor it to better align with the requirements in the Job Description, preserving factual honesty but boosting keyword matching, professional tone, and clarity.${honestyRules}${confirmedSkillsNote}${careerSwitchNote}

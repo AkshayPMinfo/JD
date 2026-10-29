@@ -4,7 +4,8 @@
  */
 
 import { SAMPLE_RESUME, SAMPLE_JOB_POST } from "./utils/sampleResume";
-import { educationNewestFirst } from "./utils/educationOrder";
+import { educationNewestFirst, educationGoesFirst } from "./utils/educationOrder";
+import { checkResume } from "./utils/resumeChecks";
 import CodeBoxes from "./components/CodeBoxes";
 import PrivacyNotice from "./components/PrivacyNotice";
 import FeedbackBox from "./components/FeedbackBox";
@@ -3785,6 +3786,19 @@ WORK EXPERIENCE
         }
         body += `<w:tbl><w:tblPr><w:tblW w:w="10080" w:type="dxa"/><w:tblLayout w:type="fixed"/><w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders><w:tblCellMar><w:left w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid><w:gridCol w:w="4860"/><w:gridCol w:w="360"/><w:gridCol w:w="4860"/></w:tblGrid>${rows}</w:tbl>`;
       }
+      // School, years and GPA on one line (like the PDF); recent graduates get Education above Experience
+      const educationXml = () => {
+        if (!exportResume.education.length) return "";
+        let xml = heading("Education");
+        educationNewestFirst(exportResume.education).forEach(edu => {
+          xml += subhead(edu.degree || edu.school || "");
+          const sub = [edu.degree ? edu.school : "", edu.duration, edu.gpa ? `GPA: ${edu.gpa}` : ""].filter(Boolean).join(" | ");
+          if (sub) xml += metaLine(sub);
+        });
+        return xml;
+      };
+      const eduFirst = educationGoesFirst(exportResume);
+      if (eduFirst) body += educationXml();
       if (exportResume.workExperience.length) {
         body += heading("Work Experience");
         exportResume.workExperience.forEach((exp, idx) => {
@@ -3803,15 +3817,7 @@ WORK EXPERIENCE
           if (idx < (exportResume.projects || []).length - 1) body += entryGap();
         });
       }
-      if (exportResume.education.length) {
-        body += heading("Education");
-        exportResume.education.forEach(edu => {
-          if (edu.degree) body += subhead(edu.degree);
-          if (edu.school) body += smallLine(edu.school);
-          if (edu.duration) body += metaLine(edu.duration);
-          if (edu.gpa) body += paragraph(`GPA: ${edu.gpa}`);
-        });
-      }
+      if (!eduFirst) body += educationXml();
       if (exportResume.achievements?.length) {
         body += heading("Key Achievements");
         exportResume.achievements.forEach(ach => { body += bullet(ach); });
@@ -7470,6 +7476,35 @@ WORK EXPERIENCE
                           </div>
                         )}
                       </div>
+                    );
+                  })()}
+                  {(() => {
+                    // Quick recruiter checks; they only point things out, nothing changes on its own
+                    let pages = 1;
+                    try { pages = buildResumePdf(tailoredResultResume, "", "classic").getNumberOfPages(); } catch { /* keep 1 */ }
+                    const checks = checkResume(tailoredResultResume, pages);
+                    const passed = checks.filter(c => c.ok).length;
+                    return (
+                      <details id="resume-checks" className="mb-3 border border-neutral-200 rounded-xl bg-white" open={passed < checks.length}>
+                        <summary className="cursor-pointer select-none px-4 py-2.5 text-sm font-semibold text-black flex items-center gap-2">
+                          {passed === checks.length ? <Check className="w-4 h-4 text-emerald-600" /> : <AlertTriangle className="w-4 h-4 text-amber-600" />}
+                          Resume checks: {passed} of {checks.length} look good
+                        </summary>
+                        <ul className="px-4 pb-3 space-y-2">
+                          {checks.map(c => (
+                            <li key={c.id} id={`check-${c.id}`} className="flex items-start gap-2 text-sm">
+                              {c.ok ? <Check className="w-4 h-4 text-emerald-600 mt-0.5 flex-shrink-0" /> : <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 flex-shrink-0" />}
+                              <div>
+                                <p className={c.ok ? "text-neutral-700" : "text-black font-medium"}>{c.label}</p>
+                                {!c.ok && c.detail && <p className="text-xs text-neutral-500 mt-0.5 leading-relaxed">{c.detail}</p>}
+                              </div>
+                            </li>
+                          ))}
+                          {passed < checks.length && (
+                            <li className="text-xs text-neutral-500 pt-1">To fix one, click <span className="font-semibold text-black">Back to edits</span> below and edit the line.</li>
+                          )}
+                        </ul>
+                      </details>
                     );
                   })()}
                   <div id="resume-color-picker" className="flex flex-wrap items-center gap-3 mb-3">

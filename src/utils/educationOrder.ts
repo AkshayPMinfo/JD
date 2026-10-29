@@ -16,3 +16,20 @@ export function educationNewestFirst<T extends { duration?: string }>(list: T[] 
     .sort((a, b) => (b.year - a.year) || (a.index - b.index))
     .map(x => x.item);
 }
+
+/**
+ * Education goes above Experience only for recent graduates (finished this year or last year,
+ * or still studying) and people with no work experience yet. Everyone else: Experience first.
+ */
+export function educationGoesFirst(
+  resume: { education?: { duration?: string }[]; workExperience?: { role?: string; company?: string; description?: string[] }[] },
+  now: Date = new Date()
+): boolean {
+  const education = resume.education || [];
+  if (!education.length) return false;
+  const jobs = (resume.workExperience || []).filter(j => j.role || j.company || j.description?.length);
+  if (!jobs.length) return true;
+  const newest = Math.max(...education.map(e => latestYear(e.duration)));
+  if (newest === 9999) return true; // still studying
+  return newest >= now.getFullYear() - 1;
+}

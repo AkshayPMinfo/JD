@@ -5,7 +5,7 @@
 import { jsPDF } from "jspdf";
 import { type ResumeColor, resumeColorHex, hexToRgb } from "./resumeColors";
 import type { ResumeStructure } from "../types";
-import { educationNewestFirst } from "./educationOrder";
+import { educationNewestFirst, educationGoesFirst } from "./educationOrder";
 
 // The built-in PDF fonts cover Latin-1 only. Map common typographic characters to safe ones
 // so nothing turns into blank boxes or garbage in the PDF text layer.
@@ -113,6 +113,21 @@ export function buildResumePdf(resume: ResumeStructure, headline = "", color: Re
     write(skills.join(", "), { size: 10, gapAfter: 0.5 });
   }
 
+  // Recent graduates (or no jobs yet): Education right after Skills; everyone else: after Projects
+  const writeEducation = () => {
+    const education = educationNewestFirst(resume.education || []).filter(e => e.degree || e.school);
+    if (education.length) {
+      section("Education");
+      education.forEach(e => {
+        write(e.degree || e.school, { size: 10.5, bold: true });
+        const sub = [e.degree ? e.school : "", e.duration, e.gpa ? `GPA: ${e.gpa}` : ""].filter(Boolean).join(" | ");
+        if (sub) write(sub, { size: 10, color: 60, gapAfter: 1 });
+      });
+    }
+  };
+  const eduFirst = educationGoesFirst(resume);
+  if (eduFirst) writeEducation();
+
   const jobs = (resume.workExperience || []).filter(j => j.role || j.company || j.description?.length);
   if (jobs.length) {
     section("Experience");
@@ -138,15 +153,7 @@ export function buildResumePdf(resume: ResumeStructure, headline = "", color: Re
     });
   }
 
-  const education = educationNewestFirst(resume.education || []).filter(e => e.degree || e.school);
-  if (education.length) {
-    section("Education");
-    education.forEach(e => {
-      write(e.degree || e.school, { size: 10.5, bold: true });
-      const sub = [e.degree ? e.school : "", e.duration, e.gpa ? `GPA: ${e.gpa}` : ""].filter(Boolean).join(" | ");
-      if (sub) write(sub, { size: 10, color: 60, gapAfter: 1 });
-    });
-  }
+  if (!eduFirst) writeEducation();
 
   const lists: [string, string[] | undefined][] = [
     ["Certifications", resume.certifications],

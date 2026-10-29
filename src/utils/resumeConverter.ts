@@ -1,4 +1,4 @@
-import { educationNewestFirst } from "./educationOrder";
+import { educationNewestFirst, educationGoesFirst } from "./educationOrder";
 import { ResumeStructure, Resume, Block, Item, TailoredResume } from "../types";
 
 export function resumeStructureToResume(res: ResumeStructure, rawText?: string): Resume {
@@ -110,6 +110,16 @@ export function resumeStructureToResume(res: ResumeStructure, rawText?: string):
         text: ach
       }))
     });
+  }
+
+  // Recent graduates (or no jobs yet): Education goes above Experience
+  if (educationGoesFirst(res)) {
+    const eduIdx = blocks.findIndex(b => b.kind === "section" && b.label === "Education");
+    const expIdx = blocks.findIndex(b => b.kind === "section" && b.label === "Experience");
+    if (eduIdx > expIdx && expIdx >= 0) {
+      const [edu] = blocks.splice(eduIdx, 1);
+      blocks.splice(expIdx, 0, edu);
+    }
   }
 
   return {

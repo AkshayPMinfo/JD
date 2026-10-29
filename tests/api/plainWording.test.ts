@@ -44,4 +44,6 @@ same("V5", "Keeps an ending with a number (warning handles it)", dropFillerEndin
 same("V6", "Keeps a real detail from your line", dropFillerEnding("Led weekly syncs, supporting design and engineering handoffs.", "Led weekly syncs to support design and engineering handoffs."), "Led weekly syncs, supporting design and engineering handoffs.");
 same("A1", "'mobile application' back to 'app'", keepAppWord("Built consumer mobile application features.", "Built consumer app features."), "Built consumer app features.");
 same("A2", "Keeps 'application' if you wrote it", keepAppWord("Tracked loan application drop-offs in the app.", "Tracked loan application drop-offs."), "Tracked loan application drop-offs in the app.");
+same("W1", "Drops 'aspiring' the AI added", removeHype("Aspiring product manager with 2 years in fintech.", "Analyst with 2 years in fintech."), "Product manager with 2 years in fintech.");
+same("W2", "Keeps 'aspiring' if you wrote it (the final-step check flags it instead)", removeHype("Aspiring product manager.", "Aspiring product manager."), "Aspiring product manager.");
 process.exit(t.report("Plain wording"));

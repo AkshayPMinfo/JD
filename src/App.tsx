@@ -1149,6 +1149,7 @@ export default function App() {
         return;
       }
       setIsAuthSubmitting(true);
+      setAuthProgress("Sending your code...");
       try {
         const resetUrl = `${window.location.origin}${window.location.pathname}`;
         const diagnostic = await supabaseAuth.sendPasswordReset(email, resetUrl);
@@ -1171,6 +1172,7 @@ export default function App() {
         setAuthMessage({ type: "error", message: error.message || "Could not send the reset code. Please try again." });
       } finally {
         setIsAuthSubmitting(false);
+        setAuthProgress(null);
       }
       return;
     }

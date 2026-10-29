@@ -7,6 +7,7 @@ import { SAMPLE_RESUME, SAMPLE_JOB_POST } from "./utils/sampleResume";
 import { educationNewestFirst } from "./utils/educationOrder";
 import CodeBoxes from "./components/CodeBoxes";
 import PrivacyNotice from "./components/PrivacyNotice";
+import FeedbackBox from "./components/FeedbackBox";
 import React, { useState, useEffect, useRef } from "react";
 import JSZip from "jszip";
 import {
@@ -569,6 +570,15 @@ export default function App() {
   // Privacy notice and "delete my account" dialog
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  // Feedback: the sidebar box, and whether this browser already answered "How was it?" after a download
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [feedbackAsked, setFeedbackAsked] = useState(() => {
+    try { return localStorage.getItem("jd_resume_customizer_feedback_asked") === "1"; } catch { return false; }
+  });
+  const markFeedbackAsked = () => {
+    setFeedbackAsked(true);
+    try { localStorage.setItem("jd_resume_customizer_feedback_asked", "1"); } catch { /* private window */ }
+  };
   // "Close without saving?" check for the tailor wizard
   const [showCloseDraftConfirm, setShowCloseDraftConfirm] = useState(false);
   // Daily AI limit for the signed-in person (from /api/ai-credits and the tailoring response)
@@ -1353,6 +1363,30 @@ export default function App() {
     }
   };
 
+  // Save feedback to Supabase (jd_feedback)
+  const handleSendFeedback = async (rating: "up" | "down" | null, comment: string, place: string) => {
+    const headers = await aiAuthHeaders(); // refreshes an expired sign-in first
+    const token = (headers.Authorization || "").replace(/^Bearer\s+/, "") || getStoredSupabaseSession()?.accessToken;
+    if (!token) throw new Error("Please sign in or continue as a guest to send feedback.");
+    await supabaseData.sendFeedback(token, { rating, comment, place });
+    markFeedbackAsked();
+    trackEvent("feedback", { rating: rating || "none", place });
+  };
+
+  // Keep the sign-in fresh (it lasts about an hour): on start, every 4 minutes, and when the tab is back in focus.
+  // Saves read the stored sign-in, so without this they would quietly fail after an hour.
+  useEffect(() => {
+    if (!currentUser) return;
+    aiAuthHeaders();
+    const timer = window.setInterval(() => { aiAuthHeaders(); }, 4 * 60_000);
+    const onFocus = () => { aiAuthHeaders(); };
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [currentUser]);
+
   // Another tab deleted the data or signed out: reload so this tab shows the same thing
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
@@ -1389,18 +1423,35 @@ export default function App() {
   }, [currentStep]);
 
   // Tells the server who's signed in, for the daily AI limit. Refreshes a sign-in that's about to expire.
+  const endExpiredSignIn = () => {
+    localStorage.removeItem(SUPABASE_SESSION_STORAGE_KEY);
+    localStorage.removeItem("jd_resume_customizer_user");
+    sessionStorage.removeItem("jd_resume_customizer_guest_user");
+    setCurrentUser(null);
+    setCurrentStep("auth");
+    setIsSignUp(false);
+    setIsForgotPassword(false);
+    setAuthMessage({ type: "info", message: "Your sign-in has ended. Please sign in again." });
+  };
+
   const aiAuthHeaders = async (): Promise<Record<string, string>> => {
     const raw = localStorage.getItem(SUPABASE_SESSION_STORAGE_KEY);
     if (!raw) return {};
     try {
       let session = JSON.parse(raw);
-      const expiringSoon = !session.expiresAt || session.expiresAt - Date.now() < 60_000;
+      const expiringSoon = !session.expiresAt || session.expiresAt - Date.now() < 5 * 60_000;
       if (expiringSoon && session.refreshToken) {
         try {
           session = await supabaseAuth.refreshSession(session.refreshToken);
           localStorage.setItem(SUPABASE_SESSION_STORAGE_KEY, JSON.stringify(session));
-        } catch (error) {
+        } catch (error: any) {
           console.warn("Sign-in refresh failed:", error);
+          // The sign-in was ended elsewhere (signed out, password changed): ask them to sign in again
+          // instead of staying "signed in" while every save fails
+          if (/refresh token|invalid grant|session.*not found/i.test(String(error?.message || ""))) {
+            endExpiredSignIn();
+            return {};
+          }
         }
       }
       return session?.accessToken ? { Authorization: `Bearer ${session.accessToken}` } : {};
@@ -4238,12 +4289,27 @@ WORK EXPERIENCE
             )}
           </div>
           {!isSidebarCollapsed && (
-            <button type="button" id="btn-privacy" onClick={() => setShowPrivacy(true)} className="mt-3 text-xs text-neutral-500 hover:text-black cursor-pointer">
-              Privacy & delete my data
-            </button>
+            <div className="mt-3 flex flex-col items-start gap-1.5">
+              <button type="button" id="btn-send-feedback" onClick={() => setShowFeedback(true)} className="text-xs font-medium text-black hover:underline cursor-pointer">
+                Send feedback
+              </button>
+              <button type="button" id="btn-privacy" onClick={() => setShowPrivacy(true)} className="text-xs text-neutral-500 hover:text-black cursor-pointer">
+                Privacy & delete my data
+              </button>
+            </div>
           )}
         </div>
       </aside>
+      {showFeedback && currentUser && (
+        <div className="fixed inset-0 z-[70] bg-black/50 flex items-center justify-center p-4" onClick={() => setShowFeedback(false)}>
+          <div id="feedback-modal" role="dialog" aria-label="Send feedback" className="bg-white rounded-2xl border border-neutral-200 w-full max-w-md p-6 relative" onClick={(e) => e.stopPropagation()}>
+            <button type="button" onClick={() => setShowFeedback(false)} className="absolute top-4 right-4 p-1.5 rounded-lg text-neutral-500 hover:text-black hover:bg-neutral-100" title="Close">
+              <X className="w-5 h-5" />
+            </button>
+            <FeedbackBox title="How is Auralis working for you?" onSend={(rating, comment) => handleSendFeedback(rating, comment, "sidebar")} />
+          </div>
+        </div>
+      )}
       {showPrivacy && currentUser && (
         <PrivacyNotice onClose={() => setShowPrivacy(false)} onDeleteData={handleDeleteMyData} onDeleteAccount={handleDeleteMyAccount} deleting={isDeletingAccount} isGuest={!!currentUser?.isGuest} />
       )}
@@ -7408,6 +7474,11 @@ WORK EXPERIENCE
                       </div>
                     </div>
                     <p className="text-sm text-neutral-600">You can also download it as {tailorDownloaded.format === "pdf" ? "a Word file" : "a PDF"}, or go back and make changes.</p>
+                    {!feedbackAsked && (
+                      <div className="border border-neutral-200 rounded-xl p-4">
+                        <FeedbackBox onSend={(rating, comment) => handleSendFeedback(rating, comment, "after_download")} onSkip={markFeedbackAsked} />
+                      </div>
+                    )}
                     <div className="flex flex-wrap gap-2 justify-end">
                       <button type="button" onClick={() => { setTailorDownloaded(null); setTailorWizardStep(4); }} className="px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-black rounded-lg hover:bg-neutral-100 transition-colors cursor-pointer">
                         Make changes

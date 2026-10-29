@@ -363,7 +363,8 @@ export const supabaseAuth = {
 
   async signOut(accessToken?: string): Promise<void> {
     if (!isSupabaseConfigured || !accessToken) return;
-    await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
+    // scope=local: sign out this browser only, not every device the person is signed in on
+    await fetch(`${SUPABASE_URL}/auth/v1/logout?scope=local`, {
       method: "POST",
       headers: {
         ...authHeaders(),
@@ -494,6 +495,18 @@ export const supabaseData = {
       body: JSON.stringify({ name: name.slice(0, 40), props }),
       keepalive: true,
     });
+  },
+
+  // "How was it?" feedback; only you can read it (in the Supabase dashboard)
+  async sendFeedback(accessToken: string, feedback: { rating: "up" | "down" | null; comment: string; place: string }) {
+    assertSupabaseConfigured();
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/jd_feedback`, {
+      method: "POST",
+      headers: { ...restHeaders(accessToken), Prefer: "return=minimal" },
+      body: JSON.stringify({ rating: feedback.rating, comment: feedback.comment || null, place: feedback.place }),
+    });
+    if (response.status === 404) throw new Error("Feedback isn't switched on yet. Please try again later.");
+    await assertDataResponse(response, "Couldn't send your feedback. Please try again.");
   },
 
   // Deletes resumes, tailored versions and job posts, but keeps the account so they can sign in again

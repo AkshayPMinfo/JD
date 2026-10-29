@@ -569,6 +569,8 @@ export default function App() {
   // Privacy notice and "delete my account" dialog
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  // "Close without saving?" check for the tailor wizard
+  const [showCloseDraftConfirm, setShowCloseDraftConfirm] = useState(false);
   // Daily AI limit for the signed-in person (from /api/ai-credits and the tailoring response)
   const [aiCredits, setAiCredits] = useState<{ aiEnabled: boolean; status?: string; used?: number; limit?: number; remaining?: number; resetsAt?: string | null } | null>(null);
   const refreshAiCredits = async () => {
@@ -1593,6 +1595,9 @@ export default function App() {
     setTailoredAtsScore(null);
     setShowHighlights(true);
     setTailorWizardStep(1);
+    setShowCloseDraftConfirm(false);
+    // the "Original resume" popup shouldn't stay open behind the wizard
+    setShowResumePreviewModal(false);
     setIsTailorWizardOpen(true);
   };
 
@@ -3342,8 +3347,14 @@ WORK EXPERIENCE
 
   // Closing the tailor window before the final step throws away that unfinished tailored copy.
   // Reaching the final step (or downloading) keeps it in "Tailored resumes".
-  const closeTailorWizard = () => {
+  // Closing with unsaved AI edits asks first; "Discard and close" calls this with force = true
+  const closeTailorWizard = (force: boolean = false) => {
     const unfinished = tailoredResultVersion && tailorWizardStep < 5 && !tailorDownloaded;
+    if (unfinished && force !== true) {
+      setShowCloseDraftConfirm(true);
+      return;
+    }
+    setShowCloseDraftConfirm(false);
     if (unfinished) {
       const id = tailoredResultVersion!.id;
       const session = getStoredSupabaseSession();
@@ -3827,7 +3838,8 @@ WORK EXPERIENCE
       } else if (showDeleteConfirmModal) {
         setShowDeleteConfirmModal(false);
       } else if (isTailorWizardOpen) {
-        if (!tailorIsAnalyzing) closeTailorWizard();
+        if (showCloseDraftConfirm) setShowCloseDraftConfirm(false);
+        else if (!tailorIsAnalyzing) closeTailorWizard();
       } else if (isUploadModalOpen) {
         if (!isAnalyzing) {
           setIsUploadModalOpen(false);
@@ -3843,7 +3855,7 @@ WORK EXPERIENCE
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [isTailorWizardOpen, tailorIsAnalyzing, tailorWizardStep, tailoredResultVersion, tailorDownloaded, isUploadModalOpen, isAnalyzing, showResumePreviewModal, showSavedVersionPreviewModal, showDeleteSavedVersionConfirmModal, showDeleteConfirmModal]);
+  }, [isTailorWizardOpen, tailorIsAnalyzing, tailorWizardStep, tailoredResultVersion, tailorDownloaded, isUploadModalOpen, isAnalyzing, showResumePreviewModal, showSavedVersionPreviewModal, showDeleteSavedVersionConfirmModal, showDeleteConfirmModal, showCloseDraftConfirm]);
 
   return (
     <div className="min-h-screen font-sans antialiased overflow-x-hidden selection:bg-neutral-200 selection:text-black pb-12 print:bg-white print:pb-0 bg-white text-black">
@@ -6531,12 +6543,31 @@ WORK EXPERIENCE
             {!tailorIsAnalyzing && (
               <button
                 id="btn-close-tailor-wizard"
-                onClick={closeTailorWizard}
+                onClick={() => closeTailorWizard()}
                 className="absolute top-4 right-4 p-1.5 rounded-lg text-neutral-500 hover:text-black hover:bg-neutral-100 transition-colors cursor-pointer"
                 title="Close"
               >
                 <X className="w-5 h-5" />
               </button>
+            )}
+
+            {showCloseDraftConfirm && (
+              <div id="close-draft-confirm" className="absolute inset-0 z-20 bg-white/85 rounded-2xl flex items-center justify-center p-6" onClick={(e) => e.stopPropagation()}>
+                <div className="bg-white border border-neutral-200 rounded-xl p-5 max-w-sm w-full shadow-lg">
+                  <p className="text-base font-semibold text-black">Close without saving?</p>
+                  <p className="text-sm text-neutral-600 mt-1.5 leading-relaxed">
+                    The edits for this job will be lost. If AI was used, today's AI tailoring still counts.
+                  </p>
+                  <div className="mt-4 flex gap-2 justify-end">
+                    <button type="button" id="btn-keep-editing" onClick={() => setShowCloseDraftConfirm(false)} className="px-3 py-2 text-sm font-medium text-white bg-black hover:bg-neutral-800 rounded-lg cursor-pointer">
+                      Keep editing
+                    </button>
+                    <button type="button" id="btn-discard-draft" onClick={() => closeTailorWizard(true)} className="px-3 py-2 text-sm font-medium text-rose-600 border border-rose-200 hover:bg-rose-50 rounded-lg cursor-pointer">
+                      Discard and close
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
 
             {/* Header */}
@@ -7399,7 +7430,7 @@ WORK EXPERIENCE
                   <>
                     <button
                       type="button"
-                      onClick={closeTailorWizard}
+                      onClick={() => closeTailorWizard()}
                       className="px-4 py-2 bg-white hover:bg-neutral-50 text-black font-medium text-sm rounded-lg border border-neutral-200 transition cursor-pointer"
                     >
                       Cancel

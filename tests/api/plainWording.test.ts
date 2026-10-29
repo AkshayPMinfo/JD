@@ -3,7 +3,7 @@
  * Run with: npm run test:api
  */
 import { Checks } from "./helpers.ts";
-import { removeHype, keepDigits, undoPointlessChange, plainResumeWording, dropFillerEnding } from "../../api/plainWording.ts";
+import { removeHype, keepDigits, undoPointlessChange, plainResumeWording, dropFillerEnding, keepAppWord } from "../../api/plainWording.ts";
 
 const t = new Checks();
 const orig = "Managed content for Facebook and Instagram. Ran marketing campaigns that increased footfall.";
@@ -35,4 +35,13 @@ same("F1", "Drops 'demonstrating ...' ending", dropFillerEnding("Built order-tra
 same("F2", "Drops 'aligning with the job's ...' ending", dropFillerEnding("Mentored 3 junior engineers, providing guidance through code reviews, aligning with the job's mentoring responsibility.", "Mentored 3 junior engineers through code reviews"), "Mentored 3 junior engineers, providing guidance through code reviews");
 same("F3", "Keeps 'ensuring' if you wrote it", dropFillerEnding("Defined features, ensuring alignment with business goals.", "Defined features, ensuring alignment with business goals."), "Defined features, ensuring alignment with business goals.");
 same("F4", "Keeps the period if yours had one", dropFillerEnding("Ran campaigns, showcasing strong creativity.", "Ran campaigns."), "Ran campaigns.");
+// Found in the live test (29 Oct): vague endings that add words the person never wrote
+same("V1", "Drops ', providing data for analysis'", dropFillerEnding("Built Excel dashboards to track loan application drop-offs, providing data for analysis.", "Built Excel dashboards to track loan application drop-offs."), "Built Excel dashboards to track loan application drop-offs.");
+same("V2", "Drops ', improving clarity for development'", dropFillerEnding("Wrote PRDs and user stories for checkout and order-tracking screens, improving clarity for development.", "Wrote product requirements and user stories for the checkout and order-tracking screens."), "Wrote PRDs and user stories for checkout and order-tracking screens.");
+same("V3", "Drops 'for the customer ordering experience'", dropFillerEnding("Launched a reorder button feature that increased repeat orders by 12% for the customer ordering experience.", "Launched a reorder button that increased repeat orders by 12%."), "Launched a reorder button feature that increased repeat orders by 12%.");
+same("V4", "Drops ', enhancing the ordering experience'", dropFillerEnding("Designed and tested a food pre-ordering app for a college canteen, serving 300 student users, enhancing the ordering experience.", "Designed and tested a food pre-ordering app for the college canteen with 300 student users."), "Designed and tested a food pre-ordering app for a college canteen, serving 300 student users.");
+same("V5", "Keeps an ending with a number (warning handles it)", dropFillerEnding("Ran A/B tests on checkout, improving conversion by 8%.", "Ran A/B tests on checkout."), "Ran A/B tests on checkout, improving conversion by 8%.");
+same("V6", "Keeps a real detail from your line", dropFillerEnding("Led weekly syncs, supporting design and engineering handoffs.", "Led weekly syncs to support design and engineering handoffs."), "Led weekly syncs, supporting design and engineering handoffs.");
+same("A1", "'mobile application' back to 'app'", keepAppWord("Built consumer mobile application features.", "Built consumer app features."), "Built consumer app features.");
+same("A2", "Keeps 'application' if you wrote it", keepAppWord("Tracked loan application drop-offs in the app.", "Tracked loan application drop-offs."), "Tracked loan application drop-offs in the app.");
 process.exit(t.report("Plain wording"));

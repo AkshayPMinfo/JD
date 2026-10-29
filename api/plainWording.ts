@@ -106,6 +106,45 @@ const FILLER_STARTS = ["demonstrating", "showcasing", "highlighting", "aligning 
   "reflecting", "underscoring", "illustrating", "exemplifying", "contributing to", "ensuring", "for performance optimization",
   "to enhance code quality and", "relevant to", "as required by", "matching the"];
 
+const VAGUE_VERBS = ["providing", "enhancing", "improving", "supporting", "enabling", "facilitating", "driving", "boosting",
+  "strengthening", "streamlining", "fostering", "increasing", "helping", "resulting in", "leading to"];
+const STOP = new Set(["the", "a", "an", "and", "or", "for", "of", "to", "in", "on", "with", "by", "through", "across", "within", "into", "from", "its", "their", "our", "more", "better"]);
+const contentWords = (t: string) => words(t).filter(w => w.length > 2 && !STOP.has(w));
+
+/** True when the clause adds nothing from the original line: no number, and at most one of its words appears there. */
+function isVague(clause: string, originalLine: string): boolean {
+  if (/\d/.test(clause)) return false; // a number is a result claim; the review warning handles it
+  const orig = new Set(contentWords(originalLine));
+  const found = contentWords(clause).filter(w => orig.has(w)).length;
+  return found <= 1;
+}
+
+export function dropVagueTail(text: string, originalLine: string): string {
+  if (!originalLine.trim()) return text;
+  const end = originalLine.trim().endsWith(".") ? "." : "";
+  let out = text.trim();
+  // ", providing data for analysis."
+  const ing = out.match(new RegExp(`,\\s*(${VAGUE_VERBS.map(esc).join("|")})\\b([^,;]*?)[.]?$`, "i"));
+  if (ing && !originalLine.toLowerCase().includes(ing[1].toLowerCase()) && isVague(ing[2], originalLine)) {
+    out = out.slice(0, ing.index).trim() + end;
+  }
+  // " for the customer ordering experience." / " in the mobile application."
+  const tail = out.match(/\s+(for|in|within|across|on) (the|a|an) ((?:[\w-]+\s+){0,3}(?:experience|application|platform|product|app))[.]?$/i);
+  if (tail && isVague(tail[3], originalLine) && !originalLine.toLowerCase().includes(tail[0].trim().toLowerCase().replace(/[.]$/, ""))) {
+    out = out.slice(0, tail.index).trim() + end;
+  }
+  return out;
+}
+
+/** "app" stays "app": undo the AI's switch to "application" / "mobile application" when your line said app. */
+export function keepAppWord(text: string, originalLine: string): string {
+  if (!/\bapps?\b/i.test(originalLine) || /\bapplication/i.test(originalLine)) return text;
+  const mobile = /\bmobile\b/i.test(originalLine);
+  return text
+    .replace(/\bmobile (application)(s?)\b/gi, (_m, _a, pl) => (mobile ? "mobile app" : "app") + pl)
+    .replace(/\bapplication(s?)\b/gi, (_m, pl) => "app" + pl);
+}
+
 /** Drop filler endings the AI tacks on, unless the candidate's own line already had that wording. */
 export function dropFillerEnding(text: string, originalLine: string): string {
   const orig = originalLine.toLowerCase();
@@ -115,6 +154,9 @@ export function dropFillerEnding(text: string, originalLine: string): string {
     // ", demonstrating ... ." at the end of the line
     out = out.replace(new RegExp(`,\\s*${esc(start)}\\b[^,;]*[.]?\\s*$`, "i"), originalLine.trim().endsWith(".") ? "." : "");
   }
+  // Vague add-ons like ", providing data for analysis" or "for the customer ordering experience":
+  // dropped when they bring in words your own line never had (real details like "code reviews" stay)
+  out = dropVagueTail(out, originalLine);
   // "the job's" / "this role's" never belongs in a resume line
   if (/\b(the|this) (job|role|position)('s)?\b/i.test(out) && !/\b(the|this) (job|role|position)/i.test(orig)) {
     out = out.replace(/,?\s*[^,]*\b(the|this) (job|role|position)('s)?\b[^,.]*/i, "");
@@ -130,7 +172,7 @@ export function plainResumeWording<T extends { summary?: string; workExperience?
   const originalResumeText = JSON.stringify(source || {});
   const clean = (s: any, originalLine = "") => {
     if (typeof s !== "string") return s;
-    const plain = dropFillerEnding(keepDigits(removeHype(s, originalResumeText), originalLine), originalLine);
+    const plain = dropFillerEnding(keepAppWord(keepDigits(removeHype(s, originalResumeText), originalLine), originalLine), originalLine);
     return undoPointlessChange(plain, originalLine);
   };
   const match = (list: any[] = [], item: any, i: number) => list.find(x => x?.id && x.id === item?.id) || list[i];

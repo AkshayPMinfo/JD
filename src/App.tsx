@@ -69,6 +69,7 @@ import { DEMO_RESUMES, DEMO_JDS } from "./demoData";
 import ResumePreview from "./components/ResumePreview";
 import { supabaseAuth, supabaseData, type SupabaseSession } from "./lib/supabase";
 import { resultEndingsFor, addResultToLine } from "./utils/resultEndings";
+import { backedBy } from "./utils/sameSkill";
 import SideBySideReview, { changedLines } from "./components/SideBySideReview";
 import { validateJobDescriptionText as checkJobDescriptionText, JD_MIN_WORDS, JD_MAX_WORDS } from "./utils/jdValidation";
 
@@ -2208,7 +2209,7 @@ export default function App() {
     const originalNumbers = numbersOf(originalText);
     const SENIORITY = ["senior", "lead", "principal", "staff engineer", "head of", "expert", "chief", "director"];
     // Everyday job-post words that don't make a claim on their own
-    const GENERIC = new Set("about across ability able analyse analysis analyze based build building candidate clear closely comfort company cross customer customers daily deliver delivery design drive ensure every excellent experience familiarity features functional great growth hands help high hiring ideal impact including improve join knowledge launch looking manage manager managing metrics multiple needs other plus preferred prioritise prioritize product products quality required requirements responsibilities responsible results role strong success support teams their these things through tools track understanding using users within working world would years".split(" ").map(w => stem(w)));
+    const GENERIC = new Set("about across ability reason reasons find finding able analyse analysis analyze based build building candidate clear closely comfort company cross customer customers daily deliver delivery design drive ensure every excellent experience familiarity features functional great growth hands help high hiring ideal impact including improve join knowledge launch looking manage manager managing metrics multiple needs other plus preferred prioritise prioritize product products quality required requirements responsibilities responsible results role strong success support teams their these things through tools track understanding using users within working world would years".split(" ").map(w => stem(w)));
     const wordsOf = (text: string) => (text.toLowerCase().match(/[a-z][a-z0-9+#/-]{4,}/g) || []);
     const stemsOf = (text: string) => new Map(wordsOf(text).map(w => [stem(w), w] as [string, string]));
     const jdStems = new Set([...stemsOf(jdText).keys()].filter(st => !GENERIC.has(st)));
@@ -2218,12 +2219,12 @@ export default function App() {
       const warnings: string[] = [];
       const newNumbers = [...numbersOf(sugg)].filter(n => !originalNumbers.has(n));
       if (newNumbers.length) warnings.push(`Adds ${newNumbers.length === 1 ? "a number" : "numbers"} not in your resume (${newNumbers.slice(0, 3).join(", ")})`);
-      const unbacked = jdSkills.filter(sk => sk && has(sugg, sk) && !has(originalText, sk) && !ticked.some(t => t.toLowerCase() === sk.toLowerCase()));
+      const unbacked = jdSkills.filter(sk => sk && has(sugg, sk) && !has(originalText, sk) && !backedBy(originalText, sk) && !ticked.some(t => t.toLowerCase() === sk.toLowerCase()));
       if (unbacked.length) warnings.push(`Claims ${unbacked.slice(0, 3).join(", ")}, which ${unbacked.length === 1 ? "isn't" : "aren't"} in your resume`);
       const seniority = SENIORITY.filter(w => has(sugg, w) && !has(originalText, w));
       if (seniority.length) warnings.push(`Adds "${seniority[0]}", which isn't in your titles or experience`);
       // Words lifted from the job post that your resume never used, e.g. "checkout" for a payments job
-      const lifted = [...stemsOf(sugg).entries()].filter(([stem]) => jdStems.has(stem) && !originalStems.has(stem) && !tickedStems.has(stem)).map(([, word]) => word);
+      const lifted = [...stemsOf(sugg).entries()].filter(([stem, word]) => jdStems.has(stem) && !originalStems.has(stem) && !tickedStems.has(stem) && !backedBy(originalText, word)).map(([, word]) => word);
       const alreadyNamed = (w: string) => warnings.some(x => x.toLowerCase().includes(w.toLowerCase()));
       const liftedNew = lifted.filter(w => !alreadyNamed(w));
       if (liftedNew.length) warnings.push(`Uses "${liftedNew.slice(0, 3).join('", "')}" from the job post, which your resume doesn't mention`);

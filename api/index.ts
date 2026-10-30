@@ -900,7 +900,8 @@ async function generateWithChatApi(provider: ChatProvider, options: any, timeout
 }
 
 
-async function generateContentWithRetry(ai: GoogleGenAI | null, options: any, maxRetries = 2): Promise<any> {
+// preferStrong: for rewriting, a bigger backup (Groq) writes better than Flash-Lite, so try it first
+async function generateContentWithRetry(ai: GoogleGenAI | null, options: any, maxRetries = 2, preferStrong = false): Promise<any> {
   let geminiError: any = null;
 
   if (ai) {
@@ -940,27 +941,23 @@ async function generateContentWithRetry(ai: GoogleGenAI | null, options: any, ma
   const why = (e: any) => String(e?.message || e || "no Gemini key").slice(0, 120);
 
   const liteModel = process.env.GEMINI_LITE_MODEL || "gemini-3.5-flash-lite";
-  if (ai && geminiError && options.model !== liteModel) {
-    console.warn(`[AI] Falling back to ${liteModel}: ${why(geminiError)}`);
-    try {
-      return await ai.models.generateContent({ ...options, model: liteModel });
-    } catch (e: any) {
-      console.error(`[AI] ${liteModel} failed:`, why(e));
-      lastError = e;
-    }
-  }
-
   const chatProviders: ChatProvider[] = [];
   if (process.env.GROQ_API_KEY) chatProviders.push({ name: "groq", key: process.env.GROQ_API_KEY, baseUrl: GROQ_BASE_URL, model: GROQ_MODEL, jsonMode: true });
   if (process.env.NVIDIA_API_KEY) chatProviders.push({ name: "nvidia", key: process.env.NVIDIA_API_KEY, baseUrl: NVIDIA_BASE_URL, model: NVIDIA_MODEL, jsonMode: false });
-  for (const provider of chatProviders) {
+
+  type Attempt = { name: string; run: () => Promise<any> };
+  const lite: Attempt[] = ai && geminiError && options.model !== liteModel
+    ? [{ name: liteModel, run: () => ai.models.generateContent({ ...options, model: liteModel }) }] : [];
+  // 25s cap each: a slow free backup must not keep the person waiting (basic mode comes next)
+  const chats: Attempt[] = chatProviders.map(p => ({ name: `${p.name} (${p.model})`, run: () => generateWithChatApi(p, options, Math.min(GROQ_TIMEOUT_MS, timeLeft())) }));
+  const attempts = preferStrong ? [...chats.slice(0, 1), ...lite, ...chats.slice(1)] : [...lite, ...chats];
+  for (const attempt of attempts) {
     if (timeLeft() < 5000) break;
-    console.warn(`[AI] Falling back to ${provider.name} (${provider.model}): ${why(lastError)}`);
+    console.warn(`[AI] Falling back to ${attempt.name}: ${why(lastError)}`);
     try {
-      // 25s cap each: a slow free backup must not keep the person waiting (basic mode comes next)
-      return await generateWithChatApi(provider, options, Math.min(GROQ_TIMEOUT_MS, timeLeft()));
+      return await attempt.run();
     } catch (e: any) {
-      console.error(`[AI] ${provider.name} fallback failed:`, why(e));
+      console.error(`[AI] ${attempt.name} failed:`, why(e));
       lastError = e;
     }
   }
@@ -1562,7 +1559,7 @@ Format your response strictly as JSON matching this schema:
           required: ["suggestions", "tailoredResume"]
         }
       }
-    });
+    }, 2, true);
 
     const resultText = response.text;
     if (!resultText) {

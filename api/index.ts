@@ -1573,7 +1573,12 @@ Format your response strictly as JSON matching this schema:
       parsed.tailoredResume = mergeAndSanitizeTailoredResume(sourceResume, parsed.tailoredResume);
       parsed.tailoredResume = sanitizeResumeTextFields(parsed.tailoredResume);
       // Strip puffy words the AI added ("significantly", "orchestrated") unless the candidate used them
+      const beforeClean = JSON.parse(JSON.stringify(parsed.tailoredResume));
       parsed.tailoredResume = plainResumeWording(parsed.tailoredResume, sourceResume);
+      // How many lines the AI changed, and how many are still changed after the clean-up
+      const lines = (r: any) => [r?.summary || "", ...(r?.workExperience || []).flatMap((j: any) => j.description || []), ...(r?.projects || []).flatMap((p: any) => p.description || [])];
+      const orig = lines(sourceResume), ai = lines(beforeClean), kept = lines(parsed.tailoredResume);
+      console.log("[clean] lines changed by AI:", ai.filter((l, i) => l !== orig[i]).length, "| still changed after clean-up:", kept.filter((l, i) => l !== orig[i]).length);
       // Enforce the checkbox choice: original skills + confirmed skills only, whatever the model returned.
       if (selectedSkills) {
         const original: string[] = Array.isArray(sourceResume?.skills) ? sourceResume.skills : [];

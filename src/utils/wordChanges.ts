@@ -17,7 +17,9 @@ export function wordChanges(before: string, after: string): WordPart[] {
     .filter(part => !part.removed)
     .map(part => {
       const text = part.value.join("");
-      return { text, changed: !!part.added && /\S/.test(text) };
+      // A lone "the" or "a" isn't worth highlighting
+      const onlySmallWord = /^\s*(a|an|the|to|of|for|and|in|on|with|at|by)\s*$/i.test(text);
+      return { text, changed: !!part.added && /\S/.test(text) && !onlySmallWord };
     });
   // Join neighbours with the same state, and a lone space between two changes, into one block
   const joined: WordPart[] = [];

@@ -71,7 +71,7 @@ import { supabaseAuth, supabaseData, type SupabaseSession } from "./lib/supabase
 import { resultEndingsFor, addResultToLine } from "./utils/resultEndings";
 import { backedBy } from "./utils/sameSkill";
 import { yearsOfExperience, yearsInJob } from "./utils/experienceYears";
-import SideBySideReview, { changedLines } from "./components/SideBySideReview";
+import { changedLines } from "./components/SideBySideReview";
 import ResumeReview from "./components/ResumeReview";
 import { validateJobDescriptionText as checkJobDescriptionText, JD_MIN_WORDS, JD_MAX_WORDS } from "./utils/jdValidation";
 
@@ -273,8 +273,6 @@ export default function App() {
   const [isSimplifyingJd, setIsSimplifyingJd] = useState(false);
   const [simplifiedJd, setSimplifiedJd] = useState<SimplifiedJD | null>(null);
   const [diffTab, setDiffTab] = useState<"added" | "modified" | "unchanged">("added");
-  // View popup of a saved version: before/after or the full resume
-  const [versionView, setVersionView] = useState<"compare" | "full">("full");
 
   const [isTailoring, setIsTailoring] = useState(false);
   const [suggestions, setSuggestions] = useState<ResumeSuggestion[]>([]);
@@ -2354,6 +2352,21 @@ export default function App() {
       localStorage.setItem("jd_resume_customizer_versions", JSON.stringify(updated));
       return updated;
     });
+  };
+  // An edit made in a saved resume's View popup: change those lines and save the version
+  const updateSavedVersionLines = (version: SavedResumeVersion, next: EditReview[]) => {
+    const resume: ResumeStructure = JSON.parse(JSON.stringify(version.resumeData));
+    for (const r of next) {
+      const value = r.status === "accepted" ? r.suggested : r.status === "edited" ? r.text.trim() : r.original;
+      if (r.target.kind === "summary") { resume.summary = value; continue; }
+      const item = (r.target.kind === "exp" ? resume.workExperience : (resume.projects || []))?.[r.target.item];
+      if (!item) continue;
+      if (r.target.bullet < item.description.length) item.description[r.target.bullet] = value;
+      else if (value) item.description.push(value);
+    }
+    const updated = { ...version, resumeData: resume };
+    setSavedVersions(prev => prev.map(v => (v.id === version.id ? updated : v)));
+    setSelectedSavedVersion(updated);
   };
   const setReviewStatus = (id: string, status: EditReview["status"], text?: string) =>
     updateEditReviews(tailorReviews.map(r => r.id === id ? { ...r, status, text: text ?? r.text } : r));
@@ -4481,7 +4494,7 @@ WORK EXPERIENCE
                           <button
                             type="button"
                             onClick={() => {
-                              setSelectedSavedVersion(version); setVersionView("full");
+                              setSelectedSavedVersion(version);
                               setShowSavedVersionPreviewModal(true);
                             }}
                             className="px-3 py-1.5 text-sm font-medium text-black rounded-lg border border-neutral-200 hover:bg-neutral-50 transition-colors cursor-pointer"
@@ -7180,7 +7193,7 @@ WORK EXPERIENCE
                         </div>
                       )}
 
-                      {/* Single Panel Tailored Resume (basic mode; AI mode shows before/after above) */}
+                      {/* Single Panel Tailored Resume (basic mode; AI mode shows the editable resume above) */}
                       {!isFullRewrite && <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white w-full">
                         <div className="overflow-y-auto bg-neutral-50" style={{height: '60vh'}}>
                           <ResumePreview
@@ -7575,28 +7588,21 @@ WORK EXPERIENCE
                 </div>
               </div>
 
-              {/* Right Column: before/after, or the full resume */}
+              {/* Right Column: the full resume with this job's changes in yellow; click a line to edit it or add a number */}
               <div className="w-full md:w-7/12 flex flex-col gap-2 font-sans text-left">
-                {selectedSavedVersion.originalResumeData && (
-                  <div className="flex border border-neutral-200 rounded-lg overflow-hidden text-xs self-start" role="tablist" id="version-view-tabs">
-                    <button type="button" role="tab" id="tab-version-full" aria-selected={versionView === "full"} onClick={() => setVersionView("full")}
-                      className={`px-3 py-1.5 border-r border-neutral-200 cursor-pointer ${versionView === "full" ? "bg-neutral-100 text-black font-medium" : "bg-white text-neutral-500 hover:text-black"}`}>Full resume</button>
-                    <button type="button" role="tab" id="tab-version-compare" aria-selected={versionView === "compare"} onClick={() => setVersionView("compare")}
-                      className={`px-3 py-1.5 cursor-pointer ${versionView === "compare" ? "bg-neutral-100 text-black font-medium" : "bg-white text-neutral-500 hover:text-black"}`}>Before / After</button>
-                  </div>
-                )}
-                {selectedSavedVersion.originalResumeData && versionView === "compare" ? (
-                  <div className="max-h-[520px] overflow-y-auto pr-1" id="version-compare">
-                    <SideBySideReview
+                {selectedSavedVersion.originalResumeData ? (
+                  <div className="max-h-[560px] overflow-y-auto pr-1" id="version-review">
+                    <ResumeReview
                       original={selectedSavedVersion.originalResumeData}
+                      current={selectedSavedVersion.resumeData}
                       reviews={changedLines(selectedSavedVersion.originalResumeData, selectedSavedVersion.resumeData)}
-                      readOnly
+                      onChange={(next) => updateSavedVersionLines(selectedSavedVersion, next)}
                     />
                   </div>
                 ) : (
                   <div className="flex flex-col border border-neutral-200 rounded-xl overflow-hidden bg-neutral-50 max-h-[500px] md:max-h-none">
                     <div className="flex-1 overflow-y-auto p-4 bg-neutral-50 scrollbar-thin">
-                      <ResumePreview resume={selectedSavedVersion.resumeData} templateStyle="classic" originalResume={selectedSavedVersion.originalResumeData || undefined} />
+                      <ResumePreview resume={selectedSavedVersion.resumeData} templateStyle="classic" />
                     </div>
                   </div>
                 )}

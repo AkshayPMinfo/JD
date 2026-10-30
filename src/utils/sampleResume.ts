@@ -8,7 +8,7 @@ export const SAMPLE_RESUME: ResumeStructure = {
   fullName: "Riya Mehta (Sample)",
   email: "riya.sample@example.com",
   phone: "+91 90000 00000",
-  summary: "Associate product manager with 2 years of experience building consumer app features with engineering and design teams.",
+  summary: "Associate product manager building consumer app features with engineering and design teams.",
   skills: ["Product Management", "User Research", "Wireframing", "Jira", "Agile", "Stakeholder Management", "Excel", "Communication"],
   languages: ["English", "Hindi"],
   workExperience: [

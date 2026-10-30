@@ -1,3 +1,4 @@
+import { fixSummaryYears } from "../src/utils/experienceYears.js";
 /**
  * Removes puffy words the AI adds on its own ("significantly increased", "meticulously crafted").
  * A word is only removed when the candidate's original resume never used it, so their own
@@ -235,7 +236,7 @@ export function plainResumeWording<T extends { summary?: string; workExperience?
   const match = (list: any[] = [], item: any, i: number) => list.find(x => x?.id && x.id === item?.id) || list[i];
   return {
     ...tailored,
-    summary: dropWeakSentences(clean(tailored.summary, source?.summary || ""), source?.summary || ""),
+    summary: fixSummaryYears(dropWeakSentences(clean(tailored.summary, source?.summary || ""), source?.summary || ""), Array.isArray(source?.workExperience) ? source.workExperience : []),
     workExperience: (tailored.workExperience || []).map((j, i) => {
       const orig = match(source?.workExperience, j, i);
       return { ...j, description: (j.description || []).map((d: any, k: number) => clean(d, orig?.description?.[k] || "")) };

@@ -33,3 +33,27 @@ export function yearsOfExperience(jobs: { duration?: string }[] = [], now: Date 
 export function yearsInJob(duration?: string, now: Date = new Date()): number {
   return yearsOfExperience([{ duration }], now);
 }
+
+/**
+ * Puts the right numbers into a summary from the job dates:
+ * "N years of experience" → total years, "about N years as [title]" → years in that job.
+ * The AI sometimes gets these wrong, so they are never left to it.
+ */
+export function fixSummaryYears(summary: string, jobs: { role?: string; duration?: string }[] = [], now: Date = new Date()): string {
+  if (!summary) return summary;
+  let out = summary;
+  const total = Math.floor(yearsOfExperience(jobs, now));
+  if (total >= 1) {
+    out = out.replace(/\b(\d+)(\+?)(\s+years?\s+of\s+(?:professional\s+|work\s+)?experience)/i,
+      (_m, _n, plus, rest) => `${total}${plus}${rest.replace(/years?/i, total === 1 ? "year" : "years")}`);
+  }
+  out = out.replace(/\b((?:about|over|nearly|around|almost)\s+)?(\d+)\+?\s+(years?)\s+as\s+(an?\s+)?([A-Za-z][\w\s/&-]{2,60}?)(?=[.,;]|\s+(?:at|in|with|and)\b|$)/gi,
+    (match, about = "", _n, _unit, article = "", title) => {
+      const job = jobs.find(j => j.role && j.role.toLowerCase().trim() === title.toLowerCase().trim())
+        || jobs.find(j => j.role && title.toLowerCase().includes(j.role.toLowerCase().trim()));
+      if (!job) return match;
+      const n = Math.max(1, Math.round(yearsInJob(job.duration, now)));
+      return `${about}${n} ${n === 1 ? "year" : "years"} as ${article}${title}`;
+    });
+  return out;
+}

@@ -5,7 +5,7 @@
 import { Checks } from "./helpers.ts";
 import { checkResume, weakWordsIn } from "../../src/utils/resumeChecks.ts";
 import { educationGoesFirst } from "../../src/utils/educationOrder.ts";
-import { yearsOfExperience } from "../../src/utils/experienceYears.ts";
+import { yearsOfExperience, fixSummaryYears } from "../../src/utils/experienceYears.ts";
 
 const t = new Checks();
 const job = (n: number, extra = "") => ({ id: "j", role: "PM", company: `Co${n}`, duration: "2022 - 2024", description: Array.from({ length: n }, (_, i) => `Did task ${i}${extra}`) });
@@ -41,4 +41,11 @@ t.check("Y2", "Overlapping jobs count once", yearsOfExperience([{ duration: "Jan
 t.check("Y3", "Still working there → up to today", yearsOfExperience([{ duration: "Jun 2023 - Present" }], now) > 3);
 t.check("Y4", "An internship of 5 months is under 2 years", yearsOfExperience([{ duration: "Jan 2023 - May 2023" }]) < 2);
 t.check("Y5", "No dates → 0", yearsOfExperience([{ duration: "" }]) === 0);
+const riya = [{ role: "Associate Product Manager", duration: "Jun 2023 - Present" }, { role: "Business Analyst Intern", duration: "Jan 2023 - May 2023" }];
+const fixedRiya = fixSummaryYears("3 years of experience in product, including about 2 years as an Associate Product Manager.", riya, now);
+t.check("Y6", `Wrong years in a title are fixed → "${fixedRiya}"`, fixedRiya.includes("about 3 years as an Associate Product Manager"));
+const fixedTotal = fixSummaryYears("9 years of experience across marketing, including about 2 years as Associate Product Manager.", akshay, now);
+t.check("Y7", `Wrong total is fixed → "${fixedTotal}"`, fixedTotal.startsWith("7 years of experience"));
+t.check("Y8", "Right numbers are left alone", fixSummaryYears("7 years of experience across X, including about 2 years as Associate Product Manager.", akshay, now) === "7 years of experience across X, including about 2 years as Associate Product Manager.");
+t.check("Y9", "A title not in the resume is left alone", fixSummaryYears("Worked 4 years as a pilot.", akshay, now) === "Worked 4 years as a pilot.");
 process.exit(t.report("Resume checks"));

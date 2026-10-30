@@ -2218,7 +2218,7 @@ export default function App() {
     const originalNumbers = numbersOf(originalText);
     const SENIORITY = ["senior", "lead", "principal", "staff engineer", "head of", "expert", "chief", "director"];
     // Everyday job-post words that don't make a claim on their own
-    const GENERIC = new Set("about across ability reason reasons find finding able analyse analysis analyze based build building candidate clear closely comfort company cross customer customers daily deliver delivery design drive ensure every excellent experience familiarity features functional great growth hands help high hiring ideal impact including improve join knowledge launch looking manage manager managing metrics multiple needs other plus preferred prioritise prioritize product products quality required requirements responsibilities responsible results role strong success support teams their these things through tools track understanding using users within working world would years".split(" ").map(w => stem(w)));
+    const GENERIC = new Set("about across ability reason reasons find finding conduct conducted able analyse analysis analyze based build building candidate clear closely comfort company cross customer customers daily deliver delivery design drive ensure every excellent experience familiarity features functional great growth hands help high hiring ideal impact including improve join knowledge launch looking manage manager managing metrics multiple needs other plus preferred prioritise prioritize product products quality required requirements responsibilities responsible results role strong success support teams their these things through tools track understanding using users within working world would years".split(" ").map(w => stem(w)));
     const wordsOf = (text: string) => (text.toLowerCase().match(/[a-z][a-z0-9+#/-]{4,}/g) || []);
     const stemsOf = (text: string) => new Map(wordsOf(text).map(w => [stem(w), w] as [string, string]));
     const jdStems = new Set([...stemsOf(jdText).keys()].filter(st => !GENERIC.has(st)));
@@ -2240,12 +2240,14 @@ export default function App() {
       return warnings;
     };
     // Results the line now claims that the original line didn't ("increased footfall", "boosted revenue")
-    const RESULT_WORDS = ["increas", "boost", "grew", "grow", "drove", "driv", "rais", "reduc", "cut ", "doubl", "tripl", "accelerat", "maximi", "enhanc", "improv", "generat"];
+    const RESULT_WORDS = ["increas", "boost", "grew", "grow", "drove", "driv", "rais", "reduc", "cut ", "doubl", "tripl", "accelerat", "maximi", "enhanc", "improv"];
     const resultWarning = (sugg: string, orig: string): string | null => {
       const s2 = sugg.toLowerCase(), o2 = orig.toLowerCase();
       // Only when the original line states no result at all ("raising coverage" -> "increased coverage" is fine)
       if (RESULT_WORDS.some(w => o2.includes(w))) return null;
-      return RESULT_WORDS.some(w => s2.includes(w)) ? "Claims a result your original line doesn't mention" : null;
+      // "Generated weekly reports" is not a result; "generated ₹2L revenue" is
+      const generatesResult = /generat\w*\s+(?:\S+\s+){0,3}?(?:[₹$€£]|\d|revenue|leads|sales|savings|profit)/.test(s2);
+      return RESULT_WORDS.some(w => s2.includes(w)) || generatesResult ? "Claims a result your original line doesn't mention" : null;
     };
     const reviews: EditReview[] = [];
     const push = (label: string, orig: string, sugg: string, target: EditReview["target"], id: string) => {

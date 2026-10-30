@@ -1,3 +1,4 @@
+import { keepSkillsNamedInJd } from "./skillsInJd.js";
 import express from "express";
 import path from "path";
 import { GoogleGenAI, Type } from "@google/genai";
@@ -993,6 +994,12 @@ function withRulesSafetyNet(ai: any, jdText?: string) {
   }
   if (!Array.isArray(result.keywordsToTarget) || result.keywordsToTarget.length === 0) result.keywordsToTarget = rules.keywordsToTarget;
   if (!Array.isArray(result.keyResponsibilities) || result.keyResponsibilities.length === 0) result.keyResponsibilities = rules.keyResponsibilities;
+  // Only skills the job post actually names (the AI sometimes adds guesses like "Amplitude")
+  if (Array.isArray(result.requiredSkills)) {
+    const before = result.requiredSkills.length;
+    result.requiredSkills = keepSkillsNamedInJd(result.requiredSkills, jdText);
+    if (result.requiredSkills.length < before) console.log("[simplify-jd] dropped skills the post doesn't name:", before - result.requiredSkills.length);
+  }
   return result;
 }
 

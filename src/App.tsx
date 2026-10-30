@@ -6681,9 +6681,11 @@ WORK EXPERIENCE
                     {currentUser?.isGuest && " Create a free account for 5 a day."}
                   </div>
                 ) : aiCredits.status === "ok" ? (
-                  <p id="ai-credits-left" className="mt-3 text-xs text-neutral-500">
-                    AI tailorings left today: {aiCredits.remaining} of {aiCredits.limit}
-                  </p>
+                  <div id="ai-credits-left" className="mt-3 rounded-lg bg-neutral-50 px-3 py-2 text-xs text-neutral-600 leading-relaxed">
+                    <span className="font-medium text-neutral-800">AI tailorings left today: {aiCredits.remaining} of {aiCredits.limit}.</span>{" "}
+                    You get {aiCredits.limit} a day. After that, tailoring uses basic mode until midnight: your ticked skills are added and keywords are checked, but lines aren't rewritten.
+                    {currentUser?.isGuest && " Create a free account for 5 a day."}
+                  </div>
                 ) : aiCredits.status === "not-signed-in" ? (
                   <p className="mt-3 text-xs text-amber-700">Your sign-in has expired, so this uses basic mode (no AI). Sign in again to use AI.</p>
                 ) : null

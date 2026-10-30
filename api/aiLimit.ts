@@ -1,6 +1,6 @@
 /**
  * Daily AI limit, stored in Supabase (supabase/migrations/20261027000000_ai_daily_limit.sql):
- * 3 AI tailorings a day for signed-in users, 1 for guests. Past the limit the app uses the
+ * 5 AI tailorings a day for signed-in users (20261031000000_ai_limit_5.sql), 1 for guests. Past the limit the app uses the
  * no-AI (rules) mode instead.
  *
  * The count is tied to the person's Supabase sign-in, so the browser sends its access token

@@ -6641,7 +6641,7 @@ WORK EXPERIENCE
                 aiCredits.status === "limit-reached" ? (
                   <div id="ai-limit-note" className="mt-4 rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-900 leading-relaxed">
                     You've used today's {aiCredits.limit} AI {aiCredits.limit === 1 ? "tailoring" : "tailorings"}. This one uses basic mode: your ticked skills are added and keywords are checked, but lines aren't rewritten. AI is back {resetsInText(aiCredits.resetsAt)}.
-                    {currentUser?.isGuest && " Create a free account for 3 a day."}
+                    {currentUser?.isGuest && " Create a free account for 5 a day."}
                   </div>
                 ) : aiCredits.status === "ok" ? (
                   <p id="ai-credits-left" className="mt-3 text-xs text-neutral-500">

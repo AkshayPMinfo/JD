@@ -3,7 +3,7 @@ import { Resume, ResumeStructure, Block, Item, TailoredResume } from "../types";
 import { Mail, Phone, Linkedin, Globe } from "lucide-react";
 import { resumeStructureToResume } from "../utils/resumeConverter";
 import { findBestMatch } from "../utils/diffUtils";
-import { diffWords } from "diff";
+import { wordChanges } from "../utils/wordChanges";
 
 interface ResumePreviewProps {
   resume: Resume | ResumeStructure;
@@ -99,21 +99,20 @@ export default function ResumePreview({
       return <>{value}</>;
     }
 
-    const changes = diffWords(match, value);
+    const changes = wordChanges(match, value);
     return (
       <>
         {changes.map((part, index) => {
-          if (part.removed) return null;
-          if (part.added) {
-            const hasMetric = /[\d%$\b\w]+/.test(part.value) && /[\d%$\/]+/.test(part.value);
+          if (part.changed) {
+            const hasMetric = /[\d%$\/]+/.test(part.text);
             const cls = hasMetric ? "add-both" : "add-kw";
             return (
               <span key={index} className={cls}>
-                {part.value}
+                {part.text}
               </span>
             );
           }
-          return <span key={index}>{part.value}</span>;
+          return <span key={index}>{part.text}</span>;
         })}
       </>
     );

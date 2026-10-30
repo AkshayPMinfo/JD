@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { diffWords } from "diff";
+import { wordChanges } from "../utils/wordChanges";
 import type { ResumeStructure } from "../types";
 import type { ReviewLine } from "./SideBySideReview";
 import { resultEndingsFor, addResultToLine } from "../utils/resultEndings";
@@ -32,10 +32,10 @@ function Highlighted({ before, after }: { before: string; after: string }) {
   if (!before.trim() || before === after) return <>{before.trim() ? after : <mark className="bg-yellow-300 text-yellow-950 rounded-sm">{after}</mark>}</>;
   return (
     <>
-      {diffWords(before, after, { ignoreCase: true }).map((part, i) =>
-        part.removed ? null : part.added
-          ? <mark key={i} className="bg-yellow-300 text-yellow-950 rounded-sm">{part.value}</mark>
-          : <span key={i}>{part.value}</span>
+      {wordChanges(before, after).map((part, i) =>
+        part.changed
+          ? <mark key={i} className="bg-yellow-300 text-yellow-950 rounded-sm">{part.text}</mark>
+          : <span key={i}>{part.text}</span>
       )}
     </>
   );

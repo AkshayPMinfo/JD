@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { diffWords } from "diff";
+import { wordChanges } from "../utils/wordChanges";
 import type { ResumeStructure } from "../types";
 import { resultEndingsFor, addResultToLine } from "../utils/resultEndings";
 
@@ -52,16 +52,16 @@ const currentText = (r: ReviewLine | undefined, fallback: string) => {
   return r.original || fallback;
 };
 
-/** Changed words in green; removed words are simply left out (the "Before" column shows them) */
+/** Changed words in yellow; removed words are simply left out (the "Before" column shows them) */
 function Highlighted({ before, after }: { before: string; after: string }) {
   if (!before.trim() || before === after) return <>{after}</>;
   return (
     <>
-      {diffWords(before, after, { ignoreCase: true }).map((part, i) =>
-        part.removed ? null : part.added ? (
-          <span key={i} className="bg-yellow-300 text-yellow-950 rounded-sm">{part.value}</span>
+      {wordChanges(before, after).map((part, i) =>
+        part.changed ? (
+          <span key={i} className="bg-yellow-300 text-yellow-950 rounded-sm">{part.text}</span>
         ) : (
-          <span key={i}>{part.value}</span>
+          <span key={i}>{part.text}</span>
         )
       )}
     </>

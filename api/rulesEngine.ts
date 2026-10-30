@@ -719,18 +719,24 @@ const NOT_SKILLS = new Set(("requirements responsibilities requirement responsib
   "bengaluru bangalore mumbai pune chennai hyderabad delhi gurugram gurgaon noida kolkata ahmedabad san francisco new york london us usa " +
   "uk ideally preferred required must bsc msc btech mba degree bachelor master a an and or of in with for to on at by is are be will " +
   "if as from your their they it its play store app apps product products customers customer users user people million " +
-  "ui pm ca tools tool similar standards targets building using working shipping").split(" "));
+  "ui pm ca tools tool similar standards targets building using working shipping providers provider scenarios organizations " +
+  "organisations partners solutions services businesses enterprises").split(" "));
 
 // Second pass for skills the catalog doesn't know: names like "Firebase", "Zendesk", "BLS", and
 // phrases after "experience with", "skills in", "knowledge of" in requirement sentences.
 function findExtraSkills(jdText: string, known: string[], title: string, company: string): string[] {
   const knownKeys = new Set(known.map(k => k.toLowerCase()));
-  const skipWords = new Set([...title.toLowerCase().split(/\s+/), ...company.toLowerCase().split(/\s+/)].filter(Boolean));
+  // The employer's name repeats all over a posting ("Sophos" 15 times); a capitalised word used 4+ times
+  // that isn't a known skill is the company, not a skill
+  const counts = new Map<string, number>();
+  for (const w of jdText.match(/\b[A-Z][a-z]{2,}\b/g) || []) counts.set(w, (counts.get(w) || 0) + 1);
+  const frequentNames = [...counts].filter(([w, n]) => n >= 4 && !known.some(k => k.toLowerCase() === w.toLowerCase())).map(([w]) => w.toLowerCase());
+  const skipWords = new Set([...title.toLowerCase().split(/\s+/), ...company.toLowerCase().split(/\s+/), ...frequentNames].filter(Boolean));
   const out: string[] = [];
   const knownWords = new Set(known.flatMap(k => k.toLowerCase().split(/\s+/)));
   const add = (raw: string) => {
     const name = raw
-      .replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim()
+      .replace(/\([^)]*\)/g, " ").replace(/[()[\]]/g, " ").replace(/\s+/g, " ").trim()
       .replace(/^(the|a|an|strong|solid|good|deep|basic|working|advanced|hands-on|modern|similar|maintaining|ideally( with)?|comfort(able)?( with| writing)?|experience( with| building| in)?)\s+/i, "")
       .replace(/\s+(skills?|targets?|standards?|tools?|experience)$/i, "")
       .replace(/[\s,.;:]+$/, "").replace(/\s+/g, " ").trim();
@@ -738,6 +744,8 @@ function findExtraSkills(jdText: string, known: string[], title: string, company
     // a single word that's part of a skill we already have ("Power" from "Power BI", "Ind" from "Ind AS")
     if (!key.includes(" ") && knownWords.has(key)) return;
     if (!name || name.length < 2 || name.length > 32 || name.split(/\s+/).length > 3) return;
+    // "multi-tenant scenarios", "managed service providers", "integration with XDR" are descriptions, not skills
+    if (/\s(with|for|of)\s/i.test(name) || /\s(scenarios?|providers?|offerings?|partners?|organi[sz]ations?|use cases?)$/i.test(name)) return;
     if (knownKeys.has(key) || out.some(o => o.toLowerCase() === key)) return;
     if (key.split(/\s+/).every(w => NOT_SKILLS.has(w) || skipWords.has(w))) return;
     if (/\d/.test(name) && !/^[A-Z0-9.+#-]+$/.test(name)) return; // "3+ years" etc.

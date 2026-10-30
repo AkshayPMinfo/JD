@@ -72,6 +72,7 @@ import { resultEndingsFor, addResultToLine } from "./utils/resultEndings";
 import { backedBy } from "./utils/sameSkill";
 import { yearsOfExperience } from "./utils/experienceYears";
 import SideBySideReview, { changedLines } from "./components/SideBySideReview";
+import ResumeReview from "./components/ResumeReview";
 import { validateJobDescriptionText as checkJobDescriptionText, JD_MIN_WORDS, JD_MAX_WORDS } from "./utils/jdValidation";
 
 const SUPABASE_SESSION_STORAGE_KEY = "jd_resume_customizer_supabase_session";
@@ -571,6 +572,8 @@ export default function App() {
   const [feedbackAsked, setFeedbackAsked] = useState(() => {
     try { return localStorage.getItem("jd_resume_customizer_feedback_asked") === "1"; } catch { return false; }
   });
+  // Feedback asked once on the review screen (for people who never download); thanks stays visible there
+  const [reviewFeedbackSent, setReviewFeedbackSent] = useState(false);
   const markFeedbackAsked = () => {
     setFeedbackAsked(true);
     try { localStorage.setItem("jd_resume_customizer_feedback_asked", "1"); } catch { /* private window */ }
@@ -2521,7 +2524,7 @@ export default function App() {
           const years = yearsOfExperience(selectedResume.workExperience || []);
           reviews = years >= 2
             ? reviews.map(r => r.target.kind === "summary"
-              ? { ...r, status: "pending" as const, note: `Suggested summary for your ${Math.floor(years)}+ years of experience. Recruiters read these 2–4 lines first: years, industry, top skills. Add it, or click the line to write your own.` }
+              ? { ...r, status: "pending" as const, note: `You didn't have a summary. Here's one from your ${Math.floor(years)}+ years of experience (recruiters read it first). Keep it or remove it; you can edit it after keeping.` }
               : r)
             : reviews.filter(r => r.target.kind !== "summary");
         }
@@ -7130,7 +7133,7 @@ WORK EXPERIENCE
 
                       {/* Before and after, side by side: safe edits already in, claims wait for one click */}
                       {isFullRewrite && tailorReviewBase && (
-                        <SideBySideReview original={tailorReviewBase.original} reviews={tailorReviews} onChange={updateEditReviews} />
+                        <ResumeReview original={tailorReviewBase.original} current={tailoredResultResume || tailorReviewBase.original} reviews={tailorReviews} onChange={updateEditReviews} />
                       )}
 
                       {/* Highlight controls, only when something actually changed */}
@@ -7278,6 +7281,15 @@ WORK EXPERIENCE
                     </div>
                     <span className="text-[11px] text-neutral-500">Only the name, headings and lines change. Applies to PDF and Word.</span>
                   </div>
+                  {(!feedbackAsked || reviewFeedbackSent) && (
+                    <div className="border border-neutral-200 rounded-xl p-4 bg-white" id="review-feedback">
+                      <FeedbackBox
+                        title="How is this resume?"
+                        onSend={async (rating, comment) => { setReviewFeedbackSent(true); await handleSendFeedback(rating, comment, "review_screen"); }}
+                        onSkip={markFeedbackAsked}
+                      />
+                    </div>
+                  )}
                   <details id="full-preview" className="border border-neutral-200 rounded-xl overflow-hidden bg-white w-full">
                     <summary className="cursor-pointer select-none px-4 py-2.5 text-sm font-semibold text-black">See the full resume as it will download</summary>
                     <div className="overflow-y-auto bg-neutral-50 resume-accent-preview" style={{height: '62vh', ["--resume-accent" as any]: resumeColor === "classic" ? undefined : resumeColorHex(resumeColor)}}>

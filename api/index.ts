@@ -1346,6 +1346,14 @@ app.post("/api/tailor-resume", async (req, res) => {
 - Add to Resume.skills ONLY skills from this confirmed list (plus the original skills). Do not add any other skill.
 - You may mention a confirmed skill in a bullet point only where the original bullet already describes related work. Never invent projects, employers, numbers or results.`
       : "";
+    // Skills the candidate already lists that the job post also asks for: the AI should put these into bullets
+    const escRe = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const sharedSkills: string[] = (Array.isArray(sourceResume?.skills) ? sourceResume.skills : [])
+      .filter((sk: string) => sk && new RegExp(`(^|[^a-z0-9])${escRe(sk.toLowerCase())}([^a-z0-9]|$)`).test(String(jdText).toLowerCase()));
+    console.log("[tailor-resume] shared skills to use:", sharedSkills.join(", ") || "none");
+    const sharedSkillsNote = sharedSkills.length
+      ? `\n\nKEYWORDS TO USE: These skills are in the candidate's own skills list AND the job asks for them: ${sharedSkills.join(", ")}. Put each one into at least one experience or project bullet where it truthfully fits that work (e.g. sprint planning -> "in Jira", dashboards -> "in Excel"). Do not force one into a bullet where it doesn't fit.`
+      : "";
     const careerSwitchNote = careerSwitch
       ? `\n\nCAREER CHANGE: The candidate is moving from ${careerSwitch.fromField} (most recent role: ${careerSwitch.fromRole}) into ${careerSwitch.toField} (target role: ${careerSwitch.toRole}).
 - Do NOT present them as already having worked as a ${careerSwitch.toRole} or in ${careerSwitch.toField}. Keep every job title exactly as written.
@@ -1355,7 +1363,8 @@ app.post("/api/tailor-resume", async (req, res) => {
     // Always on: the candidate reviews every edit, but the model shouldn't invent claims in the first place
     const honestyRules = `\n\nHONESTY RULES (strict, these override everything below):
 - Never add a number, percentage, metric, uptime, team size, user count, revenue figure or years of experience that is not already written somewhere in the original resume.
-- Never add a tool, method or skill (for example "A/B testing", "Docker", "design systems") to a bullet unless that bullet's original text already describes it, or it is one of the CONFIRMED SKILLS and fits that bullet.
+- Never add a tool, method or skill (for example "A/B testing", "Docker", "design systems") to a bullet unless that bullet's original text already describes it, it is listed in the original resume's skills, or it is one of the CONFIRMED SKILLS, and it fits that bullet's work.
+- DO use skills and tools from the resume's own skills list inside bullets where they fit the work, especially ones the job description asks for (for example "Ran weekly sprint planning" -> "Ran weekly sprint planning in Jira" when Jira is in the skills list). This is how keywords reach the lines recruiters read.
 - Never add or raise seniority: do not add words like "Senior", "Lead", "Principal", "Expert" or "Head of" unless the original job title already contains them, and never describe the candidate using the target job's title.
 - Only state years of experience if the original summary already states them, and use exactly that figure.
 - Improve EVERY bullet so a recruiter sees the value in 5 seconds. Use this shape: strong past-tense verb + WHAT you did + HOW (tools, methods or people already named in the resume) + RESULT (only if the original line states one). Example: "Ran weekly sprint planning with engineers and designers." -> "Led weekly sprint planning in Jira with engineers and designers to keep releases on schedule." only if Jira appears in the resume; otherwise "Led weekly sprint planning with engineers and designers to keep releases on schedule."
@@ -1374,7 +1383,7 @@ PLAIN WORDING (strict):
 - Never write in the first person (no "I", "me", "my") and never use "aspiring", "motivated", "passionate" or "committed to".
 - Never mention the job, role or job description inside a bullet, and never end a bullet with "demonstrating ...", "showcasing ...", "highlighting ...", "aligning with ..." or "reflecting ...". A bullet describes what the candidate did, nothing else.
 - The summary must never name the hiring company, and must not use phrases like "eager to", "looking to leverage", "passionate about" or "a leading platform like". Describe the candidate, not the employer.`;
-    const prompt = `You are a veteran HR Consultant and senior Resume Writer. Your task is to review the Candidate's Resume and tailor it to better align with the requirements in the Job Description, preserving factual honesty but boosting keyword matching, professional tone, and clarity.${honestyRules}${confirmedSkillsNote}${careerSwitchNote}
+    const prompt = `You are a veteran HR Consultant and senior Resume Writer. Your task is to review the Candidate's Resume and tailor it to better align with the requirements in the Job Description, preserving factual honesty but boosting keyword matching, professional tone, and clarity.${honestyRules}${confirmedSkillsNote}${sharedSkillsNote}${careerSwitchNote}
 
 Candidate's Original Resume:
 ${JSON.stringify(sourceResume, null, 2)}

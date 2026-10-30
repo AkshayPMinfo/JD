@@ -64,4 +64,5 @@ same("W3", "Drops 'Possesses foundational understanding…' from the summary", d
 same("W4", "Keeps the summary if every sentence is vague (never empties it)", dropWeakSentences("Possesses exposure to payments."), "Possesses exposure to payments.");
 same("T1", "'engagement .' becomes 'engagement.'", tidySpacing("increasing online engagement ."), "increasing online engagement.");
 same("T2", "'teams ,and' becomes 'teams, and'", tidySpacing("with teams ,and partners"), "with teams, and partners");
+same("W5", "Keeps decimals whole ('about 1.8 years')", dropWeakSentences("7 years of experience across product and marketing, including about 1.8 years as an Associate Product Manager. Skilled in Jira."), "7 years of experience across product and marketing, including about 1.8 years as an Associate Product Manager. Skilled in Jira.");
 process.exit(t.report("Plain wording"));

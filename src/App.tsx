@@ -70,7 +70,7 @@ import ResumePreview from "./components/ResumePreview";
 import { supabaseAuth, supabaseData, type SupabaseSession } from "./lib/supabase";
 import { resultEndingsFor, addResultToLine } from "./utils/resultEndings";
 import { backedBy } from "./utils/sameSkill";
-import { yearsOfExperience } from "./utils/experienceYears";
+import { yearsOfExperience, yearsInJob } from "./utils/experienceYears";
 import SideBySideReview, { changedLines } from "./components/SideBySideReview";
 import ResumeReview from "./components/ResumeReview";
 import { validateJobDescriptionText as checkJobDescriptionText, JD_MIN_WORDS, JD_MAX_WORDS } from "./utils/jdValidation";
@@ -2201,8 +2201,11 @@ export default function App() {
   // `warnings` = new claims the original resume never made anywhere: numbers, JD skills, seniority.
   const buildEditReviews = (original: ResumeStructure, tailored: ResumeStructure, ticked: string[], jdSkills: string[] = [], jdText = ""): EditReview[] => {
     const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // whole-word match, allowing a plural ("PRD" matches "PRDs")
-    const has = (text: string, skill: string) => new RegExp(`(^|[^a-z0-9])${esc(skill.toLowerCase())}(e?s)?([^a-z0-9]|$)`, "i").test(text.toLowerCase());
+    // whole word, singular or plural either way ("Payments" ticked matches "payment solutions")
+    const has = (text: string, skill: string) => {
+      const base = skill.toLowerCase().trim().replace(/(?<=[a-z]{3})s$/, "");
+      return new RegExp(`(^|[^a-z0-9])${esc(base)}(e?s)?([^a-z0-9]|$)`, "i").test(text.toLowerCase());
+    };
     const newMentions = (suggested: string, orig: string) => ticked.filter(sk => has(suggested, sk) && !has(orig, sk));
     const originalText = [
       original.summary, ...(original.skills || []), ...(original.certifications || []), ...(original.achievements || []),
@@ -2251,6 +2254,20 @@ export default function App() {
       reviews.push({ id, label, original: orig, suggested: sugg.trim(), text: sugg.trim(), status: "pending", mentions: newMentions(sugg, orig), warnings: [...claimWarnings(sugg), ...(result ? [result] : [])], target });
     };
     push("Professional summary", original.summary || "", tailored.summary || "", { kind: "summary" }, "summary");
+    // "Associate Product Manager with 7 years" when only 2 of them were in that role
+    {
+      const sr = reviews.find(r => r.id === "summary");
+      const latest = (original.workExperience || [])[0];
+      const m = sr?.suggested.match(/^(.{3,80}?)\s+with\s+(?:about\s+|over\s+|nearly\s+)?(\d+)\+?\s+years/i);
+      if (sr && latest?.role && m) {
+        const roleWords = latest.role.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        const saysRole = roleWords.length > 0 && roleWords.every(w => m[1].toLowerCase().includes(w));
+        const inRole = yearsInJob(latest.duration);
+        if (saysRole && Number(m[2]) > Math.ceil(inRole) + 1) {
+          sr.warnings.push(`Says ${m[2]} years as ${latest.role}; your dates show about ${Math.max(1, Math.round(inRole))} in that role`);
+        }
+      }
+    }
     (original.workExperience || []).forEach((job, i) => {
       const tJob = (tailored.workExperience || []).find(t => t.id && t.id === job.id) || (tailored.workExperience || [])[i];
       if (!tJob) return;
@@ -2524,7 +2541,7 @@ export default function App() {
           const years = yearsOfExperience(selectedResume.workExperience || []);
           reviews = years >= 2
             ? reviews.map(r => r.target.kind === "summary"
-              ? { ...r, status: "pending" as const, note: `You didn't have a summary. Here's one from your ${Math.floor(years)}+ years of experience (recruiters read it first). Keep it or remove it; you can edit it after keeping.` }
+              ? { ...r, status: "pending" as const, note: `You didn't have a summary. Here's one from your ${Math.floor(years)}+ years of experience (recruiters read it first). Keep it, edit it or remove it.` }
               : r)
             : reviews.filter(r => r.target.kind !== "summary");
         }

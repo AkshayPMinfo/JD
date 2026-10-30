@@ -28,3 +28,8 @@ export function yearsOfExperience(jobs: { duration?: string }[] = [], now: Date 
   months += curEnd - curStart;
   return Math.round((months / 12) * 10) / 10;
 }
+
+/** Years in one job, e.g. "January, 2023 - October, 2024" -> 1.8 */
+export function yearsInJob(duration?: string, now: Date = new Date()): number {
+  return yearsOfExperience([{ duration }], now);
+}

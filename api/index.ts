@@ -4,7 +4,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { getAiCredits, useAiCredit, aiAllowed, bearerToken } from "./aiLimit.js";
 import { plainResumeWording } from "./plainWording.js";
 import { repairSplitEmail } from "./contactRepair.js";
-import { yearsOfExperience } from "../src/utils/experienceYears.js";
+import { yearsOfExperience, yearsInJob } from "../src/utils/experienceYears.js";
 import dotenv from "dotenv";
 import mammoth from "mammoth";
 import { getDocumentProxy, extractText } from "unpdf";
@@ -1358,7 +1358,11 @@ app.post("/api/tailor-resume", async (req, res) => {
       : "";
     // Total years from the job dates, so the summary states them correctly
     const totalYears = yearsOfExperience(Array.isArray(sourceResume?.workExperience) ? sourceResume.workExperience : []);
-    const yearsNote = totalYears >= 1 ? `\n\nEXPERIENCE: From the job dates, the candidate has about ${Math.floor(totalYears)} years of work experience in total. If you state years in the summary, use this figure.` : "";
+    const jobYears = (Array.isArray(sourceResume?.workExperience) ? sourceResume.workExperience : [])
+      .map((j: any) => `${j.role || "Role"} at ${j.company || "a company"}: about ${Math.max(1, Math.round(yearsInJob(j.duration)))} years`).join("; ");
+    const yearsNote = totalYears >= 1 ? `\n\nEXPERIENCE: From the job dates, the candidate has about ${Math.floor(totalYears)} years of work experience in total. By job: ${jobYears}.
+- Never give the total years to the latest job title (wrong: "Associate Product Manager with 7 years of experience" when only 2 of those years were as a product manager).
+- Start the summary with "${Math.floor(totalYears)} years of experience across [the fields they worked in], including about N years as [latest title]" (whole years, from the by-job figures). Do not put the job title in front of the total years.` : "";
     const careerSwitchNote = careerSwitch
       ? `\n\nCAREER CHANGE: The candidate is moving from ${careerSwitch.fromField} (most recent role: ${careerSwitch.fromRole}) into ${careerSwitch.toField} (target role: ${careerSwitch.toRole}).
 - Do NOT present them as already having worked as a ${careerSwitch.toRole} or in ${careerSwitch.toField}. Keep every job title exactly as written.

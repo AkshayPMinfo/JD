@@ -212,7 +212,8 @@ const WEAK_SENTENCE = /\b(possess(es)?|foundational understanding|basic understa
 /** Drop summary sentences that only claim vague understanding; keep the factual ones. */
 export function dropWeakSentences(summary: string, originalSummary = ""): string {
   if (!summary) return summary;
-  const sentences = summary.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [summary];
+  // split only where a full stop is followed by a space, so "1.8 years" stays whole
+  const sentences = summary.split(/(?<=[.!?])\s+/).filter(Boolean);
   const kept = sentences.filter(sn => !WEAK_SENTENCE.test(sn) || WEAK_SENTENCE.test(originalSummary));
   return (kept.length ? kept : sentences).join(" ").replace(/\s{2,}/g, " ").trim();
 }

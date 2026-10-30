@@ -82,15 +82,43 @@ export default function ResumeReview({ original, current, reviews, onChange }: P
 
     if (held && r) {
       const isSummary = id === "summary";
+      const editingHeld = openId === id && editing;
+      // On a suggested summary, only flag years that don't match the job dates (the numbers come from those dates)
+      const extra = r.note ? (r.warnings.find(w => /^Says \d+ years as/.test(w)) || "") : "";
       return (
         <div key={id} id={`rv-${id}`} className={`${bullet ? "ml-4" : ""} my-1.5 rounded-lg border border-orange-300 bg-orange-50 px-3 py-2`}>
           <p className="text-xs text-orange-800 mb-1">
             {r.note || (isSummary ? "You didn't have a summary. We suggest one:" : `${shortReason(r)}. Keep it only if it's true.`)}
           </p>
-          <p className="text-sm leading-relaxed text-orange-950">{bullet ? "• " : ""}{r.suggested}</p>
+          {extra && <p className="text-xs font-medium text-orange-900 mb-1" id={`rv-warn-${id}`}>Check: {extra}.</p>}
+          {editingHeld ? (
+            <textarea
+              id={`rv-held-edit-${id}`}
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (draft.trim()) update(id, { status: "edited", text: draft.trim() }); close(); }
+                if (e.key === "Escape") { e.stopPropagation(); close(); }
+              }}
+              className="w-full bg-white border border-orange-300 rounded-lg px-2.5 py-1.5 text-sm leading-relaxed focus:outline-none focus:border-orange-400 min-h-[72px]"
+            />
+          ) : (
+            <p className="text-sm leading-relaxed text-orange-950">{bullet ? "• " : ""}{r.suggested}</p>
+          )}
           <div className="flex gap-2 mt-2">
-            <button type="button" id={`rv-keep-${id}`} onClick={() => update(id, { status: "accepted" })} className="px-3 py-1 text-xs font-medium rounded-md bg-[#2563eb] hover:bg-blue-600 text-white cursor-pointer">Keep</button>
-            <button type="button" id={`rv-remove-${id}`} onClick={() => update(id, { status: "skipped" })} className="px-3 py-1 text-xs font-medium rounded-md border border-orange-300 bg-white text-orange-900 hover:bg-orange-100 cursor-pointer">Remove</button>
+            {editingHeld ? (
+              <>
+                <button type="button" id={`rv-held-save-${id}`} onClick={() => { if (draft.trim()) update(id, { status: "edited", text: draft.trim() }); close(); }} className="px-3 py-1 text-xs font-medium rounded-md bg-[#2563eb] hover:bg-blue-600 text-white cursor-pointer">Save</button>
+                <button type="button" onClick={close} className="px-3 py-1 text-xs font-medium rounded-md text-orange-900 hover:bg-orange-100 cursor-pointer">Cancel</button>
+              </>
+            ) : (
+              <>
+                <button type="button" id={`rv-keep-${id}`} onClick={() => update(id, { status: "accepted" })} className="px-3 py-1 text-xs font-medium rounded-md bg-[#2563eb] hover:bg-blue-600 text-white cursor-pointer">Keep</button>
+                <button type="button" id={`rv-edit-held-${id}`} onClick={() => { setOpenId(id); setDraft(r.suggested); setEditing(true); setPick(null); }} className="px-3 py-1 text-xs font-medium rounded-md border border-orange-300 bg-white text-orange-900 hover:bg-orange-100 cursor-pointer">Edit</button>
+                <button type="button" id={`rv-remove-${id}`} onClick={() => update(id, { status: "skipped" })} className="px-3 py-1 text-xs font-medium rounded-md border border-orange-300 bg-white text-orange-900 hover:bg-orange-100 cursor-pointer">Remove</button>
+              </>
+            )}
           </div>
         </div>
       );

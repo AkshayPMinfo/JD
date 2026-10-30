@@ -151,9 +151,10 @@ async function extractTextFromPdfProxy(pdfData: any): Promise<string> {
         const left = allItems.filter(it => it.x < candidate && !crosses(it));
         const right = allItems.filter(it => it.x >= candidate);
         const lines = (list: TextItem[]) => new Set(list.map(it => Math.round(it.y / 3))).size;
-        const xCount = new Map<number, number>();
-        right.forEach(it => xCount.set(Math.round(it.x), (xCount.get(Math.round(it.x)) || 0) + 1));
-        const sharedEdge = right.length ? Math.max(...xCount.values()) / right.length : 0;
+        // Share of right-side items that start near the column's left edge. A bullet glyph ("●") and
+        // its text start ~20pt apart, so count anything within 30pt of the leftmost start as the edge.
+        const edgeX = right.length ? Math.min(...right.map(it => it.x)) : 0;
+        const sharedEdge = right.length ? right.filter(it => it.x - edgeX <= 30).length / right.length : 0;
         if (relPos >= 0.2 && relPos <= 0.8 && across.length <= allItems.length * 0.15
           && lines(left) >= 3 && lines(right) >= 5 && sharedEdge >= 0.6) {
           splitX = candidate;
@@ -1370,6 +1371,7 @@ app.post("/api/tailor-resume", async (req, res) => {
 - Improve EVERY bullet so a recruiter sees the value in 5 seconds. Use this shape: strong past-tense verb + WHAT you did + HOW (tools, methods or people already named in the resume) + RESULT (only if the original line states one). Example: "Ran weekly sprint planning with engineers and designers." -> "Led weekly sprint planning in Jira with engineers and designers to keep releases on schedule." only if Jira appears in the resume; otherwise "Led weekly sprint planning with engineers and designers to keep releases on schedule."
 - Use the job description's words where they truthfully describe the same work (e.g. "user stories" -> "PRDs and user stories" only if PRDs are in the resume). Keep every original number exactly as written.
 - Never add a result or impact the original line doesn't state (for example "increased engagement", "boosted revenue", "drove growth").
+- Never drop a result the original line does state (for example "and boost revenue"): keep every result and number from the original bullet.
 - Never drop specific details from a bullet: names of platforms, tools, companies, places or industries (for example "Facebook, Instagram", "Figma", "restaurant") and numbers stay word for word. Never replace them with vague words like "major platforms" or "multiple locations".
 - A CONFIRMED SKILL may describe how the candidate worked, but never claim a past job was in an industry or domain it wasn't (for example do not write "including in Cybersecurity solutions" for a fintech job).
 - If the original resume has no summary, write a 2-3 line summary using only facts from the resume (job titles, total years, industries they actually worked in, skills they listed). Do not add an industry or domain from the job description.

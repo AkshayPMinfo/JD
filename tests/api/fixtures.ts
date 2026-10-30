@@ -106,6 +106,32 @@ function twoColumnPdf(): Buffer {
   return Buffer.from(doc.output("arraybuffer"));
 }
 
+/** Experience on the left, a sidebar on the right whose bullets ("o") sit apart from their text (like Google Docs PDFs). */
+function rightSidebarPdf(): Buffer {
+  const doc = new jsPDF();
+  doc.setFontSize(16); doc.text("Kavya Nair", 14, 16);
+  doc.setFontSize(9);
+  doc.text("+91 90000 11111", 140, 12); doc.text("kavya.nair@example.com", 140, 17);
+  const main = [
+    "EXPERIENCE", "Payly - Associate Product Manager", "January, 2023 - October, 2024",
+    "- Collaborated with cross functional teams to define and prioritize",
+    "  product features, ensuring alignment with business goals and",
+    "  customer needs.",
+    "- Conducted market research and competitor analysis to identify",
+    "  opportunities for product differentiation.",
+    "- Managed product backlogs, user stories, and sprint planning.",
+    "Brandly - Social Media Manager", "March, 2018 - December, 2020",
+    "- Managed content for Facebook, Instagram, Twitter, and LinkedIn.",
+    "- Created reels, stories, and posts for target demographics."
+  ];
+  main.forEach((l, i) => doc.text(l, 14, 34 + i * 5.5));
+  const side = ["Product Management", "Requirements Gathering", "MVP Definition", "Feature Prioritization",
+    "Competitive Analysis", "Agile Methodology", "Stakeholder Management", "Team Collaboration"];
+  doc.text("SKILLS", 140, 34);
+  side.forEach((sk, i) => { doc.text("o", 140, 41 + i * 6.5); doc.text(sk, 147, 41 + i * 6.5); });
+  return Buffer.from(doc.output("arraybuffer"));
+}
+
 /** Normal one-column resume with dates pushed to the right edge: must NOT be read as two columns. */
 function rightDatesPdf(): Buffer {
   const doc = new jsPDF();
@@ -181,6 +207,7 @@ async function docxFromText(text: string): Promise<Buffer> {
 export interface Fixtures {
   single: Buffer;
   twoColumn: Buffer;
+  rightSidebar: Buffer;
   rightDates: Buffer;
   alt: Buffer;
   docx: Buffer;
@@ -194,6 +221,7 @@ export async function buildFixtures(): Promise<Fixtures> {
   return {
     single: pdfFromText(RESUME_TEXT),
     twoColumn: twoColumnPdf(),
+    rightSidebar: rightSidebarPdf(),
     rightDates: rightDatesPdf(),
     alt: pdfFromText(ALT_RESUME_TEXT),
     docx: await docxFromText(RESUME_TEXT),

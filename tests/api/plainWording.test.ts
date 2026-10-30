@@ -3,7 +3,7 @@
  * Run with: npm run test:api
  */
 import { Checks } from "./helpers.ts";
-import { removeHype, keepDigits, undoPointlessChange, plainResumeWording, dropFillerEnding, keepAppWord, keepNamedDetails } from "../../api/plainWording.ts";
+import { removeHype, keepDigits, undoPointlessChange, plainResumeWording, dropFillerEnding, keepAppWord, keepNamedDetails, keepResults } from "../../api/plainWording.ts";
 
 const t = new Checks();
 const orig = "Managed content for Facebook and Instagram. Ran marketing campaigns that increased footfall.";
@@ -53,4 +53,10 @@ same("N2", "A rewrite that keeps every name stays", keepNamedDetails("Ran conten
 same("N3", "Keeps your line when a number is dropped", keepNamedDetails("Launched a reorder button that increased repeat orders.", "Launched a reorder button that increased repeat orders by 12%."), "Launched a reorder button that increased repeat orders by 12%.");
 same("N4", "Lowercase change of a name is fine", keepNamedDetails("Ran sprints in jira.", "Ran sprints in Jira."), "Ran sprints in jira.");
 same("N5", "First word and months don't count as names", keepNamedDetails("Wrote PRDs from March to June.", "Created PRDs from March to June."), "Wrote PRDs from March to June.");
+// Found in the live Swiggy test (30 Oct): "and boost revenue" was dropped
+const yummy = "Developed and executed innovative marketing campaigns to increase customer footfall and boost revenue across multiple restaurant locations.";
+same("R1", "Keeps your line when 'boost revenue' is dropped", keepResults("Developed and executed innovative marketing campaigns to increase customer footfall across multiple restaurant locations.", yummy), yummy);
+same("R2", "A rewrite that keeps both results stays", keepResults("Ran marketing campaigns that increased customer footfall and revenue across multiple restaurant locations.", yummy), "Ran marketing campaigns that increased customer footfall and revenue across multiple restaurant locations.");
+same("R3", "No result in your line: rewrite stays", keepResults("Led weekly sprint planning in Jira.", "Ran weekly sprint planning."), "Led weekly sprint planning in Jira.");
+same("R4", "'increasing brand visibility' kept as 'boosted brand visibility' is fine", keepResults("Built strategies that boosted brand visibility and engagement.", "Built strategies, increasing brand visibility and engagement."), "Built strategies that boosted brand visibility and engagement.");
 process.exit(t.report("Plain wording"));

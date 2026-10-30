@@ -193,13 +193,26 @@ export function keepNamedDetails(text: string, originalLine: string): string {
   return lost.length ? originalLine : text;
 }
 
+// "boost revenue", "increase customer footfall", "reduced costs": the thing that changed is the result
+const RESULT_VERB = /\b(?:increas\w*|boost\w*|grow\w*|grew|reduc\w*|improv\w*|rais\w*|cut(?:ting)?|sav(?:e|ed|ing)|drove|driv\w*|lower\w*)\s+(?:the\s+|a\s+|an\s+)?(?:customer\s+|brand\s+|online\s+|repeat\s+)?([a-z][a-z-]{2,})/gi;
+const NOT_RESULT = new Set(["and", "the", "by", "to", "for", "with", "across", "while", "from", "our", "their", "its", "more", "overall"]);
+
+/** If the rewrite drops a result your line had ("and boost revenue"), keep your line. */
+export function keepResults(text: string, originalLine: string): string {
+  if (!originalLine.trim() || !text) return text;
+  const lower = text.toLowerCase();
+  const results = [...originalLine.matchAll(RESULT_VERB)].map(m => m[1].toLowerCase()).filter(w => !NOT_RESULT.has(w));
+  const lost = results.filter(w => !lower.includes(w.replace(/s$/, "")));
+  return lost.length ? originalLine : text;
+}
+
 /** Clean every line the AI wrote, comparing each with the candidate's own line where there is one. */
 export function plainResumeWording<T extends { summary?: string; workExperience?: any[]; projects?: any[] }>(tailored: T, source: any): T {
   const originalResumeText = JSON.stringify(source || {});
   const clean = (s: any, originalLine = "") => {
     if (typeof s !== "string") return s;
     const plain = dropFillerEnding(keepAppWord(keepDigits(removeHype(s, originalResumeText), originalLine), originalLine), originalLine);
-    return keepNamedDetails(undoPointlessChange(plain, originalLine), originalLine);
+    return keepResults(keepNamedDetails(undoPointlessChange(plain, originalLine), originalLine), originalLine);
   };
   const match = (list: any[] = [], item: any, i: number) => list.find(x => x?.id && x.id === item?.id) || list[i];
   return {

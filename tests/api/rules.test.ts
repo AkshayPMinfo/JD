@@ -52,6 +52,15 @@ try {
     t.check("U2f", "Two-column: education (BITS Pilani)", lc(p.education).includes("bits pilani"), JSON.stringify(p.education));
   }
 
+  // Sidebar on the right with bullets set apart from their text (30 Oct): a wrapped bullet lost
+  // "customer needs." because it was read on the same line as "MVP Definition"
+  const sidebar = await upload("resume_sidebar.pdf", PDF, fx.rightSidebar);
+  {
+    const text = String(sidebar.json.extractedText || "");
+    t.check("U2i", "Right sidebar: wrapped bullet stays whole (\"goals and customer needs.\")", /goals and\s+customer needs\./.test(text), text.slice(0, 160));
+    t.check("U2j", "Right sidebar: skills not mixed into experience lines", !/goals and\s+(o\s*)?MVP/.test(text));
+  }
+
   const rightDates = await upload("resume_rightdates.pdf", PDF, fx.rightDates);
   {
     const p = rightDates.json.detectedProfile || {};

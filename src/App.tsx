@@ -7067,6 +7067,9 @@ WORK EXPERIENCE
                             : hasChanges
                             ? `Your tailored resume is ready with ${changeCount} ${changeCount === 1 ? "change" : "changes"}. Highlighted text shows what changed. Your original resume is not modified.`
                             : "Your resume is ready. No wording changes were needed, so everything is exactly as you wrote it. The keyword check below shows what this job asks for."}
+                          {isFullRewrite && (
+                            <span className="block mt-1.5 text-xs font-medium text-amber-700">AI can make mistakes. Please recheck every line before you send it.</span>
+                          )}
                         </p>
                         <div className="text-right shrink-0">
                           <p className="text-xs text-neutral-500">ATS score</p>

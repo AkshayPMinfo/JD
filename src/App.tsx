@@ -2205,7 +2205,8 @@ export default function App() {
       ...(original.projects || []).flatMap(pr => [pr.name, ...(pr.description || [])]),
       ...(original.education || []).flatMap(e => [e.degree, e.school, e.duration, e.gpa])
     ].filter(Boolean).join(" \n ").toLowerCase();
-    const numbersOf = (text: string) => new Set((text.match(/\d[\d,.]*/g) || []).map(n => n.replace(/,/g, "").replace(/\.$/, "")));
+    // "B2B", "B2C", "H1B" aren't numbers; "2M users" still is
+    const numbersOf = (text: string) => new Set((text.replace(/[A-Za-z]+\d+[A-Za-z]+/g, " ").match(/\d[\d,.]*/g) || []).map(n => n.replace(/,/g, "").replace(/\.$/, "")));
     const originalNumbers = numbersOf(originalText);
     const SENIORITY = ["senior", "lead", "principal", "staff engineer", "head of", "expert", "chief", "director"];
     // Everyday job-post words that don't make a claim on their own

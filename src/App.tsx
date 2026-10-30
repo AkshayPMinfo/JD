@@ -69,7 +69,7 @@ import { DEMO_RESUMES, DEMO_JDS } from "./demoData";
 import ResumePreview from "./components/ResumePreview";
 import { supabaseAuth, supabaseData, type SupabaseSession } from "./lib/supabase";
 import { resultEndingsFor, addResultToLine } from "./utils/resultEndings";
-import SideBySideReview from "./components/SideBySideReview";
+import SideBySideReview, { changedLines } from "./components/SideBySideReview";
 import { validateJobDescriptionText as checkJobDescriptionText, JD_MIN_WORDS, JD_MAX_WORDS } from "./utils/jdValidation";
 
 const SUPABASE_SESSION_STORAGE_KEY = "jd_resume_customizer_supabase_session";
@@ -270,6 +270,8 @@ export default function App() {
   const [isSimplifyingJd, setIsSimplifyingJd] = useState(false);
   const [simplifiedJd, setSimplifiedJd] = useState<SimplifiedJD | null>(null);
   const [diffTab, setDiffTab] = useState<"added" | "modified" | "unchanged">("added");
+  // View popup of a saved version: before/after or the full resume
+  const [versionView, setVersionView] = useState<"compare" | "full">("compare");
 
   const [isTailoring, setIsTailoring] = useState(false);
   const [suggestions, setSuggestions] = useState<ResumeSuggestion[]>([]);
@@ -4444,7 +4446,7 @@ WORK EXPERIENCE
                           <button
                             type="button"
                             onClick={() => {
-                              setSelectedSavedVersion(version);
+                              setSelectedSavedVersion(version); setVersionView("compare");
                               setShowSavedVersionPreviewModal(true);
                             }}
                             className="px-3 py-1.5 text-sm font-medium text-black rounded-lg border border-neutral-200 hover:bg-neutral-50 transition-colors cursor-pointer"
@@ -7519,77 +7521,6 @@ WORK EXPERIENCE
                   );
                 })()}
 
-                {/* Visual Resume Diff Log */}
-                <div className="pt-4 border-t border-neutral-200 space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <span className="text-sm font-medium text-black">Change log</span>
-                    <div className="flex border border-neutral-200 rounded-lg overflow-hidden text-xs">
-                      <button
-                        type="button"
-                        onClick={() => setDiffTab("added")}
-                        className={`px-2.5 py-1 border-r border-neutral-200 transition ${diffTab === "added" ? "bg-neutral-100 text-black font-medium" : "bg-white text-neutral-500 hover:text-black"}`}
-                      >
-                        Added ({selectedSavedVersion.diffAdded?.length || 0})
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setDiffTab("modified")}
-                        className={`px-2.5 py-1 border-r border-neutral-200 transition ${diffTab === "modified" ? "bg-neutral-100 text-black font-medium" : "bg-white text-neutral-500 hover:text-black"}`}
-                      >
-                        Mod ({selectedSavedVersion.diffModified?.length || 0})
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setDiffTab("unchanged")}
-                        className={`px-2.5 py-1 transition ${diffTab === "unchanged" ? "bg-neutral-100 text-black font-medium" : "bg-white text-neutral-500 hover:text-black"}`}
-                      >
-                        Unch ({selectedSavedVersion.diffUnchanged?.length || 0})
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="max-h-32 overflow-y-auto pr-1 text-[11px] space-y-1.5 font-semibold">
-                    {diffTab === "added" && (
-                      (selectedSavedVersion.diffAdded || []).length > 0 ? (
-                        (selectedSavedVersion.diffAdded || []).map((item, i) => (
-                          <div key={i} className="text-emerald-700 bg-emerald-50/50 border border-emerald-200 p-1.5 rounded-lg flex items-start gap-1 leading-relaxed animate-fadeIn">
-                            <span className="font-semibold text-xs text-emerald-600 flex-shrink-0">+</span>
-                            <span>{item}</span>
-                          </div>
-                        ))
-                      ) : (
-                        <p className="text-neutral-500 italic p-1">No items added.</p>
-                      )
-                    )}
-
-                    {diffTab === "modified" && (
-                      (selectedSavedVersion.diffModified || []).length > 0 ? (
-                        (selectedSavedVersion.diffModified || []).map((item, i) => (
-                          <div key={i} className="text-amber-700 bg-amber-50/50 border border-amber-200 p-1.5 rounded-lg flex items-start gap-1 leading-relaxed animate-fadeIn">
-                            <span className="font-semibold text-xs text-amber-600 flex-shrink-0">~</span>
-                            <span>{item}</span>
-                          </div>
-                        ))
-                      ) : (
-                        <p className="text-neutral-500 italic p-1">No modifications logged.</p>
-                      )
-                    )}
-
-                    {diffTab === "unchanged" && (
-                      (selectedSavedVersion.diffUnchanged || []).length > 0 ? (
-                        (selectedSavedVersion.diffUnchanged || []).map((item, i) => (
-                          <div key={i} className="text-neutral-600 bg-white border border-neutral-200 p-1.5 rounded-lg flex items-start gap-1 leading-relaxed animate-fadeIn">
-                            <span className="font-semibold text-neutral-400 flex-shrink-0">=</span>
-                            <span>{item}</span>
-                          </div>
-                        ))
-                      ) : (
-                        <p className="text-neutral-500 italic p-1">No unchanged items logged.</p>
-                      )
-                    )}
-                  </div>
-                </div>
-
                 <div className="pt-4 border-t border-neutral-200 space-y-2">
                   <div className="flex items-center gap-1.5">
                     <span className="text-sm font-medium text-black">Job description</span>
@@ -7600,11 +7531,31 @@ WORK EXPERIENCE
                 </div>
               </div>
 
-              {/* Right Column: Resume Preview */}
-              <div className="w-full md:w-7/12 flex flex-col border border-neutral-200 rounded-xl overflow-hidden bg-neutral-50 max-h-[500px] md:max-h-none">
-                <div className="flex-1 overflow-y-auto p-4 bg-neutral-50 scrollbar-thin">
-                  <ResumePreview resume={selectedSavedVersion.resumeData} templateStyle="classic" originalResume={selectedSavedVersion.originalResumeData || undefined} />
-                </div>
+              {/* Right Column: before/after, or the full resume */}
+              <div className="w-full md:w-7/12 flex flex-col gap-2 font-sans text-left">
+                {selectedSavedVersion.originalResumeData && (
+                  <div className="flex border border-neutral-200 rounded-lg overflow-hidden text-xs self-start" role="tablist" id="version-view-tabs">
+                    <button type="button" role="tab" id="tab-version-compare" aria-selected={versionView === "compare"} onClick={() => setVersionView("compare")}
+                      className={`px-3 py-1.5 border-r border-neutral-200 cursor-pointer ${versionView === "compare" ? "bg-neutral-100 text-black font-medium" : "bg-white text-neutral-500 hover:text-black"}`}>Before / After</button>
+                    <button type="button" role="tab" id="tab-version-full" aria-selected={versionView === "full"} onClick={() => setVersionView("full")}
+                      className={`px-3 py-1.5 cursor-pointer ${versionView === "full" ? "bg-neutral-100 text-black font-medium" : "bg-white text-neutral-500 hover:text-black"}`}>Full resume</button>
+                  </div>
+                )}
+                {selectedSavedVersion.originalResumeData && versionView === "compare" ? (
+                  <div className="max-h-[520px] overflow-y-auto pr-1" id="version-compare">
+                    <SideBySideReview
+                      original={selectedSavedVersion.originalResumeData}
+                      reviews={changedLines(selectedSavedVersion.originalResumeData, selectedSavedVersion.resumeData)}
+                      readOnly
+                    />
+                  </div>
+                ) : (
+                  <div className="flex flex-col border border-neutral-200 rounded-xl overflow-hidden bg-neutral-50 max-h-[500px] md:max-h-none">
+                    <div className="flex-1 overflow-y-auto p-4 bg-neutral-50 scrollbar-thin">
+                      <ResumePreview resume={selectedSavedVersion.resumeData} templateStyle="classic" originalResume={selectedSavedVersion.originalResumeData || undefined} />
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 

@@ -20,8 +20,28 @@ export type ReviewLine = {
 type Props = {
   original: ResumeStructure;
   reviews: ReviewLine[];
-  onChange: (next: ReviewLine[]) => void;
+  onChange?: (next: ReviewLine[]) => void;
+  readOnly?: boolean; // saved versions: show the changes only, no editing
 };
+
+/** Lines that differ between an original resume and its tailored copy, for the read-only view */
+export function changedLines(original: ResumeStructure, tailored: ResumeStructure): ReviewLine[] {
+  const out: ReviewLine[] = [];
+  const add = (id: string, before: string, after: string, target: ReviewLine["target"]) => {
+    if (!after || after.trim() === (before || "").trim()) return;
+    out.push({ id, label: "", original: before || "", suggested: after, text: after, status: "accepted", mentions: [], warnings: [], target });
+  };
+  add("summary", original.summary || "", tailored.summary || "", { kind: "summary" });
+  (original.workExperience || []).forEach((job, i) => {
+    const t = (tailored.workExperience || []).find(x => x.id && x.id === job.id) || (tailored.workExperience || [])[i];
+    (job.description || []).forEach((line, b) => add(`exp-${i}-${b}`, line, t?.description?.[b] || "", { kind: "exp", item: i, bullet: b }));
+  });
+  (original.projects || []).forEach((proj, i) => {
+    const t = (tailored.projects || [])[i];
+    (proj.description || []).forEach((line, b) => add(`proj-${i}-${b}`, line, t?.description?.[b] || "", { kind: "proj", item: i, bullet: b }));
+  });
+  return out;
+}
 
 /** What the line says in the resume right now */
 const currentText = (r: ReviewLine | undefined, fallback: string) => {
@@ -38,7 +58,7 @@ function Highlighted({ before, after }: { before: string; after: string }) {
     <>
       {diffWords(before, after, { ignoreCase: true }).map((part, i) =>
         part.removed ? null : part.added ? (
-          <span key={i} className="bg-emerald-50 text-emerald-800 rounded px-0.5">{part.value}</span>
+          <span key={i} className="bg-emerald-50 text-emerald-800 rounded-sm">{part.value}</span>
         ) : (
           <span key={i}>{part.value}</span>
         )
@@ -51,7 +71,7 @@ function Highlighted({ before, after }: { before: string; after: string }) {
  * Before and after, side by side. Safe edits are already in; edits that add a claim
  * wait in yellow for one click; blue chips offer an optional number. Click a line to change it.
  */
-export default function SideBySideReview({ original, reviews, onChange }: Props) {
+export default function SideBySideReview({ original, reviews, onChange = () => {}, readOnly = false }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [pick, setPick] = useState<{ id: string; ending: string } | null>(null);
@@ -88,8 +108,8 @@ export default function SideBySideReview({ original, reviews, onChange }: Props)
     const now = currentText(r, before);
     const held = r?.status === "pending" && !r.resultOnly;
     const changed = !!r && now !== before;
-    const isEditing = editingId === id;
-    const offerNumber = !!r && !isEditing && numberIds.includes(id) && pick?.id !== id;
+    const isEditing = !readOnly && editingId === id;
+    const offerNumber = !readOnly && !!r && !isEditing && numberIds.includes(id) && pick?.id !== id;
     const saveNumber = () => {
       if (!r || !pick) return;
       if (!/\d/.test(value)) { setError("Type a number first, like 8 or 20"); return; }
@@ -123,6 +143,8 @@ export default function SideBySideReview({ original, reviews, onChange }: Props)
                 <span className="text-neutral-400">Enter to save</span>
               </div>
             </div>
+          ) : readOnly ? (
+            <p>{changed ? <Highlighted before={before} after={now} /> : now}</p>
           ) : (
             <p
               role="button"
@@ -135,7 +157,7 @@ export default function SideBySideReview({ original, reviews, onChange }: Props)
               {changed ? <Highlighted before={before} after={now} /> : now || <span className="italic text-neutral-400">Nothing here</span>}
             </p>
           )}
-          {held && r && !isEditing && (
+          {!readOnly && held && r && !isEditing && (
             <div className="rounded-lg bg-amber-50 px-2.5 py-2 space-y-1" id={`sbs-held-${id}`}>
               <p className="text-xs text-amber-800">
                 Not added: {r.warnings[0] ? r.warnings[0].charAt(0).toLowerCase() + r.warnings[0].slice(1) : `adds ${r.mentions.join(" and ")} to this line`}
@@ -146,7 +168,7 @@ export default function SideBySideReview({ original, reviews, onChange }: Props)
               </button>
             </div>
           )}
-          {r && !held && !isEditing && changed && (
+          {!readOnly && r && !held && !isEditing && changed && (
             <button
               type="button"
               id={`sbs-undo-${id}`}
@@ -205,12 +227,19 @@ export default function SideBySideReview({ original, reviews, onChange }: Props)
 
   return (
     <div className="space-y-3" id="side-by-side-review">
+      {readOnly ? (
+        <p className="text-xs text-neutral-600" id="sbs-legend">
+          <span className="bg-emerald-50 text-emerald-800 rounded px-1.5 py-0.5 mr-1.5">Green</span>
+          {reviews.length ? `changed for this job · ${reviews.length} ${reviews.length === 1 ? "line" : "lines"} changed` : "No lines were reworded in this version. Only skills may have been added."}
+        </p>
+      ) : (
       <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-xs text-neutral-600" id="sbs-legend">
         <span className="flex items-center gap-1.5"><span className="bg-emerald-50 text-emerald-800 rounded px-1.5 py-0.5">Green</span> changed for this job</span>
         <span className="flex items-center gap-1.5"><span className="bg-amber-50 text-amber-800 rounded px-1.5 py-0.5">Yellow</span> not added, needs your OK</span>
         <span className="flex items-center gap-1.5"><span className="border border-dashed border-blue-300 text-blue-700 rounded px-1.5 py-0.5">+ Blue</span> add a number if true (optional)</span>
         <span className="text-neutral-400">Click any line to edit it</span>
       </div>
+      )}
       <div className="border border-neutral-200 rounded-xl bg-white px-4">
         <div className="grid grid-cols-2 gap-4 pt-3 pb-1.5 border-b border-neutral-200 text-xs font-medium text-neutral-500">
           <span>Before</span>

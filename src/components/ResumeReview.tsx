@@ -52,6 +52,8 @@ export default function ResumeReview({ original, current, reviews, onChange }: P
   const [pick, setPick] = useState<string | null>(null);
   const [value, setValue] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [addingTo, setAddingTo] = useState<string | null>(null); // "exp-0" or "proj-1"
+  const [addDraft, setAddDraft] = useState("");
 
   const byId = new Map(reviews.map(r => [r.id, r]));
   const update = (id: string, patch: Partial<ReviewLine>) => onChange(reviews.map(r => (r.id === id ? { ...r, ...patch } : r)));
@@ -68,7 +70,8 @@ export default function ResumeReview({ original, current, reviews, onChange }: P
       if (clean && clean !== before) onChange([...reviews, { id, label: "", original: before, suggested: before, text: clean, status: "edited", mentions: [], warnings: [], target: targetOf(id), resultOnly: true }]);
       return;
     }
-    if (!clean || clean === before) update(id, { status: r.resultOnly ? "accepted" : "skipped", text: r.original });
+    // Emptying a line the person added removes it; their own lines go back to how they wrote them
+    if (!clean || clean === before) update(id, { status: r.resultOnly && before ? "accepted" : "skipped", text: r.original });
     else if (clean === r.suggested) update(id, { status: "accepted" });
     else update(id, { status: "edited", text: clean });
   };
@@ -147,16 +150,23 @@ export default function ResumeReview({ original, current, reviews, onChange }: P
             className="w-full border border-neutral-300 rounded-lg px-2.5 py-1.5 text-sm leading-relaxed focus:outline-none focus:border-blue-400 min-h-[64px]"
           />
         ) : (
-          <p
-            role="button"
-            tabIndex={0}
-            title="Click to edit"
-            onClick={() => { if (isOpen) { close(); } else { setOpenId(id); setEditing(false); setPick(null); } }}
-            onKeyDown={(e) => { if (e.key === "Enter") setOpenId(isOpen ? null : id); }}
-            className="text-sm leading-relaxed text-neutral-800 cursor-pointer rounded hover:bg-neutral-50 -mx-1 px-1 py-0.5"
-          >
-            {bullet ? "• " : ""}{changed ? <Highlighted before={before} after={now} /> : now}
-          </p>
+          <div className="group flex items-start gap-2">
+            <p
+              role="button"
+              tabIndex={0}
+              title="Click to edit"
+              onClick={() => { if (isOpen) { close(); } else { setOpenId(id); setEditing(false); setPick(null); } }}
+              onKeyDown={(e) => { if (e.key === "Enter") setOpenId(isOpen ? null : id); }}
+              className="flex-1 text-sm leading-relaxed text-neutral-800 cursor-pointer rounded hover:bg-neutral-50 -mx-1 px-1 py-0.5"
+            >
+              {bullet ? "• " : ""}{changed ? <Highlighted before={before} after={now} /> : now}
+            </p>
+            {!isOpen && (
+              <button type="button" id={`rv-quick-edit-${id}`} aria-label="Edit this line"
+                onClick={() => { setOpenId(id); setDraft(now); setEditing(true); setPick(null); setError(null); }}
+                className="shrink-0 mt-0.5 px-2 py-0.5 text-[11px] rounded-md border border-neutral-200 text-neutral-500 bg-white hover:text-black hover:border-neutral-400 cursor-pointer">Edit</button>
+            )}
+          </div>
         )}
         {isOpen && (
           <div className="flex flex-wrap items-center gap-1.5 mt-1.5" id={`rv-tools-${id}`}>
@@ -169,7 +179,7 @@ export default function ResumeReview({ original, current, reviews, onChange }: P
               <>
                 <button type="button" id={`rv-edit-btn-${id}`} onClick={() => { setDraft(now); setEditing(true); setPick(null); }} className="px-2.5 py-1 text-xs rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 cursor-pointer">Edit</button>
                 {changed && (
-                  <button type="button" id={`rv-undo-${id}`} onClick={() => { setText(id, before, before); close(); }} className="px-2.5 py-1 text-xs rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 cursor-pointer">Undo change</button>
+                  <button type="button" id={`rv-undo-${id}`} onClick={() => { setText(id, before, before); close(); }} className="px-2.5 py-1 text-xs rounded-md border border-neutral-300 bg-white hover:bg-neutral-50 cursor-pointer">{before ? "Undo change" : "Remove line"}</button>
                 )}
                 {id !== "summary" && !/\d/.test(now) && resultEndingsFor(now).map(ending => (
                   <button key={ending} type="button" onClick={() => { setPick(ending); setValue(""); setError(null); }}
@@ -200,6 +210,41 @@ export default function ResumeReview({ original, current, reviews, onChange }: P
     );
   };
 
+  /** Lines past the person's own ones: added by the AI or by the person */
+  const extraLines = (kind: "exp" | "proj", item: number, own: number) =>
+    reviews.filter(r => r.target.kind === kind && r.target.item === item && r.target.bullet >= own)
+      .sort((a, b) => (a.target.kind === "summary" || b.target.kind === "summary" ? 0 : a.target.bullet - b.target.bullet));
+  const saveNewLine = (kind: "exp" | "proj", item: number, own: number) => {
+    const text = addDraft.trim();
+    if (text) {
+      const used = extraLines(kind, item, own).map(r => (r.target.kind === "summary" ? 0 : r.target.bullet));
+      const bullet = Math.max(own, ...used.map(b => b + 1));
+      onChange([...reviews, { id: `${kind}-${item}-${bullet}`, label: "", original: "", suggested: text, text, status: "edited", mentions: [], warnings: [], target: { kind, item, bullet }, resultOnly: true }]);
+    }
+    setAddingTo(null); setAddDraft("");
+  };
+  const addLine = (kind: "exp" | "proj", item: number, own: number) => {
+    const key = `${kind}-${item}`;
+    return addingTo === key ? (
+      <div className="ml-4 mt-1.5 space-y-1.5" id={`rv-add-box-${key}`}>
+        <textarea autoFocus value={addDraft} placeholder="What did you do, how, and what changed? e.g. Cut sign-up drop-offs by 15% by simplifying the form"
+          onChange={(e) => setAddDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveNewLine(kind, item, own); }
+            if (e.key === "Escape") { e.stopPropagation(); setAddingTo(null); }
+          }}
+          className="w-full border border-neutral-300 rounded-lg px-2.5 py-1.5 text-sm leading-relaxed focus:outline-none focus:border-blue-400 min-h-[64px]" />
+        <div className="flex gap-2">
+          <button type="button" onClick={() => saveNewLine(kind, item, own)} className="px-2.5 py-1 text-xs rounded-md bg-[#2563eb] hover:bg-blue-600 text-white cursor-pointer">Add</button>
+          <button type="button" onClick={() => setAddingTo(null)} className="px-2.5 py-1 text-xs rounded-md text-neutral-600 hover:text-black cursor-pointer">Cancel</button>
+        </div>
+      </div>
+    ) : (
+      <button type="button" id={`rv-add-${key}`} onClick={() => { close(); setAddingTo(key); setAddDraft(""); }}
+        className="ml-4 mt-1 text-xs text-blue-700 hover:underline cursor-pointer">+ Add a line</button>
+    );
+  };
+
   const heading = (text: string) => (
     <p className="text-[11px] font-semibold uppercase tracking-wider text-neutral-500 border-b border-neutral-200 pb-1 mt-4 mb-2">{text}</p>
   );
@@ -212,7 +257,7 @@ export default function ResumeReview({ original, current, reviews, onChange }: P
       <p className="text-xs text-neutral-600" id="rv-legend">
         <mark className="bg-yellow-300 text-yellow-950 rounded-sm px-1.5 py-0.5 mr-1">Yellow</mark> changed for this job ·
         <span className="ml-1 px-1.5 py-0.5 rounded border border-orange-300 bg-orange-50 text-orange-800 mr-1">Orange</span> your call: keep or remove ·
-        <span className="ml-1 text-neutral-500">Click any line to edit it, undo it or add a number</span>
+        <span className="ml-1 text-neutral-500">Edit any line, undo it, add a number or add a new line</span>
       </p>
       <div className="border border-neutral-200 rounded-xl bg-white px-5 py-4">
         <p className="text-lg font-semibold text-black">{current.fullName || original.fullName}</p>
@@ -240,6 +285,8 @@ export default function ResumeReview({ original, current, reviews, onChange }: P
               <p className="text-xs text-neutral-500 shrink-0">{job.duration}</p>
             </div>
             {(job.description || []).map((b, k) => line(`exp-${i}-${k}`, b, true))}
+            {extraLines("exp", i, (job.description || []).length).map(r => line(r.id, "", true))}
+            {addLine("exp", i, (job.description || []).length)}
           </div>
         ))}
 
@@ -248,6 +295,8 @@ export default function ResumeReview({ original, current, reviews, onChange }: P
           <div key={proj.id || i} className="mt-2">
             <p className="text-sm font-semibold text-black">{proj.name}</p>
             {(proj.description || []).map((b, k) => line(`proj-${i}-${k}`, b, true))}
+            {extraLines("proj", i, (proj.description || []).length).map(r => line(r.id, "", true))}
+            {addLine("proj", i, (proj.description || []).length)}
           </div>
         ))}
 

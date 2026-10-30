@@ -2364,6 +2364,8 @@ export default function App() {
       if (r.target.bullet < item.description.length) item.description[r.target.bullet] = value;
       else if (value) item.description.push(value);
     }
+    // A line the person added and then removed: drop it
+    for (const list of [resume.workExperience || [], resume.projects || []]) for (const item of list) item.description = (item.description || []).filter(l => l.trim());
     const updated = { ...version, resumeData: resume };
     setSavedVersions(prev => prev.map(v => (v.id === version.id ? updated : v)));
     setSelectedSavedVersion(updated);

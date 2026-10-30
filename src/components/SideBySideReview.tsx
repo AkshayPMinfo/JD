@@ -36,10 +36,18 @@ export function changedLines(original: ResumeStructure, tailored: ResumeStructur
   (original.workExperience || []).forEach((job, i) => {
     const t = (tailored.workExperience || []).find(x => x.id && x.id === job.id) || (tailored.workExperience || [])[i];
     (job.description || []).forEach((line, b) => add(`exp-${i}-${b}`, line, t?.description?.[b] || "", { kind: "exp", item: i, bullet: b }));
+    (t?.description || []).slice((job.description || []).length).forEach((line, k) => {
+      const b = (job.description || []).length + k;
+      add(`exp-${i}-${b}`, "", line, { kind: "exp", item: i, bullet: b });
+    });
   });
   (original.projects || []).forEach((proj, i) => {
     const t = (tailored.projects || [])[i];
     (proj.description || []).forEach((line, b) => add(`proj-${i}-${b}`, line, t?.description?.[b] || "", { kind: "proj", item: i, bullet: b }));
+    (t?.description || []).slice((proj.description || []).length).forEach((line, k) => {
+      const b = (proj.description || []).length + k;
+      add(`proj-${i}-${b}`, "", line, { kind: "proj", item: i, bullet: b });
+    });
   });
   return out;
 }

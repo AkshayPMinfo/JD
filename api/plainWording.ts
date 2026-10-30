@@ -206,18 +206,35 @@ export function keepResults(text: string, originalLine: string): string {
   return lost.length ? originalLine : text;
 }
 
+// Vague filler a recruiter skips: "Possesses foundational understanding of Fintech contexts"
+const WEAK_SENTENCE = /\b(possess(es)?|foundational understanding|basic understanding|working knowledge|exposure to|familiarity with|well-versed|keen interest|eager to|passionate about)\b/i;
+
+/** Drop summary sentences that only claim vague understanding; keep the factual ones. */
+export function dropWeakSentences(summary: string, originalSummary = ""): string {
+  if (!summary) return summary;
+  const sentences = summary.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [summary];
+  const kept = sentences.filter(sn => !WEAK_SENTENCE.test(sn) || WEAK_SENTENCE.test(originalSummary));
+  return (kept.length ? kept : sentences).join(" ").replace(/\s{2,}/g, " ").trim();
+}
+
+/** "engagement ." -> "engagement." and "teams ,and" -> "teams, and" */
+export function tidySpacing(text: string): string {
+  if (typeof text !== "string") return text;
+  return text.replace(/\s+([.,;:!?])/g, "$1").replace(/([,;:])(?=[A-Za-z])/g, "$1 ").replace(/\s{2,}/g, " ").trim();
+}
+
 /** Clean every line the AI wrote, comparing each with the candidate's own line where there is one. */
 export function plainResumeWording<T extends { summary?: string; workExperience?: any[]; projects?: any[] }>(tailored: T, source: any): T {
   const originalResumeText = JSON.stringify(source || {});
   const clean = (s: any, originalLine = "") => {
     if (typeof s !== "string") return s;
     const plain = dropFillerEnding(keepAppWord(keepDigits(removeHype(s, originalResumeText), originalLine), originalLine), originalLine);
-    return keepResults(keepNamedDetails(undoPointlessChange(plain, originalLine), originalLine), originalLine);
+    return tidySpacing(keepResults(keepNamedDetails(undoPointlessChange(plain, originalLine), originalLine), originalLine));
   };
   const match = (list: any[] = [], item: any, i: number) => list.find(x => x?.id && x.id === item?.id) || list[i];
   return {
     ...tailored,
-    summary: clean(tailored.summary, source?.summary || ""),
+    summary: dropWeakSentences(clean(tailored.summary, source?.summary || ""), source?.summary || ""),
     workExperience: (tailored.workExperience || []).map((j, i) => {
       const orig = match(source?.workExperience, j, i);
       return { ...j, description: (j.description || []).map((d: any, k: number) => clean(d, orig?.description?.[k] || "")) };

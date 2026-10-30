@@ -16,8 +16,9 @@ export const resultEndingsFor = (line: string): string[] => {
   // The line already says what went up ("increasing brand visibility"): just add how much
   if (/\b(increas|boost|grow|grew|improv|rais|reduc|cut)\w*\b/i.test(line) && !/\d/.test(line)) picked.push("by __%");
   for (const group of RESULT_ENDINGS) if (group.words.test(line)) picked.push(...group.endings);
-  // Fallbacks that read naturally after any line ("...on schedule for a team of 6")
-  for (const fallback of ["for a team of __", "saving __ hours a week", "across __ projects"]) picked.push(fallback);
+  // Only when nothing above fits: neutral endings that read naturally after most lines.
+  // ("for a team of __" is only offered on lines about teams; after "market research" it read wrong.)
+  if (!picked.length) picked.push("saving __ hours a week", "across __ projects");
   return [...new Set(picked)].slice(0, 3);
 };
 // "Led sprint planning." + "for a team of __" + "8" -> "Led sprint planning for a team of 8."

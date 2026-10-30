@@ -3,7 +3,7 @@
  * Run with: npm run test:api
  */
 import { Checks } from "./helpers.ts";
-import { removeHype, keepDigits, undoPointlessChange, plainResumeWording, dropFillerEnding, keepAppWord, keepNamedDetails, keepResults } from "../../api/plainWording.ts";
+import { removeHype, keepDigits, undoPointlessChange, plainResumeWording, dropFillerEnding, keepAppWord, keepNamedDetails, keepResults, dropWeakSentences, tidySpacing } from "../../api/plainWording.ts";
 
 const t = new Checks();
 const orig = "Managed content for Facebook and Instagram. Ran marketing campaigns that increased footfall.";
@@ -59,4 +59,9 @@ same("R1", "Keeps your line when 'boost revenue' is dropped", keepResults("Devel
 same("R2", "A rewrite that keeps both results stays", keepResults("Ran marketing campaigns that increased customer footfall and revenue across multiple restaurant locations.", yummy), "Ran marketing campaigns that increased customer footfall and revenue across multiple restaurant locations.");
 same("R3", "No result in your line: rewrite stays", keepResults("Led weekly sprint planning in Jira.", "Ran weekly sprint planning."), "Led weekly sprint planning in Jira.");
 same("R4", "'increasing brand visibility' kept as 'boosted brand visibility' is fine", keepResults("Built strategies that boosted brand visibility and engagement.", "Built strategies, increasing brand visibility and engagement."), "Built strategies that boosted brand visibility and engagement.");
+// Live Razorpay test (30 Oct): a vague summary line and a stray space before the full stop
+same("W3", "Drops 'Possesses foundational understanding…' from the summary", dropWeakSentences("Associate Product Manager with 7 years of experience in Agile teams. Possesses foundational understanding of Fintech and Payments contexts from previous roles."), "Associate Product Manager with 7 years of experience in Agile teams.");
+same("W4", "Keeps the summary if every sentence is vague (never empties it)", dropWeakSentences("Possesses exposure to payments."), "Possesses exposure to payments.");
+same("T1", "'engagement .' becomes 'engagement.'", tidySpacing("increasing online engagement ."), "increasing online engagement.");
+same("T2", "'teams ,and' becomes 'teams, and'", tidySpacing("with teams ,and partners"), "with teams, and partners");
 process.exit(t.report("Plain wording"));

@@ -4,6 +4,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { getAiCredits, useAiCredit, aiAllowed, bearerToken } from "./aiLimit.js";
 import { plainResumeWording } from "./plainWording.js";
 import { repairSplitEmail } from "./contactRepair.js";
+import { yearsOfExperience } from "../src/utils/experienceYears.js";
 import dotenv from "dotenv";
 import mammoth from "mammoth";
 import { getDocumentProxy, extractText } from "unpdf";
@@ -1355,6 +1356,9 @@ app.post("/api/tailor-resume", async (req, res) => {
     const sharedSkillsNote = sharedSkills.length
       ? `\n\nKEYWORDS TO USE: These skills are in the candidate's own skills list AND the job asks for them: ${sharedSkills.join(", ")}. Put each one into at least one experience or project bullet where it truthfully fits that work (e.g. sprint planning -> "in Jira", dashboards -> "in Excel"). Do not force one into a bullet where it doesn't fit.`
       : "";
+    // Total years from the job dates, so the summary states them correctly
+    const totalYears = yearsOfExperience(Array.isArray(sourceResume?.workExperience) ? sourceResume.workExperience : []);
+    const yearsNote = totalYears >= 1 ? `\n\nEXPERIENCE: From the job dates, the candidate has about ${Math.floor(totalYears)} years of work experience in total. If you state years in the summary, use this figure.` : "";
     const careerSwitchNote = careerSwitch
       ? `\n\nCAREER CHANGE: The candidate is moving from ${careerSwitch.fromField} (most recent role: ${careerSwitch.fromRole}) into ${careerSwitch.toField} (target role: ${careerSwitch.toRole}).
 - Do NOT present them as already having worked as a ${careerSwitch.toRole} or in ${careerSwitch.toField}. Keep every job title exactly as written.
@@ -1367,14 +1371,15 @@ app.post("/api/tailor-resume", async (req, res) => {
 - Never add a tool, method or skill (for example "A/B testing", "Docker", "design systems") to a bullet unless that bullet's original text already describes it, it is listed in the original resume's skills, or it is one of the CONFIRMED SKILLS, and it fits that bullet's work.
 - DO use skills and tools from the resume's own skills list inside bullets where they fit the work, especially ones the job description asks for (for example "Ran weekly sprint planning" -> "Ran weekly sprint planning in Jira" when Jira is in the skills list). This is how keywords reach the lines recruiters read.
 - Never add or raise seniority: do not add words like "Senior", "Lead", "Principal", "Expert" or "Head of" unless the original job title already contains them, and never describe the candidate using the target job's title.
-- Only state years of experience if the original summary already states them, and use exactly that figure.
+- Only state years of experience if the original summary states them or the EXPERIENCE note below gives them, and use exactly that figure.
 - Improve EVERY bullet so a recruiter sees the value in 5 seconds. Use this shape: strong past-tense verb + WHAT you did + HOW (tools, methods or people already named in the resume) + RESULT (only if the original line states one). Example: "Ran weekly sprint planning with engineers and designers." -> "Led weekly sprint planning in Jira with engineers and designers to keep releases on schedule." only if Jira appears in the resume; otherwise "Led weekly sprint planning with engineers and designers to keep releases on schedule."
 - Use the job description's words where they truthfully describe the same work (e.g. "user stories" -> "PRDs and user stories" only if PRDs are in the resume). Keep every original number exactly as written.
 - Never add a result or impact the original line doesn't state (for example "increased engagement", "boosted revenue", "drove growth").
 - Never drop a result the original line does state (for example "and boost revenue"): keep every result and number from the original bullet.
 - Never drop specific details from a bullet: names of platforms, tools, companies, places or industries (for example "Facebook, Instagram", "Figma", "restaurant") and numbers stay word for word. Never replace them with vague words like "major platforms" or "multiple locations".
 - A CONFIRMED SKILL may describe how the candidate worked, but never claim a past job was in an industry or domain it wasn't (for example do not write "including in Cybersecurity solutions" for a fintech job).
-- If the original resume has no summary, write a 2-3 line summary using only facts from the resume (job titles, total years, industries they actually worked in, skills they listed). Do not add an industry or domain from the job description.
+- If the original resume has no summary, write a 2-3 line summary using only facts from the resume: start with the most recent job title and total years of experience, then the industries they actually worked in and the skills they listed. Do not add an industry or domain from the job description.
+- In the summary never write vague lines like "possesses foundational understanding of ...", "exposure to ...", "familiarity with ..." or "keen interest in ...". Every sentence must state a fact from the resume.
 
 PLAIN WORDING (strict):
 - Write like a clear, modest human, not a sales pitch. Use plain verbs: led, built, managed, ran, wrote, designed, worked with, improved.
@@ -1385,7 +1390,7 @@ PLAIN WORDING (strict):
 - Never write in the first person (no "I", "me", "my") and never use "aspiring", "motivated", "passionate" or "committed to".
 - Never mention the job, role or job description inside a bullet, and never end a bullet with "demonstrating ...", "showcasing ...", "highlighting ...", "aligning with ..." or "reflecting ...". A bullet describes what the candidate did, nothing else.
 - The summary must never name the hiring company, and must not use phrases like "eager to", "looking to leverage", "passionate about" or "a leading platform like". Describe the candidate, not the employer.`;
-    const prompt = `You are a veteran HR Consultant and senior Resume Writer. Your task is to review the Candidate's Resume and tailor it to better align with the requirements in the Job Description, preserving factual honesty but boosting keyword matching, professional tone, and clarity.${honestyRules}${confirmedSkillsNote}${sharedSkillsNote}${careerSwitchNote}
+    const prompt = `You are a veteran HR Consultant and senior Resume Writer. Your task is to review the Candidate's Resume and tailor it to better align with the requirements in the Job Description, preserving factual honesty but boosting keyword matching, professional tone, and clarity.${honestyRules}${confirmedSkillsNote}${sharedSkillsNote}${yearsNote}${careerSwitchNote}
 
 Candidate's Original Resume:
 ${JSON.stringify(sourceResume, null, 2)}

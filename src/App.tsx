@@ -68,6 +68,8 @@ import { RESUME_COLORS, DEFAULT_RESUME_COLOR, resumeColorHex, type ResumeColor }
 import { DEMO_RESUMES, DEMO_JDS } from "./demoData";
 import ResumePreview from "./components/ResumePreview";
 import { supabaseAuth, supabaseData, type SupabaseSession } from "./lib/supabase";
+import { resultEndingsFor, addResultToLine } from "./utils/resultEndings";
+import SideBySideReview from "./components/SideBySideReview";
 import { validateJobDescriptionText as checkJobDescriptionText, JD_MIN_WORDS, JD_MAX_WORDS } from "./utils/jdValidation";
 
 const SUPABASE_SESSION_STORAGE_KEY = "jd_resume_customizer_supabase_session";
@@ -113,31 +115,6 @@ function stem(word: string): string {
 }
 
 // "in 5 hours" / "in under an hour" / "tomorrow" for the daily AI limit reset
-// Ready-made endings that add a real result to a resume line; the user types only the number.
-// Picked from the line's own words so they fit ("budget" -> "worth ₹__").
-const RESULT_ENDINGS: { words: RegExp; endings: string[] }[] = [
-  // most specific first, so the best-fitting ending is the first chip
-  { words: /\bbudget|cost|spend|revenue|sales\b/i, endings: ["worth ₹__", "cutting costs by __%"] },
-  { words: /\bresearch|analysis|analy[sz]ed|competitor|market\b/i, endings: ["covering __ competitors", "across __ markets"] },
-  { words: /\bcampaign|marketing|social|content|brand|engagement|posts?|reels?|followers/i, endings: ["reaching __ people", "growing engagement by __%"] },
-  { words: /\bteams?\b|engineers?|developers?|mentor|cross[ -]functional|coordinat|collaborat|stakeholder/i, endings: ["for a team of __", "with __ engineers"] },
-  { words: /\bsprint|backlog|process|execution|pipeline|automat|deliver|deadline|tests?\b/i, endings: ["across __ sprints", "saving __ hours a week"] },
-  { words: /\busers?\b|customers?|merchants?|clients?/i, endings: ["used by __ people", "for __ customers"] }
-];
-const resultEndingsFor = (line: string): string[] => {
-  const picked: string[] = [];
-  for (const group of RESULT_ENDINGS) if (group.words.test(line)) picked.push(...group.endings);
-  for (const fallback of ["__% faster", "saving __ hours a week", "for a team of __"]) picked.push(fallback);
-  return [...new Set(picked)].slice(0, 3);
-};
-// "Led sprint planning." + "for a team of __" + "8" -> "Led sprint planning for a team of 8."
-const addResultToLine = (line: string, ending: string, value: string): string => {
-  const hadPeriod = /\.\s*$/.test(line);
-  // "...planning, saving 4 hours a week" reads better with a comma before an -ing ending
-  const joiner = /^[a-z]+ing\b/i.test(ending) ? ", " : " ";
-  return `${line.replace(/[.,\s]+$/, "")}${joiner}${ending.replace("__", value.trim())}${hadPeriod ? "." : ""}`;
-};
-
 function resetsInText(resetsAt?: string | null): string {
   const ms = resetsAt ? new Date(resetsAt).getTime() - Date.now() : NaN;
   if (!Number.isFinite(ms)) return "tomorrow";
@@ -2526,7 +2503,10 @@ export default function App() {
         const aiResume = raw.tailoredResume as ResumeStructure;
         setTailorSkillPool(bestSkills(aiResume.skills || selectedResume.skills || [], Infinity));
         const base = { original: selectedResume, skills: bestSkills(aiResume.skills || selectedResume.skills || []) };
-        const reviews = buildEditReviews(selectedResume, aiResume, tailorSelectedSkills, jdSkillNames, tailorJdText || "");
+        // Safe edits (wording only, no new claims) go straight in; edits that add a claim wait for one click
+        const reviews = buildEditReviews(selectedResume, aiResume, tailorSelectedSkills, jdSkillNames, tailorJdText || "")
+          .map(r => !r.resultOnly && r.status === "pending" && (r.original.trim() || r.target.kind === "summary") && r.warnings.length === 0 && r.mentions.length === 0
+            ? { ...r, status: "accepted" as const } : r);
         setTailorReviewBase(base);
         setTailorReviews(reviews);
         setEditingReviewId(null);
@@ -3363,7 +3343,7 @@ WORK EXPERIENCE
   // Reaching the final step (or downloading) keeps it in "Tailored resumes".
   // Closing with unsaved AI edits asks first; "Discard and close" calls this with force = true
   const closeTailorWizard = (force: boolean = false) => {
-    const unfinished = tailoredResultVersion && tailorWizardStep < 5 && !tailorDownloaded;
+    const unfinished = tailoredResultVersion && tailorWizardStep < 4 && !tailorDownloaded;
     if (unfinished && force !== true) {
       setShowCloseDraftConfirm(true);
       return;
@@ -3929,7 +3909,7 @@ WORK EXPERIENCE
                 </h1>
    
                 <p className="font-sans text-sm md:text-base text-neutral-700 max-w-[500px] leading-relaxed">
-                  Upload your resume, paste a job post, and tick the skills you really have. Auralis suggests honest edits you approve line by line, then gives you a clean PDF or Word file that hiring software can read.
+                  Upload your resume, paste a job post, and tick the skills you really have. Auralis makes honest edits for you (anything that adds a claim waits for your OK), then gives you a clean PDF or Word file that hiring software can read.
                 </p>
    
 
@@ -6621,17 +6601,16 @@ WORK EXPERIENCE
               <p className="text-sm text-neutral-500 mt-0.5">
                 {tailorAnalysisError ? "Something went wrong" : (
                   <>
-                    {tailorWizardStep === 1 && "Step 1 of 5 · Company & resume"}
-                    {tailorWizardStep === 2 && "Step 2 of 5 · Job description"}
-                    {tailorWizardStep === 3 && "Step 3 of 5 · Choose skills"}
-                    {tailorWizardStep === 4 && "Step 4 of 5 · Review edits"}
-                    {tailorWizardStep === 5 && "Step 5 of 5 · Final resume & download"}
+                    {tailorWizardStep === 1 && "Step 1 of 4 · Company & resume"}
+                    {tailorWizardStep === 2 && "Step 2 of 4 · Job description"}
+                    {tailorWizardStep === 3 && "Step 3 of 4 · Choose skills"}
+                    {tailorWizardStep === 4 && "Step 4 of 4 · Review and download"}
                   </>
                 )}
               </p>
               {!tailorAnalysisError && (
                 <div className="flex gap-1.5 mt-4" aria-hidden="true">
-                  {[1, 2, 3, 4, 5].map((s) => (
+                  {[1, 2, 3, 4].map((s) => (
                     <div
                       key={s}
                       className={`h-1 flex-1 rounded-full transition-colors duration-300 ${s <= tailorWizardStep ? "bg-black" : "bg-neutral-200"}`}
@@ -7038,7 +7017,12 @@ WORK EXPERIENCE
                         <p className="text-sm text-neutral-600 leading-relaxed max-w-xl">
                           {isFullRewrite
                             ? (tailorReviews.some(r => !r.resultOnly)
-                              ? `We suggested ${tailorReviews.filter(r => !r.resultOnly).length} ${tailorReviews.filter(r => !r.resultOnly).length === 1 ? "edit" : "edits"} below. Accept the ones that are true for you, or write your own. Anything you skip stays exactly as you wrote it.`
+                              ? (() => {
+                                const safe = tailorReviews.filter(r => !r.resultOnly && r.status === "accepted").length;
+                                const held = tailorReviews.filter(r => !r.resultOnly && r.status === "pending").length;
+                                const first = safe ? `${safe} ${safe === 1 ? "edit is" : "edits are"} already in your resume.` : "Your wording is kept as you wrote it.";
+                                return `${first}${held ? ` ${held} more ${held === 1 ? "needs" : "need"} your OK (in yellow).` : ""} Download when you're happy.`;
+                              })()
                               : "Your resume is ready with your ticked skills added. No other changes were suggested.")
                             : hasChanges
                             ? `Your tailored resume is ready with ${changeCount} ${changeCount === 1 ? "change" : "changes"}. Highlighted text shows what changed. Your original resume is not modified.`
@@ -7057,7 +7041,11 @@ WORK EXPERIENCE
 
                       {/* Keyword match: what the job asks for vs. what the resume shows */}
                       {totalKw > 0 && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 py-4 border-y border-neutral-200">
+                        <details id="keyword-match" className="border border-neutral-200 rounded-xl bg-white">
+                        <summary className="cursor-pointer select-none px-4 py-2.5 text-sm font-semibold text-black">
+                          Keywords this job asks for: {matchedKw.length} of {totalKw} in your resume
+                        </summary>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 px-4 pb-4">
                           <div className="space-y-2">
                             <p className="text-sm font-medium text-black">
                               In your resume <span className="text-neutral-400 font-normal">{matchedKw.length} of {totalKw}</span>
@@ -7096,13 +7084,7 @@ WORK EXPERIENCE
                             )}
                           </div>
                         </div>
-                      )}
-
-                      {/* Recruiters look for results; we never invent numbers, so ask for the person's own */}
-                      {isFullRewrite && tailorReviews.some(r => r.target.kind !== "summary" && !/\d/.test(r.suggested)) && (
-                        <p id="numbers-tip" className="text-sm text-neutral-600 bg-neutral-50 rounded-lg px-3 py-2 leading-relaxed">
-                          Tip: recruiters notice real results, like "for a team of 4". Tap a blue suggestion under a line and type your own number. We never make numbers up.
-                        </p>
+                        </details>
                       )}
 
                       {/* Career switch note */}
@@ -7128,205 +7110,10 @@ WORK EXPERIENCE
                         </p>
                       )}
 
-                      {/* Suggested edits: accept, edit or skip each one */}
-                      {isFullRewrite && tailorReviews.length > 0 && (() => {
-                        const realEdits = tailorReviews.filter(r => !r.resultOnly);
-                        const decided = realEdits.filter(r => r.status !== "pending").length;
-                        const used = realEdits.filter(r => r.status === "accepted" || r.status === "edited").length;
-                        return (
-                          <div className="space-y-3" id="suggested-edits">
-                            <div className="flex items-center justify-between gap-3 flex-wrap">
-                              <p className="text-sm font-medium text-black">
-                                Suggested edits <span className="text-neutral-400 font-normal">{decided} of {realEdits.length} reviewed · {used} in your resume</span>
-                              </p>
-                              <div className="flex items-center gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => updateEditReviews(tailorReviews.map(r => r.mentions.length === 0 && r.warnings.length === 0 && r.status === "pending" ? { ...r, status: "accepted" } : r))}
-                                  className="text-xs text-neutral-600 hover:text-black px-2 py-1 rounded-md hover:bg-neutral-100 cursor-pointer"
-                                  title="Accepts edits that only change wording. Edits that add a skill, number or seniority still need your review."
-                                >
-                                  Accept wording-only edits
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => { setEditingReviewId(null); updateEditReviews(tailorReviews.map(r => ({ ...r, status: "skipped" }))); }}
-                                  className="text-xs text-neutral-600 hover:text-black px-2 py-1 rounded-md hover:bg-neutral-100 cursor-pointer"
-                                >
-                                  Skip all
-                                </button>
-                              </div>
-                            </div>
-                            <div className="border-t border-neutral-200 divide-y divide-neutral-200">
-                              {tailorReviews.map((r, _i, all) => {
-                                const isEditing = editingReviewId === r.id;
-                                const inResume = r.status === "accepted" || r.status === "edited";
-                                // Offer "add a result" on up to 3 job/project lines that have no number
-                                const resultIds = all.filter(x => x.target.kind !== "summary" && !/\d/.test(x.suggested)).slice(0, 3).map(x => x.id);
-                                const currentLine = r.status === "edited" ? r.text : r.suggested;
-                                const offerResult = !isEditing && r.status !== "skipped" && resultIds.includes(r.id) && !/\d/.test(currentLine);
-                                const picking = resultPick?.id === r.id;
-                                const saveResult = () => {
-                                  if (!resultPick) return;
-                                  if (!/\d/.test(resultValue)) { setResultError("Type a number first, like 8 or 20"); return; }
-                                  setReviewStatus(r.id, "edited", addResultToLine(currentLine, resultPick.ending, resultValue));
-                                  setResultPick(null); setResultValue(""); setResultError(null);
-                                };
-                                return (
-                                  <div key={r.id} className="py-3 space-y-2" id={`review-${r.id}`}>
-                                    <div className="flex items-center justify-between gap-3 flex-wrap">
-                                      <p className="text-xs text-neutral-500">{r.label}</p>
-                                      <span className={`text-xs ${inResume ? "text-emerald-700" : r.status === "skipped" ? "text-neutral-500" : "text-neutral-400"}`}>
-                                        {r.resultOnly ? (r.status === "edited" ? "Result added" : "Unchanged") : r.status === "accepted" ? "Accepted" : r.status === "edited" ? "Your version" : r.status === "skipped" ? "Kept original" : "Not reviewed"}
-                                      </span>
-                                    </div>
-                                    {r.warnings.length > 0 && (
-                                      <ul className="text-xs text-amber-800 bg-amber-50 rounded-md px-2 py-1 space-y-0.5" aria-label="New claims in this edit">
-                                        {r.warnings.map(w => <li key={w}>{w}. Only accept if it's true.</li>)}
-                                      </ul>
-                                    )}
-                                    {r.mentions.length > 0 && (
-                                      <p className="text-xs text-amber-800 bg-amber-50 rounded-md px-2 py-1 inline-block">
-                                        Adds {r.mentions.join(" and ")} to this line. Only accept if you really used {r.mentions.length === 1 ? "it" : "them"} here.
-                                      </p>
-                                    )}
-                                    {r.resultOnly && !isEditing ? (
-                                      <p className="text-sm leading-relaxed text-black">{currentLine}</p>
-                                    ) : (
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                      <div>
-                                        <p className="text-xs text-neutral-400 mb-1">You wrote</p>
-                                        <p className={`text-sm leading-relaxed ${inResume ? "text-neutral-400" : "text-neutral-700"}`}>
-                                          {r.original || <span className="italic">Nothing here yet</span>}
-                                        </p>
-                                      </div>
-                                      <div>
-                                        <p className="text-xs text-neutral-400 mb-1">{isEditing || r.status === "edited" ? "Your version" : "Suggested"}</p>
-                                        {isEditing ? (
-                                          <textarea
-                                            id={`review-text-${r.id}`}
-                                            value={r.text}
-                                            autoFocus
-                                            onFocus={(e) => { const end = e.currentTarget.value.length; e.currentTarget.setSelectionRange(end, end); }}
-                                            onChange={(e) => setTailorReviews(tailorReviews.map(x => x.id === r.id ? { ...x, text: e.target.value } : x))}
-                                            className="w-full bg-white border border-neutral-300 rounded-lg px-3 py-2 text-sm leading-relaxed focus:outline-none focus:border-neutral-400 focus:ring-2 focus:ring-neutral-100 min-h-[84px]"
-                                          />
-                                        ) : (
-                                          <p className={`text-sm leading-relaxed ${r.status === "skipped" ? "text-neutral-400 line-through" : "text-black"}`}>
-                                            {r.status === "edited" ? r.text : r.suggested}
-                                          </p>
-                                        )}
-                                      </div>
-                                    </div>
-                                    )}
-                                    {picking && resultPick && (
-                                      <div className="rounded-lg bg-blue-50 px-3 py-2 space-y-2" id={`result-box-${r.id}`}>
-                                        <p className="text-sm text-neutral-800 leading-relaxed">
-                                          {currentLine.replace(/[.,\s]+$/, "")}{/^[a-z]+ing\b/i.test(resultPick.ending) ? ", " : " "}{resultPick.ending.split("__")[0]}
-                                          <input
-                                            id={`result-input-${r.id}`}
-                                            type="text"
-                                            inputMode="decimal"
-                                            autoFocus
-                                            value={resultValue}
-                                            onChange={(e) => { setResultValue(e.target.value); setResultError(null); }}
-                                            onKeyDown={(e) => { if (e.key === "Enter") saveResult(); if (e.key === "Escape") setResultPick(null); }}
-                                            placeholder="8"
-                                            aria-label="Your number"
-                                            className="mx-1 w-16 border-b-2 border-blue-500 bg-white px-1 text-sm text-black focus:outline-none"
-                                          />
-                                          {resultPick.ending.split("__")[1]}
-                                        </p>
-                                        {resultError && <p className="text-xs text-rose-600">{resultError}</p>}
-                                        <div className="flex gap-2">
-                                          <button type="button" onClick={saveResult} className="px-3 py-1.5 bg-[#2563eb] hover:bg-blue-600 text-white text-sm font-medium rounded-lg cursor-pointer">Add to line</button>
-                                          <button type="button" onClick={() => { setResultPick(null); setResultError(null); }} className="px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-black rounded-lg hover:bg-white cursor-pointer">Cancel</button>
-                                        </div>
-                                      </div>
-                                    )}
-                                    {offerResult && !picking && (
-                                      <div className="space-y-1.5" id={`result-offer-${r.id}`}>
-                                        <p className="text-xs text-neutral-500">Add a result? Recruiters notice numbers. Only add what's true.</p>
-                                        <div className="flex flex-wrap gap-1.5">
-                                          {resultEndingsFor(currentLine).map(ending => (
-                                            <button
-                                              key={ending}
-                                              type="button"
-                                              onClick={() => { setEditingReviewId(null); setResultPick({ id: r.id, ending }); setResultValue(""); setResultError(null); }}
-                                              className="px-2.5 py-1 text-xs font-medium rounded-md border border-blue-200 text-blue-700 bg-white hover:bg-blue-50 cursor-pointer"
-                                            >
-                                              + {ending}
-                                            </button>
-                                          ))}
-                                          <button
-                                            type="button"
-                                            onClick={() => { setResultPick(null); setTailorReviews(tailorReviews.map(x => x.id === r.id ? { ...x, text: currentLine } : x)); setEditingReviewId(r.id); }}
-                                            className="px-2.5 py-1 text-xs font-medium rounded-md text-neutral-600 hover:text-black hover:bg-neutral-100 cursor-pointer"
-                                          >
-                                            Write my own
-                                          </button>
-                                        </div>
-                                      </div>
-                                    )}
-                                    {picking ? null : r.resultOnly && !isEditing ? (r.status === "edited" && (
-                                      <button type="button" onClick={() => setReviewStatus(r.id, "accepted", r.original)} className="px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-black rounded-lg hover:bg-neutral-100 cursor-pointer">
-                                        Undo
-                                      </button>
-                                    )) : (
-                                    <div className="flex items-center gap-1">
-                                      {isEditing ? (
-                                        <>
-                                          <button
-                                            type="button"
-                                            onClick={() => { setEditingReviewId(null); setReviewStatus(r.id, r.text.trim() ? "edited" : "skipped"); }}
-                                            className="px-3 py-1.5 bg-[#2563eb] hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer"
-                                          >
-                                            Save my version
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => { setEditingReviewId(null); setTailorReviews(tailorReviews.map(x => x.id === r.id ? { ...x, text: x.status === "edited" ? x.text : x.suggested } : x)); }}
-                                            className="px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-black rounded-lg hover:bg-neutral-100 transition-colors cursor-pointer"
-                                          >
-                                            Cancel
-                                          </button>
-                                        </>
-                                      ) : (
-                                        <>
-                                          <button
-                                            type="button"
-                                            onClick={() => setReviewStatus(r.id, "accepted")}
-                                            aria-pressed={r.status === "accepted"}
-                                            className={`px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors cursor-pointer ${r.status === "accepted" ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "border-neutral-200 text-black hover:bg-neutral-50"}`}
-                                          >
-                                            Accept
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => setEditingReviewId(r.id)}
-                                            className="px-3 py-1.5 text-sm font-medium rounded-lg border border-neutral-200 text-black hover:bg-neutral-50 transition-colors cursor-pointer"
-                                          >
-                                            Edit
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => setReviewStatus(r.id, "skipped")}
-                                            aria-pressed={r.status === "skipped"}
-                                            className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors cursor-pointer ${r.status === "skipped" ? "bg-neutral-100 text-black" : "text-neutral-600 hover:text-black hover:bg-neutral-100"}`}
-                                          >
-                                            Skip
-                                          </button>
-                                        </>
-                                      )}
-                                    </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })()}
+                      {/* Before and after, side by side: safe edits already in, claims wait for one click */}
+                      {isFullRewrite && tailorReviewBase && (
+                        <SideBySideReview original={tailorReviewBase.original} reviews={tailorReviews} onChange={updateEditReviews} />
+                      )}
 
                       {/* Highlight controls, only when something actually changed */}
                       {hasChanges && !isFullRewrite && (
@@ -7350,8 +7137,8 @@ WORK EXPERIENCE
                         </div>
                       )}
 
-                      {/* Single Panel Tailored Resume */}
-                      <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white w-full">
+                      {/* Single Panel Tailored Resume (basic mode; AI mode shows before/after above) */}
+                      {!isFullRewrite && <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white w-full">
                         <div className="overflow-y-auto bg-neutral-50" style={{height: '60vh'}}>
                           <ResumePreview
                             resume={isFullRewrite ? tailoredResume : (originalResume && tailoredResultResume
@@ -7364,17 +7151,14 @@ WORK EXPERIENCE
                             showHighlights={showHighlights}
                           />
                         </div>
-                      </div>
+                      </div>}
                     </div>
                   );
                 })()
               )}
 
-              {!tailorIsAnalyzing && !tailorAnalysisError && tailorWizardStep === 5 && tailoredResultResume && (
-                <div className="space-y-3 text-left py-2 animate-fadeIn font-sans" id="tailor-final-step">
-                  <p className="text-sm text-neutral-600 leading-relaxed">
-                    This is your final resume, laid out the way it will download. Not happy with something? Go back to the edits and change it.
-                  </p>
+              {!tailorIsAnalyzing && !tailorAnalysisError && tailorWizardStep === 4 && tailoredResultResume && (
+                <div className="space-y-3 text-left pb-2 animate-fadeIn font-sans" id="tailor-final-step">
                   {(() => {
                     const current = tailoredResultResume.skills || [];
                     const lower = new Set(current.map(sk => sk.toLowerCase()));
@@ -7449,7 +7233,7 @@ WORK EXPERIENCE
                             </li>
                           ))}
                           {passed < checks.length && (
-                            <li className="text-xs text-neutral-500 pt-1">To fix one, click <span className="font-semibold text-black">Back to edits</span> below and edit the line.</li>
+                            <li className="text-xs text-neutral-500 pt-1">To fix one, click the line above and edit it.</li>
                           )}
                         </ul>
                       </details>
@@ -7476,7 +7260,8 @@ WORK EXPERIENCE
                     </div>
                     <span className="text-[11px] text-neutral-500">Only the name, headings and lines change. Applies to PDF and Word.</span>
                   </div>
-                  <div className="border border-neutral-200 rounded-xl overflow-hidden bg-white w-full">
+                  <details id="full-preview" className="border border-neutral-200 rounded-xl overflow-hidden bg-white w-full">
+                    <summary className="cursor-pointer select-none px-4 py-2.5 text-sm font-semibold text-black">See the full resume as it will download</summary>
                     <div className="overflow-y-auto bg-neutral-50 resume-accent-preview" style={{height: '62vh', ["--resume-accent" as any]: resumeColor === "classic" ? undefined : resumeColorHex(resumeColor)}}>
                       <ResumePreview
                         resume={tailoredResultResume}
@@ -7485,7 +7270,7 @@ WORK EXPERIENCE
                         showHighlights={false}
                       />
                     </div>
-                  </div>
+                  </details>
                 </div>
               )}
 
@@ -7599,27 +7384,6 @@ WORK EXPERIENCE
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5 text-emerald-500"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                       Original resume unchanged
                     </div>
-                    <button
-                      type="button"
-                      id="btn-see-final-resume"
-                      onClick={() => setTailorWizardStep(5)}
-                      className="px-4 py-2 bg-[#2563eb] hover:bg-blue-600 text-white font-medium text-sm rounded-lg border border-transparent transition cursor-pointer"
-                    >
-                      See final resume
-                    </button>
-                  </>
-                )}
-
-                {tailorWizardStep === 5 && (
-                  <>
-                    <button
-                      type="button"
-                      id="btn-back-to-edits"
-                      onClick={() => setTailorWizardStep(4)}
-                      className="mr-auto px-4 py-2 text-sm font-medium text-neutral-600 hover:text-black rounded-lg hover:bg-neutral-100 transition-colors cursor-pointer"
-                    >
-                      ← Back to edits
-                    </button>
                     <button
                       type="button"
                       onClick={() => downloadTailored("pdf")}

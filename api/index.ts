@@ -1361,7 +1361,8 @@ app.post("/api/tailor-resume", async (req, res) => {
 - Never add a tool, method or skill (for example "A/B testing", "Docker", "design systems") to a bullet unless that bullet's original text already describes it, or it is one of the CONFIRMED SKILLS and fits that bullet.
 - Never add or raise seniority: do not add words like "Senior", "Lead", "Principal", "Expert" or "Head of" unless the original job title already contains them, and never describe the candidate using the target job's title.
 - Only state years of experience if the original summary already states them, and use exactly that figure.
-- Rewrite each bullet to say the same thing more clearly and with the job description's wording. Keep every original number exactly as written.
+- Improve EVERY bullet so a recruiter sees the value in 5 seconds. Use this shape: strong past-tense verb + WHAT you did + HOW (tools, methods or people already named in the resume) + RESULT (only if the original line states one). Example: "Ran weekly sprint planning with engineers and designers." -> "Led weekly sprint planning in Jira with engineers and designers to keep releases on schedule." only if Jira appears in the resume; otherwise "Led weekly sprint planning with engineers and designers to keep releases on schedule."
+- Use the job description's words where they truthfully describe the same work (e.g. "user stories" -> "PRDs and user stories" only if PRDs are in the resume). Keep every original number exactly as written.
 - Never add a result or impact the original line doesn't state (for example "increased engagement", "boosted revenue", "drove growth").
 - Never drop specific details from a bullet: names of platforms, tools, companies, places or industries (for example "Facebook, Instagram", "Figma", "restaurant") and numbers stay word for word. Never replace them with vague words like "major platforms" or "multiple locations".
 - A CONFIRMED SKILL may describe how the candidate worked, but never claim a past job was in an industry or domain it wasn't (for example do not write "including in Cybersecurity solutions" for a fintech job).
@@ -1370,8 +1371,8 @@ app.post("/api/tailor-resume", async (req, res) => {
 PLAIN WORDING (strict):
 - Write like a clear, modest human, not a sales pitch. Use plain verbs: led, built, managed, ran, wrote, designed, worked with, improved.
 - Do not use these words unless the original resume already uses them: significantly, substantially, dramatically, demonstrably, meticulously, seamlessly, strategically, successfully, effectively, consistently, proactively, highly, comprehensive, innovative, robust, dynamic, impactful, results-driven, cutting-edge, orchestrated, spearheaded, leveraged, utilized, championed, crafted.
-- Keep each bullet about the same length as the original (at most a few words longer). Do not add trailing clauses like "ensuring ...", "contributing to ...", "driving ..." that say nothing new.
-- If a bullet is already clear and matches the job, return it unchanged.
+- A bullet may grow by up to about 10 words, but never past 2 lines. Do not add trailing clauses like "ensuring ...", "contributing to ...", "driving ..." that say nothing new.
+- Only return a bullet unchanged if it already has a strong verb, the how, and fits the job; that should be rare.
 - Keep every bullet to at most 2 lines (about 30 words). Keep the same number of bullets for each job; never add new ones.
 - Never write in the first person (no "I", "me", "my") and never use "aspiring", "motivated", "passionate" or "committed to".
 - Never mention the job, role or job description inside a bullet, and never end a bullet with "demonstrating ...", "showcasing ...", "highlighting ...", "aligning with ..." or "reflecting ...". A bullet describes what the candidate did, nothing else.

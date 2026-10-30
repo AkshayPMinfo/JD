@@ -5,6 +5,7 @@
 import { Checks } from "./helpers.ts";
 import { checkResume, weakWordsIn } from "../../src/utils/resumeChecks.ts";
 import { educationGoesFirst } from "../../src/utils/educationOrder.ts";
+import { yearsOfExperience } from "../../src/utils/experienceYears.ts";
 
 const t = new Checks();
 const job = (n: number, extra = "") => ({ id: "j", role: "PM", company: `Co${n}`, duration: "2022 - 2024", description: Array.from({ length: n }, (_, i) => `Did task ${i}${extra}`) });
@@ -33,4 +34,11 @@ t.check("E2", "Graduated 2023 → Experience first", !educationGoesFirst({ educa
 t.check("E3", "No work experience → Education first", educationGoesFirst({ education: [{ duration: "2018 - 2022" }], workExperience: [] }, now));
 t.check("E4", "Still studying → Education first", educationGoesFirst({ education: [{ duration: "2024 - Present" }], workExperience: [job(2)] }, now));
 t.check("E5", "No education → nothing to move", !educationGoesFirst({ education: [], workExperience: [] }, now));
+// Years of experience decide whether to suggest a summary (2+ years) or just note it's optional
+const akshay = [{ duration: "January, 2023 - October, 2024" }, { duration: "March, 2018 - December, 2020" }, { duration: "May, 2014 - December, 2016" }];
+t.check("Y1", `Three jobs with gaps → ${yearsOfExperience(akshay)} years`, yearsOfExperience(akshay) === 7.3);
+t.check("Y2", "Overlapping jobs count once", yearsOfExperience([{ duration: "Jan 2020 - Dec 2021" }, { duration: "Jun 2021 - Dec 2021" }]) === 2);
+t.check("Y3", "Still working there → up to today", yearsOfExperience([{ duration: "Jun 2023 - Present" }], now) > 3);
+t.check("Y4", "An internship of 5 months is under 2 years", yearsOfExperience([{ duration: "Jan 2023 - May 2023" }]) < 2);
+t.check("Y5", "No dates → 0", yearsOfExperience([{ duration: "" }]) === 0);
 process.exit(t.report("Resume checks"));

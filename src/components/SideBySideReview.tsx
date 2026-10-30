@@ -15,6 +15,7 @@ export type ReviewLine = {
   warnings: string[];
   target: { kind: "summary" } | { kind: "exp" | "proj"; item: number; bullet: number };
   resultOnly?: boolean;
+  note?: string; // shown instead of a warning, e.g. for a suggested summary
 };
 
 type Props = {
@@ -58,7 +59,7 @@ function Highlighted({ before, after }: { before: string; after: string }) {
     <>
       {diffWords(before, after, { ignoreCase: true }).map((part, i) =>
         part.removed ? null : part.added ? (
-          <span key={i} className="bg-emerald-50 text-emerald-800 rounded-sm">{part.value}</span>
+          <span key={i} className="bg-yellow-300 text-yellow-950 rounded-sm">{part.value}</span>
         ) : (
           <span key={i}>{part.value}</span>
         )
@@ -158,13 +159,13 @@ export default function SideBySideReview({ original, reviews, onChange = () => {
             </p>
           )}
           {!readOnly && held && r && !isEditing && (
-            <div className="rounded-lg bg-amber-50 px-2.5 py-2 space-y-1" id={`sbs-held-${id}`}>
-              <p className="text-xs text-amber-800">
-                Not added: {r.warnings[0] ? r.warnings[0].charAt(0).toLowerCase() + r.warnings[0].slice(1) : `adds ${r.mentions.join(" and ")} to this line`}
+            <div className="rounded-lg bg-orange-50 border border-orange-300 px-2.5 py-2 space-y-1" id={`sbs-held-${id}`}>
+              <p className="text-xs text-orange-800">
+                {r.note || `Not added: ${r.warnings[0] ? r.warnings[0].charAt(0).toLowerCase() + r.warnings[0].slice(1) : `adds ${r.mentions.join(" and ")} to this line`}`}
               </p>
-              <p className="text-sm text-amber-900">{r.suggested}</p>
-              <button type="button" id={`sbs-add-${id}`} onClick={() => update(id, { status: "accepted" })} className="text-xs font-medium text-amber-900 underline cursor-pointer">
-                Add it, it's true
+              <p className="text-sm text-orange-900">{r.suggested}</p>
+              <button type="button" id={`sbs-add-${id}`} onClick={() => update(id, { status: "accepted" })} className="text-xs font-medium text-orange-900 underline cursor-pointer">
+                {r.note ? "Add this summary" : "Add it, it's true"}
               </button>
             </div>
           )}
@@ -229,13 +230,13 @@ export default function SideBySideReview({ original, reviews, onChange = () => {
     <div className="space-y-3" id="side-by-side-review">
       {readOnly ? (
         <p className="text-xs text-neutral-600" id="sbs-legend">
-          <span className="bg-emerald-50 text-emerald-800 rounded px-1.5 py-0.5 mr-1.5">Green</span>
+          <span className="bg-yellow-300 text-yellow-950 rounded px-1.5 py-0.5 mr-1.5">Yellow</span>
           {reviews.length ? `changed for this job · ${reviews.length} ${reviews.length === 1 ? "line" : "lines"} changed` : "No lines were reworded in this version. Only skills may have been added."}
         </p>
       ) : (
       <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-xs text-neutral-600" id="sbs-legend">
-        <span className="flex items-center gap-1.5"><span className="bg-emerald-50 text-emerald-800 rounded px-1.5 py-0.5">Green</span> changed for this job</span>
-        <span className="flex items-center gap-1.5"><span className="bg-amber-50 text-amber-800 rounded px-1.5 py-0.5">Yellow</span> not added, needs your OK</span>
+        <span className="flex items-center gap-1.5"><span className="bg-yellow-300 text-yellow-950 rounded px-1.5 py-0.5">Yellow</span> changed for this job</span>
+        <span className="flex items-center gap-1.5"><span className="bg-orange-50 border border-orange-300 text-orange-800 rounded px-1.5 py-0.5">Orange</span> not added, needs your OK</span>
         <span className="flex items-center gap-1.5"><span className="border border-dashed border-blue-300 text-blue-700 rounded px-1.5 py-0.5">+ Blue</span> add a number if true (optional)</span>
         <span className="text-neutral-400">Click any line to edit it</span>
       </div>
@@ -246,6 +247,11 @@ export default function SideBySideReview({ original, reviews, onChange = () => {
           <span>After</span>
         </div>
         {(original.summary || summaryReview) && renderRow({ id: "summary", before: original.summary || "", label: "Summary" })}
+        {!readOnly && !original.summary && !summaryReview && (
+          <p className="pt-3 text-xs text-neutral-500" id="sbs-summary-tip">
+            Summary: optional when you're starting out. Skip it, or add one line about the role you're aiming for.
+          </p>
+        )}
         {jobs.map((job, i) => (
           <div key={job.id || i}>
             <p className="pt-3 text-xs font-semibold text-neutral-700">{[job.role, job.company].filter(Boolean).join(" · ")}</p>

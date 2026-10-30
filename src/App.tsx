@@ -70,6 +70,7 @@ import ResumePreview from "./components/ResumePreview";
 import { supabaseAuth, supabaseData, type SupabaseSession } from "./lib/supabase";
 import { resultEndingsFor, addResultToLine } from "./utils/resultEndings";
 import { backedBy } from "./utils/sameSkill";
+import { yearsOfExperience } from "./utils/experienceYears";
 import SideBySideReview, { changedLines } from "./components/SideBySideReview";
 import { validateJobDescriptionText as checkJobDescriptionText, JD_MIN_WORDS, JD_MAX_WORDS } from "./utils/jdValidation";
 
@@ -272,7 +273,7 @@ export default function App() {
   const [simplifiedJd, setSimplifiedJd] = useState<SimplifiedJD | null>(null);
   const [diffTab, setDiffTab] = useState<"added" | "modified" | "unchanged">("added");
   // View popup of a saved version: before/after or the full resume
-  const [versionView, setVersionView] = useState<"compare" | "full">("compare");
+  const [versionView, setVersionView] = useState<"compare" | "full">("full");
 
   const [isTailoring, setIsTailoring] = useState(false);
   const [suggestions, setSuggestions] = useState<ResumeSuggestion[]>([]);
@@ -553,6 +554,7 @@ export default function App() {
     warnings: string[]; // things this edit claims that the original resume never said
     target: { kind: "summary" } | { kind: "exp" | "proj"; item: number; bullet: number };
     resultOnly?: boolean; // the AI left this line alone; shown only so the user can add a result
+    note?: string; // shown in the orange box instead of a warning (suggested summary)
   };
   const [tailorReviews, setTailorReviews] = useState<EditReview[]>([]);
   // Job-switcher check: set when the resume's recent role and the job are in different fields
@@ -2511,9 +2513,18 @@ export default function App() {
         setTailorSkillPool(bestSkills(aiResume.skills || selectedResume.skills || [], Infinity));
         const base = { original: selectedResume, skills: bestSkills(aiResume.skills || selectedResume.skills || []) };
         // Safe edits (wording only, no new claims) go straight in; edits that add a claim wait for one click
-        const reviews = buildEditReviews(selectedResume, aiResume, tailorSelectedSkills, jdSkillNames, tailorJdText || "")
+        let reviews = buildEditReviews(selectedResume, aiResume, tailorSelectedSkills, jdSkillNames, tailorJdText || "")
           .map(r => !r.resultOnly && r.status === "pending" && (r.original.trim() || r.target.kind === "summary") && r.warnings.length === 0 && r.mentions.length === 0
             ? { ...r, status: "accepted" as const } : r);
+        // No summary of your own: 2+ years of work gets a suggested one to add or edit; earlier on it's optional, so none is added
+        if (!(selectedResume.summary || "").trim()) {
+          const years = yearsOfExperience(selectedResume.workExperience || []);
+          reviews = years >= 2
+            ? reviews.map(r => r.target.kind === "summary"
+              ? { ...r, status: "pending" as const, note: `Suggested summary for your ${Math.floor(years)}+ years of experience. Recruiters read these 2–4 lines first: years, industry, top skills. Add it, or click the line to write your own.` }
+              : r)
+            : reviews.filter(r => r.target.kind !== "summary");
+        }
         setTailorReviewBase(base);
         setTailorReviews(reviews);
         setEditingReviewId(null);
@@ -4448,7 +4459,7 @@ WORK EXPERIENCE
                           <button
                             type="button"
                             onClick={() => {
-                              setSelectedSavedVersion(version); setVersionView("compare");
+                              setSelectedSavedVersion(version); setVersionView("full");
                               setShowSavedVersionPreviewModal(true);
                             }}
                             className="px-3 py-1.5 text-sm font-medium text-black rounded-lg border border-neutral-200 hover:bg-neutral-50 transition-colors cursor-pointer"
@@ -7028,7 +7039,7 @@ WORK EXPERIENCE
                                 const safe = tailorReviews.filter(r => !r.resultOnly && r.status === "accepted").length;
                                 const held = tailorReviews.filter(r => !r.resultOnly && r.status === "pending").length;
                                 const first = safe ? `${safe} ${safe === 1 ? "edit is" : "edits are"} already in your resume.` : "Your wording is kept as you wrote it.";
-                                return `${first}${held ? ` ${held} more ${held === 1 ? "needs" : "need"} your OK (in yellow).` : ""} Download when you're happy.`;
+                                return `${first}${held ? ` ${held} more ${held === 1 ? "needs" : "need"} your OK (in orange).` : ""} Download when you're happy.`;
                               })()
                               : "Your resume is ready with your ticked skills added. No other changes were suggested.")
                             : hasChanges
@@ -7292,16 +7303,13 @@ WORK EXPERIENCE
                         <p className="text-sm text-neutral-600 mt-1 break-all">{tailorDownloaded.fileName}</p>
                       </div>
                     </div>
-                    <p className="text-sm text-neutral-600">You can also download it as {tailorDownloaded.format === "pdf" ? "a Word file" : "a PDF"}, or go back and make changes.</p>
+                    <p className="text-sm text-neutral-600">You can also download it as {tailorDownloaded.format === "pdf" ? "a Word file" : "a PDF"}.</p>
                     {!feedbackAsked && (
                       <div className="border border-neutral-200 rounded-xl p-4">
                         <FeedbackBox onSend={(rating, comment) => handleSendFeedback(rating, comment, "after_download")} onSkip={markFeedbackAsked} />
                       </div>
                     )}
                     <div className="flex flex-wrap gap-2 justify-end">
-                      <button type="button" onClick={() => { setTailorDownloaded(null); setTailorWizardStep(4); }} className="px-3 py-1.5 text-sm font-medium text-neutral-600 hover:text-black rounded-lg hover:bg-neutral-100 transition-colors cursor-pointer">
-                        Make changes
-                      </button>
                       <button type="button" onClick={() => downloadTailored(tailorDownloaded.format === "pdf" ? "docx" : "pdf")} className="px-3 py-1.5 text-sm font-medium rounded-lg border border-neutral-200 text-black hover:bg-neutral-50 transition-colors cursor-pointer">
                         Download {tailorDownloaded.format === "pdf" ? "DOCX" : "PDF"}
                       </button>
@@ -7537,10 +7545,10 @@ WORK EXPERIENCE
               <div className="w-full md:w-7/12 flex flex-col gap-2 font-sans text-left">
                 {selectedSavedVersion.originalResumeData && (
                   <div className="flex border border-neutral-200 rounded-lg overflow-hidden text-xs self-start" role="tablist" id="version-view-tabs">
-                    <button type="button" role="tab" id="tab-version-compare" aria-selected={versionView === "compare"} onClick={() => setVersionView("compare")}
-                      className={`px-3 py-1.5 border-r border-neutral-200 cursor-pointer ${versionView === "compare" ? "bg-neutral-100 text-black font-medium" : "bg-white text-neutral-500 hover:text-black"}`}>Before / After</button>
                     <button type="button" role="tab" id="tab-version-full" aria-selected={versionView === "full"} onClick={() => setVersionView("full")}
-                      className={`px-3 py-1.5 cursor-pointer ${versionView === "full" ? "bg-neutral-100 text-black font-medium" : "bg-white text-neutral-500 hover:text-black"}`}>Full resume</button>
+                      className={`px-3 py-1.5 border-r border-neutral-200 cursor-pointer ${versionView === "full" ? "bg-neutral-100 text-black font-medium" : "bg-white text-neutral-500 hover:text-black"}`}>Full resume</button>
+                    <button type="button" role="tab" id="tab-version-compare" aria-selected={versionView === "compare"} onClick={() => setVersionView("compare")}
+                      className={`px-3 py-1.5 cursor-pointer ${versionView === "compare" ? "bg-neutral-100 text-black font-medium" : "bg-white text-neutral-500 hover:text-black"}`}>Before / After</button>
                   </div>
                 )}
                 {selectedSavedVersion.originalResumeData && versionView === "compare" ? (

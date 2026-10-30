@@ -169,13 +169,37 @@ export function dropFillerEnding(text: string, originalLine: string): string {
   return out;
 }
 
+// Capitalised words that aren't names: sentence starters and everyday words
+const NOT_NAMES = new Set(["i", "a", "an", "the", "and", "or", "for", "with", "in", "on", "at", "to", "of", "by",
+  "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]);
+
+/** Names (Facebook, Figma, LinkedIn) and numbers (12%, 300) in a line, skipping the first word. */
+function namedDetails(line: string): string[] {
+  const out: string[] = [];
+  const tokens = line.match(/[A-Za-z][\w.+#&'-]*|\d[\d,.]*%?/g) || [];
+  tokens.forEach((tok, i) => {
+    const t = tok.replace(/[.,']+$/, "");
+    if (/^\d/.test(t)) out.push(t);
+    else if (i > 0 && /[A-Z]/.test(t) && !NOT_NAMES.has(t.toLowerCase())) out.push(t);
+  });
+  return out;
+}
+
+/** If the rewrite drops a name or number your line had ("Facebook, Instagram" -> "social media platforms"), keep your line. */
+export function keepNamedDetails(text: string, originalLine: string): string {
+  if (!originalLine.trim() || !text) return text;
+  const lower = text.toLowerCase();
+  const lost = namedDetails(originalLine).filter(d => !lower.includes(d.toLowerCase()));
+  return lost.length ? originalLine : text;
+}
+
 /** Clean every line the AI wrote, comparing each with the candidate's own line where there is one. */
 export function plainResumeWording<T extends { summary?: string; workExperience?: any[]; projects?: any[] }>(tailored: T, source: any): T {
   const originalResumeText = JSON.stringify(source || {});
   const clean = (s: any, originalLine = "") => {
     if (typeof s !== "string") return s;
     const plain = dropFillerEnding(keepAppWord(keepDigits(removeHype(s, originalResumeText), originalLine), originalLine), originalLine);
-    return undoPointlessChange(plain, originalLine);
+    return keepNamedDetails(undoPointlessChange(plain, originalLine), originalLine);
   };
   const match = (list: any[] = [], item: any, i: number) => list.find(x => x?.id && x.id === item?.id) || list[i];
   return {

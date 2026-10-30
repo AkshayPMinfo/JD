@@ -1363,6 +1363,9 @@ app.post("/api/tailor-resume", async (req, res) => {
 - Only state years of experience if the original summary already states them, and use exactly that figure.
 - Rewrite each bullet to say the same thing more clearly and with the job description's wording. Keep every original number exactly as written.
 - Never add a result or impact the original line doesn't state (for example "increased engagement", "boosted revenue", "drove growth").
+- Never drop specific details from a bullet: names of platforms, tools, companies, places or industries (for example "Facebook, Instagram", "Figma", "restaurant") and numbers stay word for word. Never replace them with vague words like "major platforms" or "multiple locations".
+- A CONFIRMED SKILL may describe how the candidate worked, but never claim a past job was in an industry or domain it wasn't (for example do not write "including in Cybersecurity solutions" for a fintech job).
+- If the original resume has no summary, write a 2-3 line summary using only facts from the resume (job titles, total years, industries they actually worked in, skills they listed). Do not add an industry or domain from the job description.
 
 PLAIN WORDING (strict):
 - Write like a clear, modest human, not a sales pitch. Use plain verbs: led, built, managed, ran, wrote, designed, worked with, improved.

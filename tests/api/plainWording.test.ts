@@ -3,7 +3,7 @@
  * Run with: npm run test:api
  */
 import { Checks } from "./helpers.ts";
-import { removeHype, keepDigits, undoPointlessChange, plainResumeWording, dropFillerEnding, keepAppWord } from "../../api/plainWording.ts";
+import { removeHype, keepDigits, undoPointlessChange, plainResumeWording, dropFillerEnding, keepAppWord, keepNamedDetails } from "../../api/plainWording.ts";
 
 const t = new Checks();
 const orig = "Managed content for Facebook and Instagram. Ran marketing campaigns that increased footfall.";
@@ -46,4 +46,11 @@ same("A1", "'mobile application' back to 'app'", keepAppWord("Built consumer mob
 same("A2", "Keeps 'application' if you wrote it", keepAppWord("Tracked loan application drop-offs in the app.", "Tracked loan application drop-offs."), "Tracked loan application drop-offs in the app.");
 same("W1", "Drops 'aspiring' the AI added", removeHype("Aspiring product manager with 2 years in fintech.", "Analyst with 2 years in fintech."), "Product manager with 2 years in fintech.");
 same("W2", "Keeps 'aspiring' if you wrote it (the final-step check flags it instead)", removeHype("Aspiring product manager.", "Aspiring product manager."), "Aspiring product manager.");
+// Found in the live Sophos test (30 Oct): specific names were swapped for vague words
+const fb = "Managed content creation, scheduling, and publication for platforms like Facebook, Instagram, Twitter, and LinkedIn.";
+same("N1", "Keeps your line when Facebook, Instagram... are dropped", keepNamedDetails("Managed content creation, scheduling, and publication across major social media platforms.", fb), fb);
+same("N2", "A rewrite that keeps every name stays", keepNamedDetails("Ran content and scheduling for Facebook, Instagram, Twitter and LinkedIn.", fb), "Ran content and scheduling for Facebook, Instagram, Twitter and LinkedIn.");
+same("N3", "Keeps your line when a number is dropped", keepNamedDetails("Launched a reorder button that increased repeat orders.", "Launched a reorder button that increased repeat orders by 12%."), "Launched a reorder button that increased repeat orders by 12%.");
+same("N4", "Lowercase change of a name is fine", keepNamedDetails("Ran sprints in jira.", "Ran sprints in Jira."), "Ran sprints in jira.");
+same("N5", "First word and months don't count as names", keepNamedDetails("Wrote PRDs from March to June.", "Created PRDs from March to June."), "Wrote PRDs from March to June.");
 process.exit(t.report("Plain wording"));

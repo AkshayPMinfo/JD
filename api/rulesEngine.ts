@@ -748,6 +748,8 @@ function findExtraSkills(jdText: string, known: string[], title: string, company
     if (/\s(with|for|of)\s/i.test(name) || /\s(scenarios?|providers?|offerings?|partners?|organi[sz]ations?|use cases?)$/i.test(name)) return;
     if (knownKeys.has(key) || out.some(o => o.toLowerCase() === key)) return;
     if (key.split(/\s+/).every(w => NOT_SKILLS.has(w) || skipWords.has(w))) return;
+    // The company's own products aren't skills ("Sophos Central", "Sophos Firewall")
+    if (key.split(/\s+/).some(w => frequentNames.includes(w))) return;
     if (/\d/.test(name) && !/^[A-Z0-9.+#-]+$/.test(name)) return; // "3+ years" etc.
     out.push(name.charAt(0).toUpperCase() + name.slice(1));
   };

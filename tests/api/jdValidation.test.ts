@@ -50,11 +50,11 @@ const sophos = `About the job
 Sophos is a cybersecurity leader. Sophos solutions combine machine learning and automation.
 Sophos goes to market with Managed Service Providers (MSPs) and partners. Sophos is headquartered in Oxford.
 What You Will Do
-Own the product lifecycle for Sophos Firewall. Develop expertise in firewall use cases (including MSP and multi-tenant scenarios), SD-WAN, VPN, and integration with XDR and ZTNA.
+Own the product lifecycle for Sophos Firewall and Sophos Central. Develop expertise in firewall use cases (including MSP and multi-tenant scenarios), SD-WAN, VPN, and integration with XDR and ZTNA.
 What You Will Bring
 5+ years of experience in product management with knowledge of network security or B2B SaaS.`;
 const names = (rulesBasedSimplifyJd(sophos) as any).requiredSkills.map((s: any) => s.name.toLowerCase());
-t.check("K1", `The company isn't a skill → ${names.join(", ")}`, !names.some((n: string) => n.includes("sophos")));
+t.check("K1", `The company and its products aren't skills → ${names.join(", ")}`, !names.some((n: string) => n.includes("sophos")));
 t.check("K2", "No stray brackets or description phrases", !names.some((n: string) => /[()]|scenario|provider| with /.test(n)));
 t.check("K3", "Real skills still found (VPN, SD-WAN, ZTNA)", ["vpn", "sd-wan", "ztna"].every(k => names.includes(k)));
 process.exit(t.report("Job post check"));

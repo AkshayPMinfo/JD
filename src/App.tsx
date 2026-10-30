@@ -2151,7 +2151,10 @@ export default function App() {
     // whose products are everyday tools ("Google Analytics", "Microsoft Excel").
     const companyKey = skillKey(companyName).split(" ")[0] || "";
     const TOOL_MAKERS = new Set(["google", "microsoft", "amazon", "aws", "adobe", "salesforce", "atlassian", "meta", "apple", "oracle", "sap", "hubspot", "zoho"]);
-    const isOwnProduct = (key: string) => companyKey.length >= 3 && !TOOL_MAKERS.has(companyKey) && key.split(" ").includes(companyKey);
+    // compare the raw word too: "Sophos" loses its "s" in skillKey ("sopho")
+    const companyWord = companyName.toLowerCase().trim().split(/\s+/)[0] || "";
+    const isOwnProduct = (key: string) => companyKey.length >= 3 && !TOOL_MAKERS.has(companyKey) &&
+      (key.split(" ").includes(companyKey) || key.split(" ").includes(companyWord));
     const isSkillLike = (name: string) => {
       const key = skillKey(name);
       // Job titles aren't skills ("Backend Engineer", "Product Manager")

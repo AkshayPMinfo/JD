@@ -3,7 +3,7 @@
  * Run with: npm run test:api
  */
 import { Checks } from "./helpers.ts";
-import { removeHype, keepDigits, undoPointlessChange, plainResumeWording, dropFillerEnding, keepAppWord, keepNamedDetails, keepResults, dropWeakSentences, tidySpacing } from "../../api/plainWording.ts";
+import { removeHype, keepDigits, undoPointlessChange, plainResumeWording, dropFillerEnding, keepAppWord, keepNamedDetails, keepResults, dropWeakSentences, tidySpacing, dropOwnName } from "../../api/plainWording.ts";
 
 const t = new Checks();
 const orig = "Managed content for Facebook and Instagram. Ran marketing campaigns that increased footfall.";
@@ -73,4 +73,6 @@ same("N7", "Real names mid-sentence still count", keepNamedDetails("Managed soci
 same("W6", "Drops a 'Proven ability to…' sentence (a claim the resume doesn't show)", dropWeakSentences("8 years across product and marketing. Skilled in SQL and Jira. Proven ability to launch features that improve retention and drive growth."), "8 years across product and marketing. Skilled in SQL and Jira.");
 same("H9", "Drops 'engaging', 'effective' and 'various' the AI added", removeHype("Wrote engaging ad copy and effective taglines for various clients.", "Wrote ad copy and taglines for clients."), "Wrote ad copy and taglines for clients.");
 same("H10", "Keeps 'engaging' when the person used it", removeHype("Wrote engaging ad copy.", "Wrote engaging ad copy for brands."), "Wrote engaging ad copy.");
+same("O1", "Drops the person's own name from the start of the summary", dropOwnName("Ravi Sharma with 6 years of experience in customer support.", "Ravi Sharma"), "6 years of experience in customer support.");
+same("O2", "A summary without the name is left alone", dropOwnName("Copywriter with 6 years of experience.", "Sana Iqbal"), "Copywriter with 6 years of experience.");
 process.exit(t.report("Plain wording"));

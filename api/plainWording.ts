@@ -228,6 +228,15 @@ export function tidySpacing(text: string): string {
   return text.replace(/\s+([.,;:!?])/g, "$1").replace(/([,;:])(?=[A-Za-z])/g, "$1 ").replace(/\s{2,}/g, " ").trim();
 }
 
+/** Resumes don't name the person in the summary: "Ravi Sharma with 6 years of experience" -> "6 years of experience" */
+export function dropOwnName(summary: string, fullName: string): string {
+  const name = (fullName || "").trim();
+  if (!summary || name.length < 3) return summary;
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
+  const out = summary.replace(new RegExp(`^\\s*${esc}\\s*(?:,|-|–|is an?|is|with)?\\s*`, "i"), "");
+  return out === summary ? summary : out.charAt(0).toUpperCase() + out.slice(1);
+}
+
 /** Clean every line the AI wrote, comparing each with the candidate's own line where there is one. */
 export function plainResumeWording<T extends { summary?: string; workExperience?: any[]; projects?: any[] }>(tailored: T, source: any): T {
   const originalResumeText = JSON.stringify(source || {});
@@ -239,7 +248,7 @@ export function plainResumeWording<T extends { summary?: string; workExperience?
   const match = (list: any[] = [], item: any, i: number) => list.find(x => x?.id && x.id === item?.id) || list[i];
   return {
     ...tailored,
-    summary: fixSummaryYears(dropWeakSentences(clean(tailored.summary, source?.summary || ""), source?.summary || ""), Array.isArray(source?.workExperience) ? source.workExperience : []),
+    summary: fixSummaryYears(dropWeakSentences(dropOwnName(clean(tailored.summary, source?.summary || ""), source?.fullName || ""), source?.summary || ""), Array.isArray(source?.workExperience) ? source.workExperience : []),
     workExperience: (tailored.workExperience || []).map((j, i) => {
       const orig = match(source?.workExperience, j, i);
       return { ...j, description: (j.description || []).map((d: any, k: number) => clean(d, orig?.description?.[k] || "")) };

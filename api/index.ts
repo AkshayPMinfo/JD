@@ -845,7 +845,8 @@ function extractPromptText(contents: any): string | null {
 
 // Any OpenAI-style chat API (Groq, NVIDIA). Returns { text } like Gemini's response.
 type ChatProvider = { name: "groq" | "nvidia"; key: string; baseUrl: string; model: string; jsonMode: boolean };
-const NVIDIA_MODEL = process.env.NVIDIA_MODEL || "openai/gpt-oss-20b";
+// gpt-oss-20b stopped answering on NVIDIA (Nov 2026); this one replies in about a second
+const NVIDIA_MODEL = process.env.NVIDIA_MODEL || "nvidia/nemotron-3.5-lightning-30b-a3b";
 const NVIDIA_BASE_URL = (process.env.NVIDIA_BASE_URL || "https://integrate.api.nvidia.com/v1").replace(/\/$/, "");
 
 // Some models wrap JSON in ```json fences or add a sentence around it: keep just the JSON object
@@ -882,6 +883,8 @@ async function generateWithChatApi(provider: ChatProvider, options: any, timeout
         temperature: 0.2,
         max_tokens: 8192,
         ...(provider.jsonMode ? { response_format: { type: "json_object" } } : {}),
+        // NVIDIA's reasoning models "think" first, which is too slow here; ask for the answer only
+        ...(provider.name === "nvidia" ? { chat_template_kwargs: { enable_thinking: false } } : {}),
         messages: [
           { role: "system", content: system },
           { role: "user", content: prompt }
@@ -956,15 +959,24 @@ async function generateContentWithRetry(ai: GoogleGenAI | null, options: any, ma
 
   const liteModel = process.env.GEMINI_LITE_MODEL || "gemini-3.5-flash-lite";
   const chatProviders: ChatProvider[] = [];
-  if (process.env.GROQ_API_KEY) chatProviders.push({ name: "groq", key: process.env.GROQ_API_KEY, baseUrl: GROQ_BASE_URL, model: GROQ_MODEL, jsonMode: true });
+  if (process.env.GROQ_API_KEY) {
+    chatProviders.push({ name: "groq", key: process.env.GROQ_API_KEY, baseUrl: GROQ_BASE_URL, model: GROQ_MODEL, jsonMode: true });
+    // Groq allows only a few big requests a minute per model; the smaller model has its own allowance
+    const groqBackup = process.env.GROQ_BACKUP_MODEL || "openai/gpt-oss-20b";
+    if (groqBackup !== GROQ_MODEL) chatProviders.push({ name: "groq", key: process.env.GROQ_API_KEY, baseUrl: GROQ_BASE_URL, model: groqBackup, jsonMode: true });
+  }
   if (process.env.NVIDIA_API_KEY) chatProviders.push({ name: "nvidia", key: process.env.NVIDIA_API_KEY, baseUrl: NVIDIA_BASE_URL, model: NVIDIA_MODEL, jsonMode: false });
 
   type Attempt = { name: string; run: () => Promise<any> };
   const lite: Attempt[] = ai && geminiError && options.model !== liteModel
     ? [{ name: liteModel, run: () => withTimeout(ai.models.generateContent({ ...options, model: liteModel, config: { ...options.config, thinkingConfig: undefined } }), Math.min(GROQ_TIMEOUT_MS, timeLeft()), liteModel) }] : [];
   // 25s cap each: a slow free backup must not keep the person waiting (basic mode comes next)
-  const chats: Attempt[] = chatProviders.map(p => ({ name: `${p.name} (${p.model})`, run: () => generateWithChatApi(p, options, Math.min(GROQ_TIMEOUT_MS, timeLeft())) }));
-  const attempts = preferStrong ? [...chats.slice(0, 1), ...lite, ...chats.slice(1)] : [...lite, ...chats];
+  // NVIDIA is the last try, so it may use all the time that's left
+  const chats: Attempt[] = chatProviders.map(p => ({ name: `${p.name} (${p.model})`, run: () => generateWithChatApi(p, options, p.name === "nvidia" ? timeLeft() - 1000 : Math.min(GROQ_TIMEOUT_MS, timeLeft())) }));
+  const groqChats = chats.filter((_, i) => chatProviders[i].name === "groq");
+  const otherChats = chats.filter((_, i) => chatProviders[i].name !== "groq");
+  // Rewriting: Groq (big, then small) writes better than Flash-Lite, so try it first
+  const attempts = preferStrong ? [...groqChats, ...lite, ...otherChats] : [...lite, ...chats];
   for (const attempt of attempts) {
     if (timeLeft() < 5000) break;
     console.warn(`[AI] Falling back to ${attempt.name}: ${why(lastError)}`);

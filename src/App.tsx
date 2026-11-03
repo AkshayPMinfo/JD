@@ -71,6 +71,7 @@ import { supabaseAuth, supabaseData, type SupabaseSession } from "./lib/supabase
 import { resultEndingsFor, addResultToLine } from "./utils/resultEndings";
 import { backedBy } from "./utils/sameSkill";
 import { yearsOfExperience, yearsInJob } from "./utils/experienceYears";
+import { skillNamedInJd } from "../api/skillsInJd";
 import { changedLines } from "./components/SideBySideReview";
 import ResumeReview from "./components/ResumeReview";
 import { validateJobDescriptionText as checkJobDescriptionText, JD_MIN_WORDS, JD_MAX_WORDS } from "./utils/jdValidation";
@@ -2531,17 +2532,23 @@ export default function App() {
         ...(simplifiedJd.requiredSkills || []).map((sk: any) => sk?.name || sk),
         ...(simplifiedJd.keywordsToTarget || [])
       ].map(n => String(n || "").trim()).filter(Boolean);
-      // Skills row: the ones this job asks for first, then the person's others, 10 at most
+      // Skills row: the ones this job asks for first, then all the person's others
       const jobSkillKeys = [...jdSkillNames, ...tailorSelectedSkills].map(skillKey).filter(k => k.length >= 2);
       const isJobSkill = (name: string) => {
         const key = skillKey(name);
         return jobSkillKeys.some(j => j === key || (j.length >= 3 && key.includes(j)) || (key.length >= 3 && j.includes(key)));
       };
-      const bestSkills = (skills: string[], max = 10) => {
+      // The person's own skills that the job post names (e.g. "Agile" in "Agile sprints") count too
+      const ownSkillKeys = new Set((selectedResume.skills || []).map(skillKey));
+      const tickedKeys = new Set(tailorSelectedSkills.map(skillKey));
+      const isOwnJobSkill = (name: string) => ownSkillKeys.has(skillKey(name)) && (isJobSkill(name) || skillNamedInJd(name, tailorJdText || ""));
+      // Order: own skills the job names, then ticked ones, then all other own skills (none dropped)
+      const bestSkills = (skills: string[], max = Infinity) => {
         const unique = skills.filter((sk, i) => skills.findIndex(o => skillKey(o) === skillKey(sk)) === i);
-        const matched = unique.filter(isJobSkill);
-        const others = unique.filter(sk => !isJobSkill(sk));
-        return [...matched, ...others.slice(0, Math.max(0, max - matched.length))];
+        const own = unique.filter(isOwnJobSkill);
+        const ticked = unique.filter(sk => !isOwnJobSkill(sk) && (tickedKeys.has(skillKey(sk)) || isJobSkill(sk)));
+        const others = unique.filter(sk => !own.includes(sk) && !ticked.includes(sk));
+        return [...own, ...ticked, ...others.slice(0, Math.max(0, max - own.length - ticked.length))];
       };
       setShowMoreSkills(false);
       setExtraSkillInput("");
@@ -7222,9 +7229,9 @@ WORK EXPERIENCE
                   {(() => {
                     const current = tailoredResultResume.skills || [];
                     const lower = new Set(current.map(sk => sk.toLowerCase()));
-                    // skills left out of the top 10, plus any the person added and then unticked
+                    // skills the person unticked, plus any they added
                     const others = tailorSkillPool.filter(sk => !lower.has(sk.toLowerCase()));
-                    const added = current.filter(sk => !tailorSkillPool.slice(0, 10).some(p => p.toLowerCase() === sk.toLowerCase()));
+                    const added = current.filter(sk => !tailorSkillPool.some(p => p.toLowerCase() === sk.toLowerCase()));
                     const choices = [...added, ...others];
                     const toggle = (sk: string) => setFinalSkills(lower.has(sk.toLowerCase()) ? current.filter(c => c.toLowerCase() !== sk.toLowerCase()) : [...current, sk]);
                     const addOwn = () => {
@@ -7236,7 +7243,7 @@ WORK EXPERIENCE
                     return (
                       <div id="final-skills-note" className="rounded-lg bg-neutral-50 px-3 py-2 text-sm text-neutral-700 leading-relaxed">
                         <p>
-                          Skills: we picked your 10 best, the ones this job asks for first, then your others. A short list is easier for recruiters to read.{" "}
+                          Skills: all yours are kept, with the ones this job asks for first.{" "}
                           <button type="button" id="btn-more-skills" onClick={() => setShowMoreSkills(v => !v)} className="font-medium text-blue-700 hover:underline cursor-pointer">
                             {showMoreSkills ? "Done" : "Add more skills"}
                           </button>

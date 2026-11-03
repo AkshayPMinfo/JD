@@ -17,3 +17,31 @@ export function repairSplitEmail<T extends { fullName?: string; email?: string }
   if (!TLD_END.test(fixed)) return resume;
   return { ...resume, fullName: parts.slice(0, -1).join(" "), email: fixed };
 }
+
+const LINKEDIN = /(?:https?:\/\/)?(?:[a-z]{2,3}\.)?linkedin\.com\/(?:in|pub)\/[A-Za-z0-9_%-]+\/?/i;
+const PROFILE_SITE = /(?:https?:\/\/)?(?:www\.)?(?:github\.com|gitlab\.com|behance\.net|dribbble\.com|medium\.com)\/[A-Za-z0-9_.-]+\/?|https?:\/\/[A-Za-z0-9.-]+\.[a-z]{2,}(?:\/[^\s|,;)]*)?/i;
+
+/**
+ * The parser sometimes leaves out the LinkedIn, GitHub/portfolio link or city that sit in the
+ * contact line. Fill any that are empty straight from the resume's own text (never invented).
+ */
+export function fillContactFromText<T extends { email?: string; linkedin?: string; website?: string; location?: string }>(resume: T, text: string): T & { linkedin?: string; website?: string; location?: string } {
+  if (!resume || !text) return resume;
+  const out: any = { ...resume };
+  if (!String(out.linkedin || "").trim()) {
+    const m = text.match(LINKEDIN);
+    if (m) out.linkedin = m[0].replace(/\/$/, "");
+  }
+  if (!String(out.website || "").trim()) {
+    const m = text.replace(LINKEDIN, " ").match(PROFILE_SITE);
+    if (m) out.website = m[0].replace(/\/$/, "");
+  }
+  if (!String(out.location || "").trim() && out.email) {
+    // The contact line: "Pune, India | name@example.com | +91 ..." -> "Pune, India"
+    const line = text.split("\n").find(l => l.includes(out.email));
+    const part = line?.split(/\s*[|•·]\s*/).map(p => p.trim())
+      .find(p => p && !p.includes("@") && !/\d{3}|\.com|\.in\b|https?:|www\.|\/\w/i.test(p) && /^[A-Za-z][A-Za-z .,'-]{1,40}$/.test(p));
+    if (part) out.location = part;
+  }
+  return out;
+}

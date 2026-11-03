@@ -261,7 +261,7 @@ export default function ResumeReview({ original, current, reviews, onChange }: P
       </p>
       <div className="border border-neutral-200 rounded-xl bg-white px-5 py-4">
         <p className="text-lg font-semibold text-black">{current.fullName || original.fullName}</p>
-        <p className="text-xs text-neutral-500">{[current.email, current.phone, current.location].filter(Boolean).join(" · ")}</p>
+        <p className="text-xs text-neutral-500">{[current.email, current.phone, current.linkedin, current.website, current.location].filter(Boolean).join(" · ")}</p>
 
         {showSummary && <>{heading("Summary")}{line("summary", original.summary || "", false)}</>}
         {!original.summary && !summaryReview && (

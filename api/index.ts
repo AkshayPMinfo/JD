@@ -4,7 +4,7 @@ import path from "path";
 import { GoogleGenAI, Type } from "@google/genai";
 import { getAiCredits, useAiCredit, aiAllowed, bearerToken } from "./aiLimit.js";
 import { plainResumeWording } from "./plainWording.js";
-import { repairSplitEmail } from "./contactRepair.js";
+import { repairSplitEmail, fillContactFromText } from "./contactRepair.js";
 import { yearsOfExperience, yearsInJob } from "../src/utils/experienceYears.js";
 import dotenv from "dotenv";
 import mammoth from "mammoth";
@@ -1817,6 +1817,7 @@ app.post("/api/analyze-uploaded-resume", async (req, res) => {
       console.log("[Rules Parser: ResumeStructure Parsed]", JSON.stringify(validationResult.detectedProfile, null, 2));
       if (validationResult && validationResult.detectedProfile) {
         validationResult.detectedProfile = sanitizeResumeTextFields(validationResult.detectedProfile);
+        validationResult.detectedProfile = fillContactFromText(validationResult.detectedProfile, extractedText);
       }
       
       const strictValidation = checkTextAgainstStrictResumeCriteria(extractedText);
@@ -1857,6 +1858,7 @@ app.post("/api/analyze-uploaded-resume", async (req, res) => {
     const validationResult = await parseResumeWithGemini(extractedText, fileName);
     if (validationResult && validationResult.detectedProfile) {
       validationResult.detectedProfile = sanitizeResumeTextFields(validationResult.detectedProfile);
+      validationResult.detectedProfile = fillContactFromText(validationResult.detectedProfile, extractedText);
     }
     
     // Double-guard: enforce strict rules-based validation on the extracted text.

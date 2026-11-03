@@ -91,7 +91,7 @@ export default function ResumeReview({ original, current, reviews, onChange }: P
       return (
         <div key={id} id={`rv-${id}`} className={`${bullet ? "ml-4" : ""} my-1.5 rounded-lg border border-orange-300 bg-orange-50 px-3 py-2`}>
           <p className="text-xs text-orange-800 mb-1">
-            {r.note || (isSummary ? "You didn't have a summary. We suggest one:" : `${shortReason(r)}. Keep it only if it's true.`)}
+            {r.note || (isSummary && !r.original.trim() ? "You didn't have a summary. We suggest one:" : `${shortReason(r)}. Keep it only if it's true.`)}
           </p>
           {extra && <p className="text-xs font-medium text-orange-900 mb-1" id={`rv-warn-${id}`}>Check: {extra}.</p>}
           {editingHeld ? (

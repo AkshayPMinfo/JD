@@ -166,6 +166,22 @@ export const supabaseAuth = {
     return parseAuthResponse(response, { allowEmailConfirmation: true });
   },
 
+  // Does this email already have an account with a password? null = can't tell (check not set up yet)
+  async isEmailRegistered(email: string): Promise<boolean | null> {
+    if (!isSupabaseConfigured) return null;
+    try {
+      const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/jd_email_registered`, {
+        method: "POST",
+        headers: { ...authHeaders(), Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
+        body: JSON.stringify({ p_email: email }),
+      });
+      if (!response.ok) return null;
+      return (await response.json()) === true;
+    } catch {
+      return null;
+    }
+  },
+
   // Create Account step 1: email a 6-digit code. Makes the account (no password yet) if it's new.
   async sendEmailCode(email: string): Promise<void> {
     assertSupabaseConfigured();

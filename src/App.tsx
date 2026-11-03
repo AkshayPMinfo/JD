@@ -1084,8 +1084,15 @@ export default function App() {
     if (isSignUp) {
       // Create Account step 1: email a code first; the password comes after the code
       setIsAuthSubmitting(true);
-      setAuthProgress("Sending your code...");
+      setAuthProgress("Checking your email...");
       try {
+        // Already has an account: send them to Sign in, so they don't replace their password by accident
+        if (await supabaseAuth.isEmailRegistered(email)) {
+          switchAuthTab("signin");
+          setAuthMessage({ type: "info", message: "This email already has an account. Please sign in, or use Forgot password if you don't remember your password." });
+          return;
+        }
+        setAuthProgress("Sending your code...");
         await supabaseAuth.sendEmailCode(email);
         setVerifyEmail(email);
         setVerifyCode("");

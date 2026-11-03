@@ -15,13 +15,15 @@ const HYPE_ADJECTIVES = [
   "dynamic", "impactful", "high-impact", "exceptional", "outstanding", "results-driven",
   "visionary", "groundbreaking", "state-of-the-art", "detailed", "strategic", "end-to-end",
   // recruiters read these as filler (they want facts): "aspiring product manager" -> "product manager"
-  "aspiring", "motivated", "self-motivated", "passionate", "hardworking", "hard-working"
+  "aspiring", "motivated", "self-motivated", "passionate", "hardworking", "hard-working",
+  // found in the copywriter test (3 Nov): "wrote engaging ad copy", "effective taglines", "various clients"
+  "engaging", "effective", "compelling", "various"
 ];
 // Fancy verbs swapped back to plain ones
 const PLAIN_VERBS: Record<string, string> = {
   orchestrated: "managed", spearheaded: "led", leveraged: "used", leveraging: "using",
   utilized: "used", utilizing: "using", championed: "led", architected: "designed",
-  crafted: "created", synergized: "worked", revolutionized: "improved", pioneered: "started"
+  crafted: "created", crafting: "writing", synergized: "worked", revolutionized: "improved", pioneered: "started"
 };
 
 const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

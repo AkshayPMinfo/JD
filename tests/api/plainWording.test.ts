@@ -71,4 +71,6 @@ const nehaNew = "Associate Product Manager with 8 years of experience across pro
 same("N6", "A capital that starts a sentence isn't a name (summary rewrite kept)", keepNamedDetails(nehaNew, nehaSummary), nehaNew);
 same("N7", "Real names mid-sentence still count", keepNamedDetails("Managed social media pages for 6 clients.", "Managed pages on Facebook for 6 clients. Wrote reports."), "Managed pages on Facebook for 6 clients. Wrote reports.");
 same("W6", "Drops a 'Proven ability to…' sentence (a claim the resume doesn't show)", dropWeakSentences("8 years across product and marketing. Skilled in SQL and Jira. Proven ability to launch features that improve retention and drive growth."), "8 years across product and marketing. Skilled in SQL and Jira.");
+same("H9", "Drops 'engaging', 'effective' and 'various' the AI added", removeHype("Wrote engaging ad copy and effective taglines for various clients.", "Wrote ad copy and taglines for clients."), "Wrote ad copy and taglines for clients.");
+same("H10", "Keeps 'engaging' when the person used it", removeHype("Wrote engaging ad copy.", "Wrote engaging ad copy for brands."), "Wrote engaging ad copy.");
 process.exit(t.report("Plain wording"));

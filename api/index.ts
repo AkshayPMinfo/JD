@@ -903,15 +903,27 @@ async function generateWithChatApi(provider: ChatProvider, options: any, timeout
 }
 
 
+// Gives up on a slow AI call so the next backup (or basic mode) still fits in Vercel's 60s
+function withTimeout<T>(work: Promise<T>, ms: number, name: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const late = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${name} timed out after ${Math.round(ms / 1000)}s`)), ms); });
+  return Promise.race([work, late]).finally(() => clearTimeout(timer));
+}
+
 // preferStrong: for rewriting, a bigger backup (Groq) writes better than Flash-Lite, so try it first
 async function generateContentWithRetry(ai: GoogleGenAI | null, options: any, maxRetries = 2, preferStrong = false): Promise<any> {
   let geminiError: any = null;
+  // One clock for the whole request: Vercel stops it at 60s, and basic mode needs a few seconds at the end
+  const requestStart = Date.now();
+  const GEMINI_BUDGET_MS = 22000;
 
   if (ai) {
     let delay = 500; // start with 500ms to stay within Vercel 60s budget
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      const left = GEMINI_BUDGET_MS - (Date.now() - requestStart);
+      if (left < 3000) { geminiError = geminiError || new Error("Gemini timed out"); break; }
       try {
-        return await ai.models.generateContent(options);
+        return await withTimeout(ai.models.generateContent(options), left, "Gemini");
       } catch (error: any) {
         const errStr = String(error.stack || error.message || error);
         const isRetryable =
@@ -938,8 +950,7 @@ async function generateContentWithRetry(ai: GoogleGenAI | null, options: any, ma
   //  2. Groq
   //  3. NVIDIA
   // Stop trying after ~40s so the whole request stays inside Vercel's 60s limit.
-  const started = Date.now();
-  const timeLeft = () => 40000 - (Date.now() - started);
+  const timeLeft = () => 50000 - (Date.now() - requestStart);
   let lastError: any = geminiError;
   const why = (e: any) => String(e?.message || e || "no Gemini key").slice(0, 120);
 
@@ -950,7 +961,7 @@ async function generateContentWithRetry(ai: GoogleGenAI | null, options: any, ma
 
   type Attempt = { name: string; run: () => Promise<any> };
   const lite: Attempt[] = ai && geminiError && options.model !== liteModel
-    ? [{ name: liteModel, run: () => ai.models.generateContent({ ...options, model: liteModel }) }] : [];
+    ? [{ name: liteModel, run: () => withTimeout(ai.models.generateContent({ ...options, model: liteModel }), Math.min(GROQ_TIMEOUT_MS, timeLeft()), liteModel) }] : [];
   // 25s cap each: a slow free backup must not keep the person waiting (basic mode comes next)
   const chats: Attempt[] = chatProviders.map(p => ({ name: `${p.name} (${p.model})`, run: () => generateWithChatApi(p, options, Math.min(GROQ_TIMEOUT_MS, timeLeft())) }));
   const attempts = preferStrong ? [...chats.slice(0, 1), ...lite, ...chats.slice(1)] : [...lite, ...chats];

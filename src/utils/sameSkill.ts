@@ -11,7 +11,11 @@ const SAME_AS: { words: RegExp; backedBy: RegExp }[] = [
   { words: /cross[- ]functional/, backedBy: /cross[- ]functional|engineers? and designers?|engineering and design|product and sales/ },
   { words: /stakeholder/, backedBy: /stakeholder|sales teams?|product and sales/ },
   { words: /backlog/, backedBy: /backlog|sprint planning/ },
-  { words: /user stor/, backedBy: /user stor/ }
+  { words: /user stor/, backedBy: /user stor/ },
+  // Support and call centre work: "Updated tickets in Zendesk" shows ticketing tools, "inbound calls" shows a voice process
+  { words: /ticketing|help ?desk|service ?desk/, backedBy: /zendesk|freshdesk|servicenow|\btickets?\b|help ?desk/ },
+  { words: /voice process|call handling|inbound|outbound/, backedBy: /\bcalls?\b|inbound|outbound|\bvoice\b/ },
+  { words: /call cent(?:er|re)|contact cent(?:er|re)|^bpo$/, backedBy: /call cent|contact cent|\bbpo\b|inbound calls?|outbound calls?/ }
 ];
 
 export function backedBy(originalText: string, word: string): boolean {

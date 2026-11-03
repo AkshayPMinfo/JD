@@ -314,6 +314,16 @@ export default function ResumeReview({ original, current, reviews, onChange }: P
           {heading("Certifications")}
           {(current.certifications || []).map(c => <p key={c} className="text-sm text-neutral-800">{c}</p>)}
         </>}
+
+        {(current.achievements || []).length > 0 && <>
+          {heading("Achievements")}
+          {(current.achievements || []).map(a => <p key={a} className="text-sm text-neutral-800">{a}</p>)}
+        </>}
+
+        {(current.languages || []).length > 0 && <>
+          {heading("Languages")}
+          <p className="text-sm text-neutral-800">{(current.languages || []).join(", ")}</p>
+        </>}
       </div>
     </div>
   );

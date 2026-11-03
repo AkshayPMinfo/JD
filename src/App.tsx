@@ -2140,7 +2140,8 @@ export default function App() {
     return name;
   };
 
-  const skillKey = (name: string) => singularSkill(name.toLowerCase().replace(/\s+/g, " ").trim());
+  // "MS Excel" and "Microsoft Excel" are the same skill as "Excel"
+  const skillKey = (name: string) => singularSkill(name.toLowerCase().replace(/\s+/g, " ").trim().replace(/^(?:ms|microsoft) (?=\S)/, ""));
   const dedupeSkillNames = (names: string[]): string[] => {
     const cleaned = names.flatMap(n => cleanSkillName(String(n || "")));
     const keys = cleaned.map(skillKey);
@@ -2192,7 +2193,12 @@ export default function App() {
       keywordsToTarget: []
     });
     const matched = new Set(evaluation.matchedKeywords.map(k => k.toLowerCase()));
-    return unique.map(n => ({ name: displaySkillName(n, resume), inResume: matched.has(n.toLowerCase()) }));
+    const ownKeys = new Set((resume.skills || []).map(skillKey)); // "MS Excel" in the resume = "Microsoft Excel" in the post
+    // Also count work the resume describes in other words ("Updated tickets in Zendesk" -> Ticketing Tools)
+    const resumeText = [resume.summary, ...(resume.skills || []),
+      ...(resume.workExperience || []).flatMap(j => [j.role, j.company, ...(j.description || [])]),
+      ...(resume.projects || []).flatMap(pr => [pr.name, ...(pr.description || [])])].filter(Boolean).join(" \n ");
+    return unique.map(n => ({ name: displaySkillName(n, resume), inResume: matched.has(n.toLowerCase()) || ownKeys.has(skillKey(n)) || backedBy(resumeText, n) }));
   };
 
   // Compare the AI rewrite with the original, line by line, and list each change for review.
@@ -2215,9 +2221,13 @@ export default function App() {
     // "B2B", "B2C", "H1B" aren't numbers; "2M users" still is
     const numbersOf = (text: string) => new Set((text.replace(/[A-Za-z]+\d+[A-Za-z]+/g, " ").match(/\d[\d,.]*/g) || []).map(n => n.replace(/,/g, "").replace(/\.$/, "")));
     const originalNumbers = numbersOf(originalText);
+    // Years worked out from the job dates ("6 years", "about 4 years as …") aren't new claims
+    const jobsForYears = original.workExperience || [];
+    [Math.floor(yearsOfExperience(jobsForYears)), ...jobsForYears.flatMap(j => [Math.round(yearsInJob(j.duration)), Math.floor(yearsInJob(j.duration))])]
+      .filter(n => n > 0).forEach(n => originalNumbers.add(String(n)));
     const SENIORITY = ["senior", "lead", "principal", "staff engineer", "head of", "expert", "chief", "director"];
     // Everyday job-post words that don't make a claim on their own
-    const GENERIC = new Set("about across ability reason reasons find finding conduct conducted able analyse analysis analyze based build building candidate clear closely comfort company cross customer customers daily deliver delivery design drive ensure every excellent experience familiarity features functional great growth hands help high hiring ideal impact including improve join knowledge launch looking manage manager managing metrics multiple needs other plus preferred prioritise prioritize product products quality required requirements responsibilities responsible results role strong success support teams their these things through tools track understanding using users within working world would years".split(" ").map(w => stem(w)));
+    const GENERIC = new Set("skill skilled about across ability reason reasons find finding conduct conducted able analyse analysis analyze based build building candidate clear closely comfort company cross customer customers daily deliver delivery design drive ensure every excellent experience familiarity features functional great growth hands help high hiring ideal impact including improve join knowledge launch looking manage manager managing metrics multiple needs other plus preferred prioritise prioritize product products quality required requirements responsibilities responsible results role strong success support teams their these things through tools track understanding using users within working world would years".split(" ").map(w => stem(w)));
     const wordsOf = (text: string) => (text.toLowerCase().match(/[a-z][a-z0-9+#/-]{4,}/g) || []);
     const stemsOf = (text: string) => new Map(wordsOf(text).map(w => [stem(w), w] as [string, string]));
     const jdStems = new Set([...stemsOf(jdText).keys()].filter(st => !GENERIC.has(st)));

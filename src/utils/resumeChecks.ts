@@ -45,7 +45,7 @@ export function checkResume(resume: ResumeStructure, pages: number): ResumeCheck
     .filter(j => j.count > j.limit);
   checks.push(tooMany.length
     ? { id: "bullet-count", ok: false, label: "Too many bullets for some jobs", detail: tooMany.map(j => `${j.name}: ${j.count} (aim for ${j.limit} or fewer)`).join(" · ") + ". Newest job 5–6, the one before 4, older ones 3." }
-    : { id: "bullet-count", ok: true, label: "Bullets per job look right (5–6, 4, 3)" });
+    : { id: "bullet-count", ok: true, label: "No job has too many bullets" });
 
   const summary = (resume.summary || "").trim();
   const weak = weakWordsIn([summary, ...allBullets].join(" \n "));

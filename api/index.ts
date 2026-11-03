@@ -306,7 +306,7 @@ Format your response strictly as JSON matching this schema:
 `;
 
     const response = await generateContentWithRetry(ai, {
-      model: "gemini-2.5-flash",
+      model: LITE_MODEL, // reading only: save Gemini Flash for rewriting
       contents: prompt,
       config: {
         responseMimeType: "application/json",
@@ -808,7 +808,8 @@ function sanitizeResumeTextFields(resume: any): any {
 
 // ── AI providers: Gemini first, Groq as automatic fallback ─────────────────
 const GROQ_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
-const GROQ_TIMEOUT_MS = 25000; // stay well inside Vercel's 60s function budget
+const GROQ_TIMEOUT_MS = 25000;
+const LITE_MODEL = process.env.GEMINI_LITE_MODEL || "gemini-3.5-flash-lite"; // stay well inside Vercel's 60s function budget
 const GROQ_BASE_URL = (process.env.GROQ_BASE_URL || "https://api.groq.com/openai/v1").replace(/\/$/, "");
 
 // Gemini's responseSchema uses Type enums ("OBJECT", "STRING", ...). Convert to plain JSON Schema
@@ -914,19 +915,23 @@ function withTimeout<T>(work: Promise<T>, ms: number, name: string): Promise<T> 
 }
 
 // preferStrong: for rewriting, a bigger backup (Groq) writes better than Flash-Lite, so try it first
-async function generateContentWithRetry(ai: GoogleGenAI | null, options: any, maxRetries = 2, preferStrong = false): Promise<any> {
+// skip: AIs not to ask (used when the first answer was too weak). deadline: the time this request must end by.
+async function generateContentWithRetry(ai: GoogleGenAI | null, options: any, maxRetries = 2, preferStrong = false, skip: string[] = [], deadline = Date.now() + 50000): Promise<any> {
   let geminiError: any = null;
   // One clock for the whole request: Vercel stops it at 60s, and basic mode needs a few seconds at the end
   const requestStart = Date.now();
-  const GEMINI_BUDGET_MS = Number(process.env.GEMINI_BUDGET_MS) || 22000;
+  const GEMINI_BUDGET_MS = Math.min(Number(process.env.GEMINI_BUDGET_MS) || 22000, deadline - Date.now() - 8000);
 
-  if (ai) {
+  if (ai && skip.includes(options.model)) geminiError = new Error(`${options.model} skipped`);
+  else if (ai) {
     let delay = 500; // start with 500ms to stay within Vercel 60s budget
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       const left = GEMINI_BUDGET_MS - (Date.now() - requestStart);
       if (left < 3000) { geminiError = geminiError || new Error("Gemini timed out"); break; }
       try {
-        return await withTimeout(ai.models.generateContent(options), left, "Gemini");
+        const answer: any = await withTimeout(ai.models.generateContent(options), left, "Gemini");
+        answer.provider = options.model;
+        return answer;
       } catch (error: any) {
         const errStr = String(error.stack || error.message || error);
         const isRetryable =
@@ -953,7 +958,7 @@ async function generateContentWithRetry(ai: GoogleGenAI | null, options: any, ma
   //  2. Groq
   //  3. NVIDIA
   // Stop trying after ~40s so the whole request stays inside Vercel's 60s limit.
-  const timeLeft = () => 50000 - (Date.now() - requestStart);
+  const timeLeft = () => Math.min(50000 - (Date.now() - requestStart), deadline - Date.now());
   let lastError: any = geminiError;
   const why = (e: any) => String(e?.message || e || "no Gemini key").slice(0, 120);
 
@@ -969,19 +974,26 @@ async function generateContentWithRetry(ai: GoogleGenAI | null, options: any, ma
 
   type Attempt = { name: string; run: () => Promise<any> };
   const lite: Attempt[] = ai && geminiError && options.model !== liteModel
-    ? [{ name: liteModel, run: () => withTimeout(ai.models.generateContent({ ...options, model: liteModel, config: { ...options.config, thinkingConfig: undefined } }), Math.min(GROQ_TIMEOUT_MS, timeLeft()), liteModel) }] : [];
+    ? [{ name: liteModel, run: async () => {
+        const answer: any = await withTimeout(ai.models.generateContent({ ...options, model: liteModel, config: { ...options.config, thinkingConfig: undefined } }), Math.min(GROQ_TIMEOUT_MS, timeLeft()), liteModel);
+        answer.provider = liteModel;
+        return answer;
+      } }] : [];
   // 25s cap each: a slow free backup must not keep the person waiting (basic mode comes next)
   // NVIDIA is the last try, so it may use all the time that's left
   const chats: Attempt[] = chatProviders.map(p => ({ name: `${p.name} (${p.model})`, run: () => generateWithChatApi(p, options, p.name === "nvidia" ? timeLeft() - 1000 : Math.min(GROQ_TIMEOUT_MS, timeLeft())) }));
   const groqChats = chats.filter((_, i) => chatProviders[i].name === "groq");
   const otherChats = chats.filter((_, i) => chatProviders[i].name !== "groq");
-  // Rewriting: Groq (big, then small) writes better than Flash-Lite, so try it first
-  const attempts = preferStrong ? [...groqChats, ...lite, ...otherChats] : [...lite, ...chats];
+  // Rewriting: big Groq writes best, then Flash-Lite, then the small Groq model, then NVIDIA
+  const ordered = preferStrong ? [...groqChats.slice(0, 1), ...lite, ...groqChats.slice(1), ...otherChats] : [...lite, ...chats];
+  const attempts = ordered.filter(a => !skip.includes(a.name));
   for (const attempt of attempts) {
     if (timeLeft() < 5000) break;
     console.warn(`[AI] Falling back to ${attempt.name}: ${why(lastError)}`);
     try {
-      return await attempt.run();
+      const answer: any = await attempt.run();
+      answer.provider = attempt.name;
+      return answer;
     } catch (e: any) {
       console.error(`[AI] ${attempt.name} failed:`, why(e));
       lastError = e;
@@ -1200,7 +1212,7 @@ Format your response strictly as JSON with this schema:
     }
 
     const response = await generateContentWithRetry(ai, {
-      model: "gemini-2.5-flash",
+      model: LITE_MODEL, // reading only: save Gemini Flash for rewriting
       contents: contents,
       config: {
         responseMimeType: "application/json",
@@ -1417,6 +1429,15 @@ app.post("/api/tailor-resume", async (req, res) => {
 - If the original resume has no summary, write a 2-3 line summary using only facts from the resume: start with the most recent job title and total years of experience, then the industries they actually worked in and the skills they listed. Do not add an industry or domain from the job description.
 - In the summary never write vague lines like "possesses foundational understanding of ...", "exposure to ...", "familiarity with ..." or "keen interest in ...". Every sentence must state a fact from the resume.
 
+
+GOOD REWRITES (copy this style: real work, plain verbs, the how, the job's words where true; never new facts):
+- "Worked with cross functional teams on new features." -> "Worked with engineering and design to plan and launch new checkout features." (only if the resume says checkout, engineering and design)
+- "Talked to customers to understand why they left the cart." -> "Interviewed customers to find why they abandoned the cart and shared findings with the product team."
+- "Trained 5 new joiners on call scripts." -> "Coached and trained 5 new joiners on call scripts and the CRM tool."
+- "Ran Google Ads campaigns to boost leads and revenue." -> "Ran Google Ads and Meta Ads campaigns that boosted leads and revenue." (keep the result, add only tools the resume lists)
+- "Made worksheets for every chapter." -> "Created worksheets and quizzes for every chapter to track student progress."
+WRONG (never do this): adding a skill name to the end of a line ("..., applying Product Management principles", "..., leveraging Communication Skills", "... using Patient Care"); returning a line unchanged when it can be made clearer; adding numbers, tools or results the resume doesn't have.
+
 PLAIN WORDING (strict):
 - Write like a clear, modest human, not a sales pitch. Use plain verbs: led, built, managed, ran, wrote, designed, worked with, improved.
 - Do not use these words unless the original resume already uses them: significantly, substantially, dramatically, demonstrably, meticulously, seamlessly, strategically, successfully, effectively, consistently, proactively, highly, comprehensive, innovative, robust, dynamic, impactful, results-driven, cutting-edge, orchestrated, spearheaded, leveraged, utilized, championed, crafted.
@@ -1506,7 +1527,7 @@ Format your response strictly as JSON matching this schema:
 }
 `;
 
-    const response = await generateContentWithRetry(ai, {
+    const tailorOptions = {
       model: "gemini-2.5-flash",
       contents: prompt,
       config: {
@@ -1613,24 +1634,42 @@ Format your response strictly as JSON matching this schema:
           required: ["suggestions", "tailoredResume"]
         }
       }
-    }, 2, true);
+    };
 
-    const resultText = response.text;
-    if (!resultText) {
-      throw new Error("Failed to receive output text from Gemini API");
+    // Ask one AI, then clean its answer. Returns how many work/project lines really changed.
+    const requestStart = Date.now();
+    const askAndClean = async (skip: string[]) => {
+      const response: any = await generateContentWithRetry(ai, tailorOptions, 2, true, skip, requestStart + (skip.length ? 45000 : 50000));
+      const resultText = response.text;
+      if (!resultText) throw new Error("Failed to receive output text from the AI");
+      const parsed = JSON.parse(resultText.trim());
+      const lines = (r: any) => [...(r?.workExperience || []).flatMap((j: any) => j.description || []), ...(r?.projects || []).flatMap((p: any) => p.description || [])];
+      let changed = 0;
+      if (parsed && parsed.tailoredResume) {
+        parsed.tailoredResume = mergeAndSanitizeTailoredResume(sourceResume, parsed.tailoredResume);
+        parsed.tailoredResume = sanitizeResumeTextFields(parsed.tailoredResume);
+        // Strip puffy words the AI added ("significantly", "orchestrated") unless the candidate used them
+        const beforeClean = JSON.parse(JSON.stringify(parsed.tailoredResume));
+        parsed.tailoredResume = plainResumeWording(parsed.tailoredResume, sourceResume, String(jdText || ""));
+        const orig = lines(sourceResume), aiLines = lines(beforeClean), kept = lines(parsed.tailoredResume);
+        changed = kept.filter((l, i) => l !== orig[i]).length;
+        console.log(`[clean] ${response.provider}: lines changed by AI: ${aiLines.filter((l, i) => l !== orig[i]).length} | still changed after clean-up: ${changed}/${orig.length}`);
+      }
+      return { parsed, provider: String(response.provider || ""), changed, total: lines(sourceResume).length };
+    };
+    let best = await askAndClean([]);
+    // Too weak (under half the lines improved, often junk the clean-up removed): ask the next AI once, keep the better answer
+    if (best.total >= 3 && best.changed / best.total < 0.5 && Date.now() - requestStart < 25000) {
+      try {
+        const second = await askAndClean([best.provider]);  // ends by 45s, see deadline below
+        console.log(`[retry] weak answer from ${best.provider} (${best.changed}/${best.total}); ${second.provider} changed ${second.changed}/${second.total}`);
+        if (second.changed > best.changed) best = second;
+      } catch (e: any) {
+        console.warn("[retry] second AI failed, keeping the first answer:", String(e?.message || e).slice(0, 120));
+      }
     }
-
-    const parsed = JSON.parse(resultText.trim());
+    const parsed = best.parsed;
     if (parsed && parsed.tailoredResume) {
-      parsed.tailoredResume = mergeAndSanitizeTailoredResume(sourceResume, parsed.tailoredResume);
-      parsed.tailoredResume = sanitizeResumeTextFields(parsed.tailoredResume);
-      // Strip puffy words the AI added ("significantly", "orchestrated") unless the candidate used them
-      const beforeClean = JSON.parse(JSON.stringify(parsed.tailoredResume));
-      parsed.tailoredResume = plainResumeWording(parsed.tailoredResume, sourceResume);
-      // How many lines the AI changed, and how many are still changed after the clean-up
-      const lines = (r: any) => [r?.summary || "", ...(r?.workExperience || []).flatMap((j: any) => j.description || []), ...(r?.projects || []).flatMap((p: any) => p.description || [])];
-      const orig = lines(sourceResume), ai = lines(beforeClean), kept = lines(parsed.tailoredResume);
-      console.log("[clean] lines changed by AI:", ai.filter((l, i) => l !== orig[i]).length, "| still changed after clean-up:", kept.filter((l, i) => l !== orig[i]).length);
       // Enforce the checkbox choice: original skills + confirmed skills only, whatever the model returned.
       if (selectedSkills) {
         const original: string[] = Array.isArray(sourceResume?.skills) ? sourceResume.skills : [];
@@ -1721,7 +1760,7 @@ Format your response strictly as JSON matching this schema:
 `;
 
     const response = await generateContentWithRetry(ai, {
-      model: "gemini-2.5-flash",
+      model: LITE_MODEL, // reading only: save Gemini Flash for rewriting
       contents: prompt,
       config: {
         responseMimeType: "application/json",

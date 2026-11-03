@@ -57,4 +57,6 @@ t.check("Y11", "Dates like 03/2021 and Jan'18 count (Vikram: about 11 years)", M
 const riyaSample = [{ role: "Associate Product Manager", duration: "Jun 2023 - Present" }, { role: "Business Analyst Intern", duration: "Jan 2023 - May 2023" }];
 const fixedSample = fixSummaryYears("3 years of experience across product, including about 4 years as an Associate Product Manager.", riyaSample, new Date(2026, 10, 3));
 t.check("Y12", `A job's years never beat the total → ${fixedSample}`, fixedSample.includes("about 3 years as an Associate Product Manager"));
+const fixedBracket = fixSummaryYears("10 years of experience, including 4 years as a Mathematics Teacher (Grades 6-8) at Green Valley School.", priya, new Date(2026, 10, 3));
+t.check("Y13", `Title with brackets in the summary gets the right years → ${fixedBracket}`, fixedBracket.includes("8 years as a Mathematics Teacher (Grades 6-8)"));
 process.exit(t.report("Resume checks"));

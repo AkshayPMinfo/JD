@@ -3,7 +3,7 @@
  * Run with: npm run test:api
  */
 import { Checks } from "./helpers.ts";
-import { removeHype, keepDigits, undoPointlessChange, plainResumeWording, dropFillerEnding, keepAppWord, keepNamedDetails, keepResults, dropWeakSentences, tidySpacing, dropOwnName, dropSkillTail, keepNumbers } from "../../api/plainWording.ts";
+import { removeHype, keepDigits, undoPointlessChange, plainResumeWording, dropFillerEnding, keepAppWord, keepNamedDetails, keepResults, dropWeakSentences, tidySpacing, dropOwnName, dropSkillTail, keepNumbers, noNewNames, dropUnknownNameSentences } from "../../api/plainWording.ts";
 
 const t = new Checks();
 const orig = "Managed content for Facebook and Instagram. Ran marketing campaigns that increased footfall.";
@@ -91,4 +91,14 @@ same("K3", "'1,200' and '1200' count as the same number", keepNumbers("Served 12
 // Akshay's real resume (3 Nov): the small backup AI added "applying X" / "leveraging X" endings
 same("U6", "Drops ', applying Product Management principles'", dropSkillTail("Collaborated with teams to prioritise features, applying Product Management principles.", "Collaborated with teams to prioritise features."), "Collaborated with teams to prioritise features.");
 same("U7", "Drops ', leveraging Communication Skills'", dropSkillTail("Managed content across Facebook and LinkedIn, leveraging Communication Skills.", "Managed content across Facebook and LinkedIn."), "Managed content across Facebook and LinkedIn.");
+// 25-job rerun (3 Nov): a backup AI added "Adobe InDesign" for a Photoshop/Illustrator user
+const kav = JSON.stringify({ skills: ["Adobe Photoshop", "Adobe Illustrator", "Canva"] });
+same("M1", "A tool named nowhere in the resume or job post brings back the person's line", noNewNames("Prepared print files using Adobe InDesign and Photoshop.", "Prepared files for printing.", kav), "Prepared files for printing.");
+same("M2", "Tools from the resume are fine", noNewNames("Prepared print files in Adobe Photoshop.", "Prepared files for printing.", kav), "Prepared print files in Adobe Photoshop.");
+same("M3", "Words from the job post are allowed (the app asks first)", noNewNames("Ran Agile sprints in Jira.", "Ran sprints.", "{} Agile team using Jira"), "Ran Agile sprints in Jira.");
+same("M4", "Summary sentence naming an unknown tool is dropped", dropUnknownNameSentences("6 years of design experience. Skilled in Figma and Sketch.", kav + " job post"), "6 years of design experience.");
+same("U8", "Drops 'using B2B sales approach and Negotiation skills'", dropSkillTail("Sold ACs to dealers across 3 districts using B2B sales approach and Negotiation skills.", "Sold ACs to dealers across 3 districts."), "Sold ACs to dealers across 3 districts.");
+same("U9", "Drops 'using Payment Collection skill'", dropSkillTail("Collected payments from dealers using Payment Collection skill.", "Collected payments from dealers."), "Collected payments from dealers.");
+same("W8", "Drops a 'Ready to lead…' sentence", dropWeakSentences("7 years in B2B sales. Ready to lead a sales team as Area Sales Manager."), "7 years in B2B sales.");
+same("H12", "'Expert in' becomes 'Experienced in'", removeHype("Expert in typography and packaging design.", "Designer."), "Experienced in typography and packaging design.");
 process.exit(t.report("Plain wording"));

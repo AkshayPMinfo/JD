@@ -23,7 +23,7 @@ const HYPE_ADJECTIVES = [
 const PLAIN_VERBS: Record<string, string> = {
   orchestrated: "managed", spearheaded: "led", leveraged: "used", leveraging: "using",
   utilized: "used", utilizing: "using", championed: "led", architected: "designed",
-  crafted: "created", crafting: "writing", expertise: "experience", synergized: "worked", revolutionized: "improved", pioneered: "started"
+  crafted: "created", crafting: "writing", expertise: "experience", expert: "experienced", synergized: "worked", revolutionized: "improved", pioneered: "started"
 };
 
 const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -197,6 +197,26 @@ export function keepNamedDetails(text: string, originalLine: string): string {
   return lost.length ? originalLine : text;
 }
 
+/** Names in a rewrite (tools, platforms) that appear nowhere in the resume or the job post: "Adobe InDesign" for a Photoshop user. */
+function unknownNames(text: string, knownText: string): string[] {
+  const known = knownText.toLowerCase();
+  return namedDetails(text).filter(n => !/^\d/.test(n) && n.length > 1 && !known.includes(n.toLowerCase()));
+}
+
+/** A rewritten line that names a tool or place the person never mentioned goes back to their own line. */
+export function noNewNames(text: string, originalLine: string, knownText: string): string {
+  if (!text || !originalLine.trim()) return text;
+  return unknownNames(text, knownText).length ? originalLine : text;
+}
+
+/** Summary: drop any sentence that names something the person never mentioned. */
+export function dropUnknownNameSentences(summary: string, knownText: string): string {
+  if (!summary) return summary;
+  const sentences = summary.split(/(?<=[.!?])\s+/).filter(Boolean);
+  const kept = sentences.filter(sn => unknownNames(sn, knownText).length === 0);
+  return (kept.length ? kept : sentences).join(" ").trim();
+}
+
 // "boost revenue", "increase customer footfall", "reduced costs": the thing that changed is the result
 const RESULT_VERB = /\b(?:increas\w*|boost\w*|grow\w*|grew|reduc\w*|improv\w*|rais\w*|cut(?:ting)?|sav(?:e|ed|ing)|drove|driv\w*|lower\w*)\s+(?:the\s+|a\s+|an\s+)?(?:customer\s+|brand\s+|online\s+|repeat\s+)?([a-z][a-z-]{2,})/gi;
 const NOT_RESULT = new Set(["and", "the", "by", "to", "for", "with", "across", "while", "from", "our", "their", "its", "more", "overall"]);
@@ -211,7 +231,7 @@ export function keepResults(text: string, originalLine: string): string {
 }
 
 // Vague filler a recruiter skips: "Possesses foundational understanding of Fintech contexts"
-const WEAK_SENTENCE = /\b(possess(es)?|foundational understanding|basic understanding|working knowledge|exposure to|familiarity with|well-versed|keen interest|eager to|passionate about|proven (?:ability|track record|record)|track record of)\b/i;
+const WEAK_SENTENCE = /\b(possess(es)?|foundational understanding|basic understanding|working knowledge|exposure to|familiarity with|well-versed|keen interest|eager to|passionate about|proven (?:ability|track record|record)|track record of|ready to|looking to|seeking to)\b/i;
 
 /** Drop summary sentences that only claim vague understanding; keep the factual ones. */
 export function dropWeakSentences(summary: string, originalSummary = ""): string {
@@ -234,6 +254,8 @@ const ACTIVITY_WORDS = new Set("care management negotiation communication planni
 /** Drops a tacked-on " using <Skill>" ending the AI added when the skill is an activity, not a tool. */
 export function dropSkillTail(text: string, originalLine = ""): string {
   if (!text || /\busing\b/i.test(originalLine)) return text;
+  // "...using B2B sales approach and Negotiation skills" / "...using Payment Collection skill": always filler
+  text = text.replace(/,?\s+(?:using|applying|leveraging|utilizing|with)\s+[^,.]{0,60}?\b(?:skills?|approach|discipline|principles|techniques|methodolog(?:y|ies)|expertise)\s*([.]?)\s*$/i, (_m, dot: string) => dot || ".");
   return text.replace(/,?\s+(?:using|applying|leveraging|utilizing)\s+([A-Z][\w/&+-]*(?:\s+(?:and\s+)?[A-Z][\w/&+-]*)*(?:\s+(?:principles|skills?))?)\s*([.]?)\s*$/, (m, skill: string, dot: string) => {
     const last = skill.trim().replace(/\s+(?:principles|skills?)$/i, "").split(/\s+/).pop()!.toLowerCase();
     return ACTIVITY_WORDS.has(last) ? dot || "." : m;
@@ -259,8 +281,10 @@ export function dropOwnName(summary: string, fullName: string): string {
 }
 
 /** Clean every line the AI wrote, comparing each with the candidate's own line where there is one. */
-export function plainResumeWording<T extends { summary?: string; workExperience?: any[]; projects?: any[] }>(tailored: T, source: any): T {
+export function plainResumeWording<T extends { summary?: string; workExperience?: any[]; projects?: any[] }>(tailored: T, source: any, jdText = ""): T {
   const originalResumeText = JSON.stringify(source || {});
+  // Names may come from the resume or the job post (the app asks before keeping job-post ones); anything else is made up
+  const knownText = originalResumeText + " " + jdText;
   const clean = (s: any, originalLine = "") => {
     if (typeof s !== "string") return s;
     const plain = dropFillerEnding(keepAppWord(keepDigits(removeHype(s, originalResumeText), originalLine), originalLine), originalLine);
@@ -269,14 +293,14 @@ export function plainResumeWording<T extends { summary?: string; workExperience?
   const match = (list: any[] = [], item: any, i: number) => list.find(x => x?.id && x.id === item?.id) || list[i];
   return {
     ...tailored,
-    summary: fixSummaryYears(dropWeakSentences(dropOwnName(clean(tailored.summary, source?.summary || ""), source?.fullName || ""), source?.summary || ""), Array.isArray(source?.workExperience) ? source.workExperience : []),
+    summary: fixSummaryYears(dropUnknownNameSentences(dropWeakSentences(dropOwnName(clean(tailored.summary, source?.summary || ""), source?.fullName || ""), source?.summary || ""), knownText), Array.isArray(source?.workExperience) ? source.workExperience : []),
     workExperience: (tailored.workExperience || []).map((j, i) => {
       const orig = match(source?.workExperience, j, i);
-      return { ...j, description: (j.description || []).map((d: any, k: number) => keepNumbers(clean(d, orig?.description?.[k] || ""), orig?.description?.[k] || "", originalResumeText)) };
+      return { ...j, description: (j.description || []).map((d: any, k: number) => noNewNames(keepNumbers(clean(d, orig?.description?.[k] || ""), orig?.description?.[k] || "", originalResumeText), orig?.description?.[k] || "", knownText)) };
     }),
     projects: (tailored.projects || []).map((p, i) => {
       const orig = match(source?.projects, p, i);
-      return { ...p, description: (p.description || []).map((d: any, k: number) => keepNumbers(clean(d, orig?.description?.[k] || ""), orig?.description?.[k] || "", originalResumeText)) };
+      return { ...p, description: (p.description || []).map((d: any, k: number) => noNewNames(keepNumbers(clean(d, orig?.description?.[k] || ""), orig?.description?.[k] || "", originalResumeText), orig?.description?.[k] || "", knownText)) };
     })
   };
 }

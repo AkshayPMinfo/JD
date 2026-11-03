@@ -300,7 +300,8 @@ export default function App() {
     try { return saved ? JSON.parse(saved) : []; } catch { return []; }
   });
   const isDarkMode = false;
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  // Phones start with the menu folded to icons, so the page gets the room
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => typeof window !== "undefined" && window.innerWidth < 768);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState([
     { id: 1, text: "Welcome to Auralis! Ready to tailor your first resume.", time: "Just now", read: false },
@@ -4255,7 +4256,7 @@ WORK EXPERIENCE
       <aside 
         id="sidebar-menu"
         className={`flex flex-col border-r border-neutral-200 bg-white transition-all duration-300 z-30 h-screen relative flex-shrink-0 ${
-          isSidebarCollapsed ? "w-20" : "w-64"
+          isSidebarCollapsed ? "w-14 sm:w-20" : "w-64"
         }`}
       >
         <div>
@@ -7103,6 +7104,8 @@ WORK EXPERIENCE
                               : "Your resume is ready with your ticked skills added. No other changes were suggested.")
                             : hasChanges
                             ? `Your tailored resume is ready with ${changeCount} ${changeCount === 1 ? "change" : "changes"}. Highlighted text shows what changed. Your original resume is not modified.`
+                            : aiCredits?.status === "limit-reached"
+                            ? "Your resume is ready. Your lines are kept as you wrote them (basic mode, see below). The keyword check shows what this job asks for."
                             : "Your resume is ready. No wording changes were needed, so everything is exactly as you wrote it. The keyword check below shows what this job asks for."}
                           {isFullRewrite && (
                             <span className="block mt-1.5 text-xs font-medium text-amber-700">AI can make mistakes. Please recheck every line before you send it.</span>
@@ -7595,7 +7598,7 @@ WORK EXPERIENCE
                             ))}
                           </div>
                         ) : (
-                          <p className="text-sm text-neutral-500">No skills were added. The content is as you wrote it.</p>
+                          <p className="text-sm text-neutral-500">No new skills were added.</p>
                         )}
                       </div>
                     </div>

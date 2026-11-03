@@ -18,6 +18,8 @@ r = fix({ fullName: "Riya Mehta co", email: "riya@acme.co" });
 t.check("R5", "An email ending in .co is left alone", r.fullName === "Riya Mehta co" && r.email === "riya@acme.co");
 r = fix({ fullName: "Riya Mehta", email: "riya@gmail.c" });
 t.check("R6", "A cut email with no stray piece is left alone", r.email === "riya@gmail.c");
+r = fix({ fullName: "Akshay Anand", email: "Shivace.professional@gmail.c om" });
+t.check("R7", `A space inside the email is removed → ${r.email}`, r.email === "Shivace.professional@gmail.com" && r.fullName === "Akshay Anand");
 // Live tests (3 Nov): LinkedIn / GitHub links and city were dropped when reading the file
 const arjun = fill({ email: "arjun.mehta.test@example.com" }, "Arjun Mehta\nPune, India | arjun.mehta.test@example.com | +91 90000 67890 | github.com/arjunmehta-test\nPROFESSIONAL SUMMARY");
 t.check("L1", `GitHub link and city filled → ${arjun.website} / ${arjun.location}`, arjun.website === "github.com/arjunmehta-test" && arjun.location === "Pune, India");

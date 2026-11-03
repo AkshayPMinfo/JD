@@ -7,6 +7,9 @@ const TLD_END = /\.(com|in|org|net|io|co|me|ai|dev|edu|info|us|uk|co\.in|co\.uk)
 
 export function repairSplitEmail<T extends { fullName?: string; email?: string }>(resume: T): T {
   const name = (resume.fullName || "").trim();
+  // "name@gmail.c om": a PDF line break left a space inside the email
+  const joined = (resume.email || "").replace(/\s+/g, "");
+  if (joined !== (resume.email || "").trim() && /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(joined)) resume = { ...resume, email: joined };
   const email = (resume.email || "").trim();
   if (!name || !email || !email.includes("@") || TLD_END.test(email)) return resume;
   const parts = name.split(/\s+/);

@@ -229,13 +229,13 @@ export function tidySpacing(text: string): string {
 }
 
 // Skill names that are activities, not tools: "…in a 40-bed ward using Patient Care" reads wrong
-const ACTIVITY_WORDS = new Set("care management negotiation communication planning resolution handling service sales monitoring administration therapy reconciliation bookkeeping gst tds research leadership marketing writing analysis strategy design typography branding".split(" "));
+const ACTIVITY_WORDS = new Set("care management negotiation communication planning resolution handling service sales monitoring administration therapy reconciliation bookkeeping gst tds research leadership marketing writing analysis strategy design typography branding methodology skills communication collaboration".split(" "));
 
 /** Drops a tacked-on " using <Skill>" ending the AI added when the skill is an activity, not a tool. */
 export function dropSkillTail(text: string, originalLine = ""): string {
   if (!text || /\busing\b/i.test(originalLine)) return text;
-  return text.replace(/,?\s+using\s+([A-Z][\w/&+-]*(?:\s+(?:and\s+)?[A-Z][\w/&+-]*)*)\s*([.]?)\s*$/, (m, skill: string, dot: string) => {
-    const last = skill.trim().split(/\s+/).pop()!.toLowerCase();
+  return text.replace(/,?\s+(?:using|applying|leveraging|utilizing)\s+([A-Z][\w/&+-]*(?:\s+(?:and\s+)?[A-Z][\w/&+-]*)*(?:\s+(?:principles|skills?))?)\s*([.]?)\s*$/, (m, skill: string, dot: string) => {
+    const last = skill.trim().replace(/\s+(?:principles|skills?)$/i, "").split(/\s+/).pop()!.toLowerCase();
     return ACTIVITY_WORDS.has(last) ? dot || "." : m;
   });
 }

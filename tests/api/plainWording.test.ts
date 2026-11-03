@@ -88,4 +88,7 @@ const vik = "Managed a yearly ad budget of ₹2 crore.";
 same("K1", "A number not in the resume brings back the person's line", keepNumbers("Managed a yearly ad budget of ₹12 crore across campaigns.", vik, vik + " Led a team of 5."), vik);
 same("K2", "Numbers already in the resume are fine", keepNumbers("Managed a ₹2 crore yearly ad budget for a team of 5.", vik, vik + " Led a team of 5."), "Managed a ₹2 crore yearly ad budget for a team of 5.");
 same("K3", "'1,200' and '1200' count as the same number", keepNumbers("Served 1200 customers.", "Served 1,200 customers.", "Served 1,200 customers."), "Served 1200 customers.");
+// Akshay's real resume (3 Nov): the small backup AI added "applying X" / "leveraging X" endings
+same("U6", "Drops ', applying Product Management principles'", dropSkillTail("Collaborated with teams to prioritise features, applying Product Management principles.", "Collaborated with teams to prioritise features."), "Collaborated with teams to prioritise features.");
+same("U7", "Drops ', leveraging Communication Skills'", dropSkillTail("Managed content across Facebook and LinkedIn, leveraging Communication Skills.", "Managed content across Facebook and LinkedIn."), "Managed content across Facebook and LinkedIn.");
 process.exit(t.report("Plain wording"));

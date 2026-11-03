@@ -65,4 +65,10 @@ same("W4", "Keeps the summary if every sentence is vague (never empties it)", dr
 same("T1", "'engagement .' becomes 'engagement.'", tidySpacing("increasing online engagement ."), "increasing online engagement.");
 same("T2", "'teams ,and' becomes 'teams, and'", tidySpacing("with teams ,and partners"), "with teams, and partners");
 same("W5", "Keeps decimals whole ('about 1.8 years')", dropWeakSentences("7 years of experience across product and marketing, including about 1.8 years as an Associate Product Manager. Skilled in Jira."), "7 years of experience across product and marketing, including about 1.8 years as an Associate Product Manager. Skilled in Jira.");
+// Live Neha test (3 Nov): "Good" starting the 2nd sentence was treated as a name, so the summary rewrite was undone
+const nehaSummary = "Product professional with experience in product, analytics and digital marketing. Good at working with teams and understanding customers.";
+const nehaNew = "Associate Product Manager with 8 years of experience across product, analytics and digital marketing. Runs Agile sprints in Jira.";
+same("N6", "A capital that starts a sentence isn't a name (summary rewrite kept)", keepNamedDetails(nehaNew, nehaSummary), nehaNew);
+same("N7", "Real names mid-sentence still count", keepNamedDetails("Managed social media pages for 6 clients.", "Managed pages on Facebook for 6 clients. Wrote reports."), "Managed pages on Facebook for 6 clients. Wrote reports.");
+same("W6", "Drops a 'Proven ability to…' sentence (a claim the resume doesn't show)", dropWeakSentences("8 years across product and marketing. Skilled in SQL and Jira. Proven ability to launch features that improve retention and drive growth."), "8 years across product and marketing. Skilled in SQL and Jira.");
 process.exit(t.report("Plain wording"));

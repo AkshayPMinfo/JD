@@ -177,12 +177,13 @@ const NOT_NAMES = new Set(["i", "a", "an", "the", "and", "or", "for", "with", "i
 /** Names (Facebook, Figma, LinkedIn) and numbers (12%, 300) in a line, skipping the first word. */
 function namedDetails(line: string): string[] {
   const out: string[] = [];
-  const tokens = line.match(/[A-Za-z][\w.+#&'-]*|\d[\d,.]*%?/g) || [];
-  tokens.forEach((tok, i) => {
-    const t = tok.replace(/[.,']+$/, "");
+  // A capital at the start of a sentence ("Good at working with teams.") isn't a name
+  for (const m of line.matchAll(/[A-Za-z][\w.+#&'-]*|\d[\d,.]*%?/g)) {
+    const t = m[0].replace(/[.,']+$/, "");
+    const startsSentence = /(^|[.!?]\s*)$/.test(line.slice(0, m.index).trimEnd() ? line.slice(0, m.index) : "");
     if (/^\d/.test(t)) out.push(t);
-    else if (i > 0 && /[A-Z]/.test(t) && !NOT_NAMES.has(t.toLowerCase())) out.push(t);
-  });
+    else if (!startsSentence && /[A-Z]/.test(t) && !NOT_NAMES.has(t.toLowerCase())) out.push(t);
+  }
   return out;
 }
 
@@ -208,7 +209,7 @@ export function keepResults(text: string, originalLine: string): string {
 }
 
 // Vague filler a recruiter skips: "Possesses foundational understanding of Fintech contexts"
-const WEAK_SENTENCE = /\b(possess(es)?|foundational understanding|basic understanding|working knowledge|exposure to|familiarity with|well-versed|keen interest|eager to|passionate about)\b/i;
+const WEAK_SENTENCE = /\b(possess(es)?|foundational understanding|basic understanding|working knowledge|exposure to|familiarity with|well-versed|keen interest|eager to|passionate about|proven (?:ability|track record)|track record of)\b/i;
 
 /** Drop summary sentences that only claim vague understanding; keep the factual ones. */
 export function dropWeakSentences(summary: string, originalSummary = ""): string {

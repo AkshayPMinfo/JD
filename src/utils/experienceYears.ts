@@ -50,7 +50,9 @@ export function fixSummaryYears(summary: string, jobs: { role?: string; duration
   out = out.replace(/\b((?:about|over|nearly|around|almost)\s+)?(\d+)\+?\s+(years?)\s+as\s+(an?\s+)?([A-Za-z][\w\s/&-]{2,60}?)(?=[.,;]|\s+(?:at|in|with|and)\b|$)/gi,
     (match, about = "", _n, _unit, article = "", title) => {
       const job = jobs.find(j => j.role && j.role.toLowerCase().trim() === title.toLowerCase().trim())
-        || jobs.find(j => j.role && title.toLowerCase().includes(j.role.toLowerCase().trim()));
+        || jobs.find(j => j.role && title.toLowerCase().includes(j.role.toLowerCase().trim()))
+        // "Mathematics Teacher" in the summary, "Mathematics Teacher (Grades 6-8)" on the job
+        || jobs.find(j => j.role && title.trim().length >= 4 && j.role.toLowerCase().replace(/\s*\(.*?\)\s*/g, " ").trim() === title.toLowerCase().trim());
       if (!job) return match;
       const n = Math.max(1, Math.round(yearsInJob(job.duration, now)));
       return `${about}${n} ${n === 1 ? "year" : "years"} as ${article}${title}`;

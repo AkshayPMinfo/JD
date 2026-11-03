@@ -48,4 +48,8 @@ const fixedTotal = fixSummaryYears("9 years of experience across marketing, incl
 t.check("Y7", `Wrong total is fixed → "${fixedTotal}"`, fixedTotal.startsWith("7 years of experience"));
 t.check("Y8", "Right numbers are left alone", fixSummaryYears("7 years of experience across X, including about 2 years as Associate Product Manager.", akshay, now) === "7 years of experience across X, including about 2 years as Associate Product Manager.");
 t.check("Y9", "A title not in the resume is left alone", fixSummaryYears("Worked 4 years as a pilot.", akshay, now) === "Worked 4 years as a pilot.");
+// 25-job test (3 Nov): "Mathematics Teacher (Grades 6-8)" on the job, "Mathematics Teacher" in the summary
+const priya = [{ role: "Mathematics Teacher (Grades 6-8)", duration: "Jun 2019 - Present" }, { role: "Tutor", duration: "Jul 2016 - May 2019" }];
+const fixedPriya = fixSummaryYears("10 years of experience across education, including about 5 years as a Mathematics Teacher.", priya, new Date(2026, 10, 3));
+t.check("Y10", `A wrong number is fixed even when the job title has brackets (7.5 years = about 8) → ${fixedPriya}`, fixedPriya.includes("about 8 years as a Mathematics Teacher"));
 process.exit(t.report("Resume checks"));

@@ -3,7 +3,7 @@
  * Run with: npm run test:api
  */
 import { Checks } from "./helpers.ts";
-import { removeHype, keepDigits, undoPointlessChange, plainResumeWording, dropFillerEnding, keepAppWord, keepNamedDetails, keepResults, dropWeakSentences, tidySpacing, dropOwnName } from "../../api/plainWording.ts";
+import { removeHype, keepDigits, undoPointlessChange, plainResumeWording, dropFillerEnding, keepAppWord, keepNamedDetails, keepResults, dropWeakSentences, tidySpacing, dropOwnName, dropSkillTail } from "../../api/plainWording.ts";
 
 const t = new Checks();
 const orig = "Managed content for Facebook and Instagram. Ran marketing campaigns that increased footfall.";
@@ -75,4 +75,12 @@ same("H9", "Drops 'engaging', 'effective' and 'various' the AI added", removeHyp
 same("H10", "Keeps 'engaging' when the person used it", removeHype("Wrote engaging ad copy.", "Wrote engaging ad copy for brands."), "Wrote engaging ad copy.");
 same("O1", "Drops the person's own name from the start of the summary", dropOwnName("Ravi Sharma with 6 years of experience in customer support.", "Ravi Sharma"), "6 years of experience in customer support.");
 same("O2", "A summary without the name is left alone", dropOwnName("Copywriter with 6 years of experience.", "Sana Iqbal"), "Copywriter with 6 years of experience.");
+// 25-job test (3 Nov): the backup AI tacked skill names onto lines
+same("U1", "Drops 'using Patient Care'", dropSkillTail("Cared for 8-10 patients per shift in a 40-bed medical ward using Patient Care.", "Cared for 8-10 patients per shift in a 40-bed medical ward."), "Cared for 8-10 patients per shift in a 40-bed medical ward.");
+same("U2", "Drops 'using GST and TDS'", dropSkillTail("Maintained books in Tally for 200+ monthly invoices using GST and TDS.", "Maintained books in Tally."), "Maintained books in Tally for 200+ monthly invoices.");
+same("U3", "Keeps a real tool ('using Jira')", dropSkillTail("Ran sprint planning using Jira.", "Ran sprint planning."), "Ran sprint planning using Jira.");
+same("U4", "Keeps it when the person wrote 'using' themselves", dropSkillTail("Sold ACs using Negotiation.", "Sold ACs using negotiation skills."), "Sold ACs using Negotiation.");
+same("H11", "'with expertise in' becomes 'with experience in'", removeHype("Teacher with expertise in lesson planning.", "Teacher."), "Teacher with experience in lesson planning.");
+same("W7", "Drops a 'proven record of…' sentence", dropWeakSentences("10 years of teaching maths. Skilled in lesson planning, with a proven record of improving exam outcomes and parents."), "10 years of teaching maths.");
+same("U5", "Drops 'using Typography'", dropSkillTail("Designed posts for 10+ clients using Typography.", "Designed posts for 10+ clients."), "Designed posts for 10+ clients.");
 process.exit(t.report("Plain wording"));

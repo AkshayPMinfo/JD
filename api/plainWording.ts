@@ -23,7 +23,7 @@ const HYPE_ADJECTIVES = [
 const PLAIN_VERBS: Record<string, string> = {
   orchestrated: "managed", spearheaded: "led", leveraged: "used", leveraging: "using",
   utilized: "used", utilizing: "using", championed: "led", architected: "designed",
-  crafted: "created", crafting: "writing", synergized: "worked", revolutionized: "improved", pioneered: "started"
+  crafted: "created", crafting: "writing", expertise: "experience", synergized: "worked", revolutionized: "improved", pioneered: "started"
 };
 
 const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -211,7 +211,7 @@ export function keepResults(text: string, originalLine: string): string {
 }
 
 // Vague filler a recruiter skips: "Possesses foundational understanding of Fintech contexts"
-const WEAK_SENTENCE = /\b(possess(es)?|foundational understanding|basic understanding|working knowledge|exposure to|familiarity with|well-versed|keen interest|eager to|passionate about|proven (?:ability|track record)|track record of)\b/i;
+const WEAK_SENTENCE = /\b(possess(es)?|foundational understanding|basic understanding|working knowledge|exposure to|familiarity with|well-versed|keen interest|eager to|passionate about|proven (?:ability|track record|record)|track record of)\b/i;
 
 /** Drop summary sentences that only claim vague understanding; keep the factual ones. */
 export function dropWeakSentences(summary: string, originalSummary = ""): string {
@@ -226,6 +226,18 @@ export function dropWeakSentences(summary: string, originalSummary = ""): string
 export function tidySpacing(text: string): string {
   if (typeof text !== "string") return text;
   return text.replace(/\s+([.,;:!?])/g, "$1").replace(/([,;:])(?=[A-Za-z])/g, "$1 ").replace(/\s{2,}/g, " ").trim();
+}
+
+// Skill names that are activities, not tools: "…in a 40-bed ward using Patient Care" reads wrong
+const ACTIVITY_WORDS = new Set("care management negotiation communication planning resolution handling service sales monitoring administration therapy reconciliation bookkeeping gst tds research leadership marketing writing analysis strategy design typography branding".split(" "));
+
+/** Drops a tacked-on " using <Skill>" ending the AI added when the skill is an activity, not a tool. */
+export function dropSkillTail(text: string, originalLine = ""): string {
+  if (!text || /\busing\b/i.test(originalLine)) return text;
+  return text.replace(/,?\s+using\s+([A-Z][\w/&+-]*(?:\s+(?:and\s+)?[A-Z][\w/&+-]*)*)\s*([.]?)\s*$/, (m, skill: string, dot: string) => {
+    const last = skill.trim().split(/\s+/).pop()!.toLowerCase();
+    return ACTIVITY_WORDS.has(last) ? dot || "." : m;
+  });
 }
 
 /** Resumes don't name the person in the summary: "Ravi Sharma with 6 years of experience" -> "6 years of experience" */
@@ -243,7 +255,7 @@ export function plainResumeWording<T extends { summary?: string; workExperience?
   const clean = (s: any, originalLine = "") => {
     if (typeof s !== "string") return s;
     const plain = dropFillerEnding(keepAppWord(keepDigits(removeHype(s, originalResumeText), originalLine), originalLine), originalLine);
-    return tidySpacing(keepResults(keepNamedDetails(undoPointlessChange(plain, originalLine), originalLine), originalLine));
+    return tidySpacing(keepResults(keepNamedDetails(undoPointlessChange(dropSkillTail(plain, originalLine), originalLine), originalLine), originalLine));
   };
   const match = (list: any[] = [], item: any, i: number) => list.find(x => x?.id && x.id === item?.id) || list[i];
   return {

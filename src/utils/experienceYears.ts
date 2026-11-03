@@ -3,10 +3,18 @@ const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "
 /** "January, 2023" -> months since year 0; "Present" -> now. Missing month counts as January (start) or December (end). */
 function toMonth(part: string, isEnd: boolean, now: Date): number | null {
   if (/\b(present|current|now|ongoing|till date|today)\b/i.test(part)) return now.getFullYear() * 12 + now.getMonth();
-  const year = part.match(/\b(19|20)\d{2}\b/);
-  if (!year) return null;
+  // "03/2021" or "3-2021"
+  const numeric = part.match(/\b(0?[1-9]|1[0-2])\s*[/.-]\s*((?:19|20)\d{2})\b/);
+  if (numeric) return Number(numeric[2]) * 12 + Number(numeric[1]) - 1;
   const m = MONTHS.findIndex(name => new RegExp(`\\b${name}`, "i").test(part));
-  return Number(year[0]) * 12 + (m >= 0 ? m : isEnd ? 11 : 0);
+  let year = Number((part.match(/\b(19|20)\d{2}\b/) || [])[0] || NaN);
+  // "Jan'18", "Jan 18", "Jan-18": a two-digit year after a month name
+  if (isNaN(year) && m >= 0) {
+    const short = part.match(/[a-z]\s*['’-]?\s*(\d{2})\b/i);
+    if (short) { const yy = Number(short[1]); year = yy <= (now.getFullYear() % 100) + 1 ? 2000 + yy : 1900 + yy; }
+  }
+  if (isNaN(year)) return null;
+  return year * 12 + (m >= 0 ? m : isEnd ? 11 : 0);
 }
 
 /** Total years of work from job dates like "January, 2023 - October, 2024"; overlapping jobs count once. */

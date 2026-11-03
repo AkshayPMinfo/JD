@@ -240,6 +240,15 @@ export function dropSkillTail(text: string, originalLine = ""): string {
   });
 }
 
+const numbersIn = (t: string) => (t.match(/\d[\d,]*(?:\.\d+)?/g) || []).map(n => n.replace(/,/g, ""));
+
+/** If a rewritten line has a number that appears nowhere in the person's resume ("2 crore" -> "12 crore"), keep their line. */
+export function keepNumbers(text: string, originalLine: string, originalResumeText: string): string {
+  if (!text || !originalLine.trim()) return text;
+  const known = new Set(numbersIn(originalResumeText));
+  return numbersIn(text).some(n => !known.has(n)) ? originalLine : text;
+}
+
 /** Resumes don't name the person in the summary: "Ravi Sharma with 6 years of experience" -> "6 years of experience" */
 export function dropOwnName(summary: string, fullName: string): string {
   const name = (fullName || "").trim();
@@ -263,11 +272,11 @@ export function plainResumeWording<T extends { summary?: string; workExperience?
     summary: fixSummaryYears(dropWeakSentences(dropOwnName(clean(tailored.summary, source?.summary || ""), source?.fullName || ""), source?.summary || ""), Array.isArray(source?.workExperience) ? source.workExperience : []),
     workExperience: (tailored.workExperience || []).map((j, i) => {
       const orig = match(source?.workExperience, j, i);
-      return { ...j, description: (j.description || []).map((d: any, k: number) => clean(d, orig?.description?.[k] || "")) };
+      return { ...j, description: (j.description || []).map((d: any, k: number) => keepNumbers(clean(d, orig?.description?.[k] || ""), orig?.description?.[k] || "", originalResumeText)) };
     }),
     projects: (tailored.projects || []).map((p, i) => {
       const orig = match(source?.projects, p, i);
-      return { ...p, description: (p.description || []).map((d: any, k: number) => clean(d, orig?.description?.[k] || "")) };
+      return { ...p, description: (p.description || []).map((d: any, k: number) => keepNumbers(clean(d, orig?.description?.[k] || ""), orig?.description?.[k] || "", originalResumeText)) };
     })
   };
 }

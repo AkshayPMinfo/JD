@@ -3,7 +3,7 @@
  * Run with: npm run test:api
  */
 import { Checks } from "./helpers.ts";
-import { removeHype, keepDigits, undoPointlessChange, plainResumeWording, dropFillerEnding, keepAppWord, keepNamedDetails, keepResults, dropWeakSentences, tidySpacing, dropOwnName, dropSkillTail } from "../../api/plainWording.ts";
+import { removeHype, keepDigits, undoPointlessChange, plainResumeWording, dropFillerEnding, keepAppWord, keepNamedDetails, keepResults, dropWeakSentences, tidySpacing, dropOwnName, dropSkillTail, keepNumbers } from "../../api/plainWording.ts";
 
 const t = new Checks();
 const orig = "Managed content for Facebook and Instagram. Ran marketing campaigns that increased footfall.";
@@ -83,4 +83,9 @@ same("U4", "Keeps it when the person wrote 'using' themselves", dropSkillTail("S
 same("H11", "'with expertise in' becomes 'with experience in'", removeHype("Teacher with expertise in lesson planning.", "Teacher."), "Teacher with experience in lesson planning.");
 same("W7", "Drops a 'proven record of…' sentence", dropWeakSentences("10 years of teaching maths. Skilled in lesson planning, with a proven record of improving exam outcomes and parents."), "10 years of teaching maths.");
 same("U5", "Drops 'using Typography'", dropSkillTail("Designed posts for 10+ clients using Typography.", "Designed posts for 10+ clients."), "Designed posts for 10+ clients.");
+// Tricky-resume test (3 Nov): "₹2 crore" came back as "₹12 crore"
+const vik = "Managed a yearly ad budget of ₹2 crore.";
+same("K1", "A number not in the resume brings back the person's line", keepNumbers("Managed a yearly ad budget of ₹12 crore across campaigns.", vik, vik + " Led a team of 5."), vik);
+same("K2", "Numbers already in the resume are fine", keepNumbers("Managed a ₹2 crore yearly ad budget for a team of 5.", vik, vik + " Led a team of 5."), "Managed a ₹2 crore yearly ad budget for a team of 5.");
+same("K3", "'1,200' and '1200' count as the same number", keepNumbers("Served 1200 customers.", "Served 1,200 customers.", "Served 1,200 customers."), "Served 1200 customers.");
 process.exit(t.report("Plain wording"));

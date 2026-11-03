@@ -52,4 +52,6 @@ t.check("Y9", "A title not in the resume is left alone", fixSummaryYears("Worked
 const priya = [{ role: "Mathematics Teacher (Grades 6-8)", duration: "Jun 2019 - Present" }, { role: "Tutor", duration: "Jul 2016 - May 2019" }];
 const fixedPriya = fixSummaryYears("10 years of experience across education, including about 5 years as a Mathematics Teacher.", priya, new Date(2026, 10, 3));
 t.check("Y10", `A wrong number is fixed even when the job title has brackets (7.5 years = about 8) → ${fixedPriya}`, fixedPriya.includes("about 8 years as a Mathematics Teacher"));
+const vikDates = [{ duration: "03/2021 – Present" }, { duration: "Jan'18 – Feb'21" }, { duration: "Jul'15 – Dec'17" }];
+t.check("Y11", "Dates like 03/2021 and Jan'18 count (Vikram: about 11 years)", Math.floor(yearsOfExperience(vikDates, new Date(2026, 10, 3))) === 11);
 process.exit(t.report("Resume checks"));

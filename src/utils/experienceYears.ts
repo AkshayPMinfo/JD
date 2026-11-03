@@ -62,7 +62,8 @@ export function fixSummaryYears(summary: string, jobs: { role?: string; duration
         // "Mathematics Teacher" in the summary, "Mathematics Teacher (Grades 6-8)" on the job
         || jobs.find(j => j.role && title.trim().length >= 4 && j.role.toLowerCase().replace(/\s*\(.*?\)\s*/g, " ").trim() === title.toLowerCase().trim());
       if (!job) return match;
-      const n = Math.max(1, Math.round(yearsInJob(job.duration, now)));
+      // Never more than the total shown (3.9 years total is "3", so a 3.5-year job is "about 3", not 4)
+      const n = Math.max(1, Math.min(Math.round(yearsInJob(job.duration, now)), total >= 1 ? total : Infinity));
       return `${about}${n} ${n === 1 ? "year" : "years"} as ${article}${title}`;
     });
   return out;

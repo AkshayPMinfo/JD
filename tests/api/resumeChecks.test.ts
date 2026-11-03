@@ -54,4 +54,7 @@ const fixedPriya = fixSummaryYears("10 years of experience across education, inc
 t.check("Y10", `A wrong number is fixed even when the job title has brackets (7.5 years = about 8) → ${fixedPriya}`, fixedPriya.includes("about 8 years as a Mathematics Teacher"));
 const vikDates = [{ duration: "03/2021 – Present" }, { duration: "Jan'18 – Feb'21" }, { duration: "Jul'15 – Dec'17" }];
 t.check("Y11", "Dates like 03/2021 and Jan'18 count (Vikram: about 11 years)", Math.floor(yearsOfExperience(vikDates, new Date(2026, 10, 3))) === 11);
+const riyaSample = [{ role: "Associate Product Manager", duration: "Jun 2023 - Present" }, { role: "Business Analyst Intern", duration: "Jan 2023 - May 2023" }];
+const fixedSample = fixSummaryYears("3 years of experience across product, including about 4 years as an Associate Product Manager.", riyaSample, new Date(2026, 10, 3));
+t.check("Y12", `A job's years never beat the total → ${fixedSample}`, fixedSample.includes("about 3 years as an Associate Product Manager"));
 process.exit(t.report("Resume checks"));

@@ -7469,9 +7469,12 @@ WORK EXPERIENCE
 
                 {tailorWizardStep === 4 && (
                   <>
-                    <div className="flex items-center gap-1.5 text-xs text-neutral-500 font-semibold mr-auto">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5 text-emerald-500"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                      Original resume unchanged
+                    <div className="mr-auto text-xs leading-snug">
+                      <p id="download-both-tip" className="text-neutral-700 font-medium">Tip: download both. Send the PDF; keep the Word file to edit later.</p>
+                      <p className="flex items-center gap-1.5 text-neutral-500 mt-0.5">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-3.5 h-3.5 text-emerald-500"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                        Original resume unchanged
+                      </p>
                     </div>
                     <button
                       type="button"

@@ -11,6 +11,9 @@ import { startApp, Checks } from "./helpers.ts";
 // "expired" = rejected sign-in. While `notSetUp` is true the functions don't exist (SQL not run yet).
 let notSetUp = false;
 const used = new Map<string, number>();
+// Whole-site daily total; tests lower `siteLimit` to fill it
+let siteUsed = 0;
+let siteLimit = 1000;
 const RESETS_AT = new Date(Date.now() + 5 * 3_600_000 + 60_000).toISOString();
 const fakeSupabase = http.createServer((req, res) => {
   const token = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
@@ -22,11 +25,12 @@ const fakeSupabase = http.createServer((req, res) => {
     if (!token || token === "expired") return send(401, { code: "PGRST301", message: "JWT expired" });
     const limit = token.startsWith("guest") ? 1 : 3;
     const n = used.get(token) || 0;
-    if (req.url === "/rest/v1/rpc/jd_ai_credits") return send(200, { used: n, limit, remaining: Math.max(limit - n, 0), resets_at: RESETS_AT });
+    if (req.url === "/rest/v1/rpc/jd_ai_credits") return send(200, { used: n, limit, remaining: Math.max(limit - n, 0), resets_at: RESETS_AT, site_used: siteUsed, site_limit: siteLimit, site_full: siteUsed >= siteLimit });
     if (req.url === "/rest/v1/rpc/jd_use_ai_credit") {
       if (n >= limit) return send(200, { allowed: false, used: n, limit, remaining: 0, resets_at: RESETS_AT });
       used.set(token, n + 1);
-      return send(200, { allowed: true, used: n + 1, limit, remaining: limit - n - 1, resets_at: RESETS_AT });
+      siteUsed++;
+      return send(200, { allowed: true, used: n + 1, limit, remaining: limit - n - 1, resets_at: RESETS_AT, site_used: siteUsed, site_limit: siteLimit, site_full: siteUsed >= siteLimit });
     }
     send(404, {});
   });
@@ -97,8 +101,8 @@ t.check("L2", "First 3 tailorings use AI and count down 2, 1, 0",
 
 const callsBefore = aiCalls;
 const fourth = await tailor("user-1");
-t.check("L3", "4th tailoring uses basic mode, says the limit is reached, and doesn't call the AI",
-  !isAi(fourth) && fourth.aiUsage?.status === "limit-reached" && fourth.aiUsage?.mode === "rules" && aiCalls === callsBefore,
+t.check("L3", "4th tailoring is stopped (no basic mode), says the limit is reached, and doesn't call the AI",
+  !isAi(fourth) && !fourth.tailoredResume && !fourth.inlineAdditions && !!fourth.error && fourth.aiUsage?.status === "limit-reached" && fourth.aiUsage?.mode === "blocked" && aiCalls === callsBefore,
   JSON.stringify(fourth.aiUsage));
 t.check("L4", "It says when AI is back", typeof fourth.aiUsage?.resetsAt === "string");
 
@@ -108,10 +112,25 @@ t.check("L5", "After the limit, reading a job post uses the rules reader (still 
 
 const g1 = await tailor("guest-1");
 const g2 = await tailor("guest-1");
-t.check("L6", "Guest gets 1 AI tailoring, then basic mode", isAi(g1) && g1.aiUsage?.limit === 1 && !isAi(g2) && g2.aiUsage?.status === "limit-reached",
+t.check("L6", "Guest gets 1 AI tailoring, then it's stopped", isAi(g1) && g1.aiUsage?.limit === 1 && !isAi(g2) && g2.aiUsage?.status === "limit-reached" && g2.aiUsage?.mode === "blocked",
   JSON.stringify([g1.aiUsage, g2.aiUsage]));
 
 t.check("L7", "Another user's count is separate", isAi(await tailor("user-2")));
+
+// Whole site's daily total used up: a new person with tries left is stopped too
+siteLimit = siteUsed;
+const siteCredits = await call("GET", "/api/ai-credits", "user-3");
+const siteCallsBefore = aiCalls;
+const siteBlocked = await tailor("user-3");
+t.check("S1", "Site total used up → /api/ai-credits says site-full", siteCredits.status === "site-full" && siteCredits.siteLimit === siteLimit && typeof siteCredits.resetsAt === "string", JSON.stringify(siteCredits));
+t.check("S2", "Site total used up → tailoring stopped, no AI call, their own tries not used",
+  !isAi(siteBlocked) && siteBlocked.aiUsage?.status === "site-full" && siteBlocked.aiUsage?.mode === "blocked" && siteBlocked.aiUsage?.remaining === 3 && aiCalls === siteCallsBefore,
+  JSON.stringify(siteBlocked.aiUsage));
+siteLimit = siteUsed + 1;
+const lastOne = await tailor("user-3");
+t.check("S3", "The tailoring that fills the site total still comes back with AI", isAi(lastOne), JSON.stringify(lastOne.aiUsage));
+t.check("S4", "Then the next person is stopped", (await tailor("user-4")).aiUsage?.status === "site-full");
+siteLimit = 1000;
 
 const noToken = await tailor();
 t.check("L8", "No sign-in → basic mode, no AI", !isAi(noToken) && noToken.aiUsage?.status === "not-signed-in");

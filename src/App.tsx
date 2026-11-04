@@ -19,6 +19,7 @@ import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
+  Hourglass,
   XCircle,
   X,
   AlertTriangle,
@@ -125,6 +126,35 @@ function resetsInText(resetsAt?: string | null): string {
   const hours = Math.floor(ms / 3_600_000);
   if (hours < 1) return "in under an hour";
   return `in ${hours} ${hours === 1 ? "hour" : "hours"}`;
+}
+
+// "05:42:10" countdown to when AI tailorings come back. Calls onDone once when it reaches zero.
+function ResetCountdown({ resetsAt, onDone }: { resetsAt?: string | null; onDone?: () => void }) {
+  const target = resetsAt ? new Date(resetsAt).getTime() : NaN;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!Number.isFinite(target)) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [target]);
+  const left = Number.isFinite(target) ? Math.max(0, target - now) : NaN;
+  useEffect(() => {
+    if (left === 0) onDone?.();
+  }, [left === 0]);
+  if (!Number.isFinite(left)) return <p className="text-2xl font-semibold text-black">tomorrow</p>;
+  const pad = (n: number) => String(Math.floor(n)).padStart(2, "0");
+  const secs = left / 1000;
+  return (
+    <p id="ai-reset-countdown" className="text-3xl font-semibold tabular-nums tracking-tight text-black" aria-live="off">
+      {pad(secs / 3600)}:{pad((secs % 3600) / 60)}:{pad(secs % 60)}
+    </p>
+  );
+}
+
+// "1:30 PM" in the person's own time zone
+function resetClockText(resetsAt?: string | null): string {
+  const d = resetsAt ? new Date(resetsAt) : null;
+  return d && Number.isFinite(d.getTime()) ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "tomorrow";
 }
 
 // Set when a guest leaves to sign in, so their resumes are merged into the account.
@@ -581,7 +611,7 @@ export default function App() {
   // "Close without saving?" check for the tailor wizard
   const [showCloseDraftConfirm, setShowCloseDraftConfirm] = useState(false);
   // Daily AI limit for the signed-in person (from /api/ai-credits and the tailoring response)
-  const [aiCredits, setAiCredits] = useState<{ aiEnabled: boolean; status?: string; used?: number; limit?: number; remaining?: number; resetsAt?: string | null } | null>(null);
+  const [aiCredits, setAiCredits] = useState<{ aiEnabled: boolean; status?: string; used?: number; limit?: number; remaining?: number; resetsAt?: string | null; siteUsed?: number; siteLimit?: number } | null>(null);
   const refreshAiCredits = async () => {
     try {
       const r = await fetch("/api/ai-credits", { headers: await aiAuthHeaders() });
@@ -2523,6 +2553,12 @@ export default function App() {
         try {
           const errorBody = await tailorRes.json();
           serverError = errorBody.error || errorBody.message || serverError;
+          // Daily AI limit (theirs or the whole site's): the "come back in …" screen takes over, no error shown
+          if (errorBody?.aiUsage?.mode === "blocked") {
+            setAiCredits({ aiEnabled: true, ...errorBody.aiUsage });
+            trackEvent("ai_limit_screen", { status: errorBody.aiUsage.status, where: "tailor" });
+            return;
+          }
           console.error("[Tailor] Server error response:", errorBody);
         } catch {
           try {
@@ -6678,6 +6714,47 @@ WORK EXPERIENCE
               </div>
             )}
 
+            {/* Daily AI limit used up (theirs, or the whole site's): "come back in …" with a countdown */}
+            {aiCredits?.aiEnabled && (aiCredits.status === "limit-reached" || aiCredits.status === "site-full") && tailorWizardStep <= 3 && !tailorIsAnalyzing && (
+              <div id="ai-limit-screen" className="absolute inset-0 z-20 bg-white rounded-2xl flex items-center justify-center p-6" role="dialog" aria-labelledby="ai-limit-title">
+                <div className="max-w-sm w-full text-center">
+                  {aiCredits.status === "site-full" ? (
+                    <>
+                      <Hourglass className="w-7 h-7 text-amber-600 mx-auto" aria-hidden="true" />
+                      <p id="ai-limit-title" className="text-lg font-semibold text-black mt-3">Today's free AI is used up</p>
+                      <p className="text-sm text-neutral-600 mt-1.5 leading-relaxed">
+                        Auralis runs on free AI, shared by everyone.{aiCredits.siteLimit ? ` ${aiCredits.siteLimit} resumes were tailored today.` : ""} Come back in
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-7 h-7 text-emerald-600 mx-auto" aria-hidden="true" />
+                      <p id="ai-limit-title" className="text-lg font-semibold text-black mt-3">
+                        {currentUser?.isGuest ? "You've used your free try" : `You've made ${aiCredits.limit ?? 5} resumes today`}
+                      </p>
+                      <p className="text-sm text-neutral-600 mt-1.5 leading-relaxed">
+                        {currentUser?.isGuest ? "Create a free account to get 5 AI tailorings a day, or come back in" : "That's today's limit. Your new tries start in"}
+                      </p>
+                    </>
+                  )}
+                  <div className="mt-4">
+                    <ResetCountdown resetsAt={aiCredits.resetsAt} onDone={refreshAiCredits} />
+                    <p className="text-xs text-neutral-500 mt-1">AI is back at {resetClockText(aiCredits.resetsAt)}</p>
+                  </div>
+                  <div className="mt-5 flex gap-2 justify-center">
+                    {currentUser?.isGuest && aiCredits.status === "limit-reached" && (
+                      <button type="button" id="btn-ai-limit-create-account" onClick={() => { closeTailorWizard(true); handleSignOut(); }} className="px-4 py-2 text-sm font-medium text-white bg-black hover:bg-neutral-800 rounded-lg cursor-pointer">
+                        Create free account
+                      </button>
+                    )}
+                    <button type="button" id="btn-ai-limit-close" onClick={() => closeTailorWizard(true)} className="px-4 py-2 text-sm font-medium text-black border border-neutral-200 hover:bg-neutral-50 rounded-lg cursor-pointer">
+                      {currentUser?.isGuest ? "Close" : "View my resumes"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Header */}
             <div className="mb-5 text-left">
               <h3 className="text-lg font-semibold tracking-tight text-black">Tailor resume for a job</h3>
@@ -6703,15 +6780,10 @@ WORK EXPERIENCE
               )}
               {/* Daily AI limit */}
               {aiCredits?.aiEnabled && tailorWizardStep <= 3 && !tailorAnalysisError && (
-                aiCredits.status === "limit-reached" ? (
-                  <div id="ai-limit-note" className="mt-4 rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-900 leading-relaxed">
-                    You've used today's {aiCredits.limit} AI {aiCredits.limit === 1 ? "tailoring" : "tailorings"}. This one uses basic mode: your ticked skills are added and keywords are checked, but lines aren't rewritten. AI is back {resetsInText(aiCredits.resetsAt)}.
-                    {currentUser?.isGuest && " Create a free account for 5 a day."}
-                  </div>
-                ) : aiCredits.status === "ok" ? (
+                aiCredits.status === "ok" ? (
                   <div id="ai-credits-left" className="mt-3 rounded-lg bg-neutral-50 px-3 py-2 text-xs text-neutral-600 leading-relaxed">
                     <span className="font-medium text-neutral-800">AI tailorings left today: {aiCredits.remaining} of {aiCredits.limit}.</span>{" "}
-                    You get {aiCredits.limit} a day. After that, tailoring uses basic mode until midnight: your ticked skills are added and keywords are checked, but lines aren't rewritten.
+                    You get {aiCredits.limit} a day. They reset at {resetClockText(aiCredits.resetsAt)}.
                     {currentUser?.isGuest && " Create a free account for 5 a day."}
                   </div>
                 ) : aiCredits.status === "not-signed-in" ? (

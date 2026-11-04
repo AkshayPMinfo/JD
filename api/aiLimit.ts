@@ -2,13 +2,17 @@
  * Daily AI limit, stored in Supabase (supabase/migrations/20261027000000_ai_daily_limit.sql):
  * 5 AI tailorings a day for signed-in users (20261031000000_ai_limit_5.sql), 1 for guests. Past the limit the app uses the
  * no-AI (rules) mode instead.
+ * Since 20261105000000_site_ai_limit.sql there is also a daily total for the whole site (100), and past either
+ * limit the app shows a "come back in …" screen with a countdown instead of basic mode.
  *
  * The count is tied to the person's Supabase sign-in, so the browser sends its access token
  * and Supabase works out who they are. If the SQL hasn't been run yet, or Supabase can't be
  * reached, AI stays on (we don't want a setup gap to break the app); a missing or invalid
  * sign-in means no AI.
  */
-export type AiUsageStatus = "ok" | "limit-reached" | "not-signed-in" | "not-set-up" | "error";
+// "limit-reached": this person's daily AI tailorings are used up.
+// "site-full": the day's AI tailorings for everyone together are used up (we run on free AI).
+export type AiUsageStatus = "ok" | "limit-reached" | "site-full" | "not-signed-in" | "not-set-up" | "error";
 
 export type AiUsage = {
   status: AiUsageStatus;
@@ -16,6 +20,8 @@ export type AiUsage = {
   limit: number;
   remaining: number;
   resetsAt: string | null;
+  siteUsed?: number;
+  siteLimit?: number;
 };
 
 const supabaseConfig = () => ({
@@ -58,7 +64,10 @@ async function callRpc(fn: "jd_ai_credits" | "jd_use_ai_credit", token: string |
     const limit = Number(body?.limit ?? 0);
     const remaining = Number(body?.remaining ?? Math.max(limit - used, 0));
     const reached = fn === "jd_use_ai_credit" ? body?.allowed === false : remaining <= 0;
-    return { status: reached ? "limit-reached" : "ok", used, limit, remaining, resetsAt: body?.resets_at ?? null, allowed: body?.allowed };
+    // Only checked before a tailoring: the one that fills the site's total still counts as done
+    const siteFull = fn === "jd_ai_credits" && body?.site_full === true;
+    const site = body?.site_limit != null ? { siteUsed: Number(body.site_used ?? 0), siteLimit: Number(body.site_limit) } : {};
+    return { status: reached ? "limit-reached" : siteFull ? "site-full" : "ok", used, limit, remaining, resetsAt: body?.resets_at ?? null, allowed: body?.allowed, ...site };
   } catch (err: any) {
     console.warn("[ai-limit] Couldn't reach Supabase; AI stays on.", err?.message || err);
     return open("error");

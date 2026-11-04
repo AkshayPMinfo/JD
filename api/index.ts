@@ -1367,9 +1367,19 @@ app.post("/api/tailor-resume", async (req, res) => {
       return;
     }
 
-    // Daily AI limit: past it, this tailoring uses the no-AI (rules) mode
+    // Daily AI limit (the person's, or the whole site's): no basic-mode resume, the app shows "come back in …"
     const token = bearerToken(req);
     const credits = USE_GEMINI ? await getAiCredits(token) : null;
+    if (credits && (credits.status === "limit-reached" || credits.status === "site-full")) {
+      console.log("[ai-limit] Tailoring stopped:", credits.status, `${credits.used}/${credits.limit}`, `site ${credits.siteUsed ?? "?"}/${credits.siteLimit ?? "?"}`);
+      res.status(429).json({
+        error: credits.status === "site-full"
+          ? "Today's free AI is used up for everyone. Please come back when it resets."
+          : "You've used today's AI tailorings. Please come back when they reset.",
+        aiUsage: { ...credits, mode: "blocked" }
+      });
+      return;
+    }
     if (!USE_GEMINI || (credits && !aiAllowed(credits))) {
       const result: any = rulesBasedTailor(resume, jdText, selectedSkills);
       if (credits) {

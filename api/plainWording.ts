@@ -253,7 +253,12 @@ const ACTIVITY_WORDS = new Set("care management negotiation communication planni
 
 /** Drops a tacked-on " using <Skill>" ending the AI added when the skill is an activity, not a tool. */
 export function dropSkillTail(text: string, originalLine = ""): string {
-  if (!text || /\busing\b/i.test(originalLine)) return text;
+  if (!text) return text;
+  // "...within tight deadlines, addressing 'Agile Delivery'." : the AI pointing at a job-post phrase
+  text = text.replace(/,?\s+(addressing|demonstrating|showcasing|highlighting|reflecting|aligning with|in line with)\s+[^,.]{0,60}?\s*([.]?)\s*$/i, (m, word: string, dot: string) =>
+    new RegExp(`\\b${word}\\b`, "i").test(originalLine) ? m : dot || ".");
+  text = text.replace(/,?\s+\w+(?:\s+\w+)?\s+['‘"“][^'’"”]{2,40}['’"”]\s*([.]?)\s*$/, (m, dot: string) => (/['‘"“]/.test(originalLine) ? m : dot || "."));
+  if (/\busing\b/i.test(originalLine)) return text;
   // "...using B2B sales approach and Negotiation skills" / "...using Payment Collection skill": always filler
   text = text.replace(/,?\s+(?:using|applying|leveraging|utilizing|with)\s+[^,.]{0,60}?\b(?:skills?|approach|discipline|principles|techniques|methodolog(?:y|ies)|expertise)\s*([.]?)\s*$/i, (_m, dot: string) => dot || ".");
   return text.replace(/,?\s+(?:using|applying|leveraging|utilizing)\s+([A-Z][\w/&+-]*(?:\s+(?:and\s+)?[A-Z][\w/&+-]*)*(?:\s+(?:principles|skills?))?)\s*([.]?)\s*$/, (m, skill: string, dot: string) => {
